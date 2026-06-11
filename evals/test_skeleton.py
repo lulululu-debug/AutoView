@@ -13,8 +13,11 @@
 - 不需要 PG/Redis 的 5 个 TestCase 永远会跑。
 - 端到端那个 TestCase 在 POSTGRES_URL + REDIS_URL 都设置时才跑, 否则 skip。
 
-强制 stub: 模块加载时清掉 ANTHROPIC_API_KEY, 避免本 eval 把真实 API 打飞了。
+强制 stub: 模块加载时清掉 OPENAI_API_KEY, 避免本 eval 把真实 API 打飞了。
 本 eval 检的是「结构」, 不是「LLM 输出语义」, 走 stub 已经足够。
+
+注: 本 eval 不 import pymilvus, 所以模块顶 pop 有效 (不会被 pymilvus 的
+load_dotenv() 重新加回来)。
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ import os
 import unittest
 
 # 强制 stub 模式: 在 import agent 之前清 key, 防止 evaluator/planner 真的打 API。
-os.environ.pop("ANTHROPIC_API_KEY", None)
+os.environ.pop("OPENAI_API_KEY", None)
 
 from src.agents import analyzer, evaluator, planner  # noqa: E402
 from src.schemas import (  # noqa: E402

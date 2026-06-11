@@ -1,15 +1,20 @@
 """统一 LLM 调用入口。
 
-所有 agent 通过 complete() 调 LLM, 不直接使用 anthropic SDK。
-读取 ANTHROPIC_API_KEY / ANTHROPIC_MODEL 环境变量。
+所有 agent 通过 complete() 调 LLM, 不直接使用 OpenAI SDK。
+读取 OPENAI_API_KEY / OPENAI_CHAT_MODEL / OPENAI_BASE_URL 环境变量。
 未配置 key 或 SDK 不可用时, 返回前缀为 "[stub]" 的占位文本,
 便于骨架阶段在本地端到端跑通; 调用方可识别该前缀并回退到模板。
 
-Redis 缓存(Sprint 1 第 4 项):
+Sprint 3 切到 OpenAI 的理由:
+- Anthropic 没有 embedding API, 早期就只能用 OpenAI 做 embedding。
+- 用户已有 OPENAI_API_KEY 在用, consolidate 到单一 provider:
+  * key 管理 + 计费集中
+  * cache key 含 model 名, 老的 anthropic 条目会自动 TTL 失效
+
+Redis 缓存(Sprint 1):
 - 命中: 直接返回缓存, 不打 API。
 - 未命中: 调 LLM, 把结果写回缓存(stub 不写)。
 - Redis 不可用: 缓存层静默降级, complete() 仍然工作。
-- 缓存键见 src/cache/llm_cache.make_key, TTL 由 LLM_CACHE_TTL_SECONDS 控制。
 """
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ import os
 
 from src.cache import llm_cache
 
-DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+DEFAULT_MODEL = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
 STUB_PREFIX = "[stub]"
 
 
@@ -29,7 +34,7 @@ def complete(
     max_tokens: int = 1024,
 ) -> str:
     """单次同步 LLM 调用, 返回纯文本(已 strip)。透明 Redis 缓存。"""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return _stub(user)
 
@@ -41,23 +46,21 @@ def complete(
         return cached
 
     try:
-        from anthropic import Anthropic
+        from openai import OpenAI
     except ImportError:
         return _stub(user)
 
-    client = Anthropic(api_key=api_key)
-    resp = client.messages.create(
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    resp = client.chat.completions.create(
         model=resolved_model,
         max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
     )
-    parts: list[str] = []
-    for block in resp.content:
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
-    result = "".join(parts).strip()
+    result = (resp.choices[0].message.content or "").strip()
 
     # stub 与空字符串都不入缓存: stub 应该让下次调用有机会重试到真实 API,
     # 空字符串没有复用价值且会把后续命中误判为"已无 token"。

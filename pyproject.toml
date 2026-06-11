@@ -4,7 +4,6 @@ version = "0.0.1"
 description = "AI Interview Platform — 多 agent 面试基础设施"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40.0",
     "pydantic>=2.5.0",
     "sqlalchemy>=2.0.30",
     "psycopg[binary]>=3.1.18",
