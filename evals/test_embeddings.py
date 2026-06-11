@@ -90,7 +90,10 @@ class EmbedIntegrationTests(unittest.TestCase):
         import src.embeddings as emb_mod
         from src.embeddings import EMBEDDING_DIM
 
-        # 注入假 OpenAI client
+        # 注入假 OpenAI client; tearDown 必须恢复, 否则后续 test_seed_questions 等
+        # 跑 LLM 时会撞上"_FakeOpenAI 没有 chat 属性"
+        self._original_openai_class = openai.OpenAI
+
         calls = {"n": 0}
         class _FakeEmbeddings:
             def create(self, **_kw):
@@ -118,6 +121,10 @@ class EmbedIntegrationTests(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("OPENAI_API_KEY", None)
+        # 恢复 openai.OpenAI, 防止 monkey-patch 泄漏到其他 eval 模块
+        if hasattr(self, "_original_openai_class"):
+            import openai
+            openai.OpenAI = self._original_openai_class
 
 
 if __name__ == "__main__":
