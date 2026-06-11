@@ -50,12 +50,38 @@ def get_engine() -> Engine:
 
 def init_db() -> None:
     """按当前 metadata 在目标库上 create_all。
-    幂等; Sprint 1 用 create_all, schema 真的开始演进时再切换到 Alembic。"""
+    幂等; Sprint 1 用 create_all, schema 真的开始演进时再切换到 Alembic。
+
+    Sprint 3-7 增量加列: PG 的 ALTER TABLE ... ADD COLUMN IF NOT EXISTS 是
+    幂等的, 给 create_all 没覆盖到的"老表加新列"场景兜底。真正进入演进期
+    (改类型 / 加约束 / 改 FK) 时再上 Alembic。
+    """
     # 先确保所有 ORM 模型已注册到 Base.metadata
     from src.db import models  # noqa: F401  (副作用 import: 触发模型注册)
 
     engine = get_engine()
     Base.metadata.create_all(engine)
+    _apply_incremental_migrations(engine)
+
+
+def _apply_incremental_migrations(engine: Engine) -> None:
+    """手动维护的"加列"增量迁移; ALTER ... IF NOT EXISTS 保证幂等。
+
+    每加一行就是一次微迁移; create_all 不会改老表, 这里兜底。
+    schema 真要演进时切 Alembic, 把本函数清空。
+    """
+    from sqlalchemy import text
+
+    statements = [
+        # Sprint 3-7: Evaluator RAG 溯源
+        'ALTER TABLE evaluation_reports '
+        'ADD COLUMN IF NOT EXISTS rag_context_chunk_ids JSONB '
+        "NOT NULL DEFAULT '[]'::jsonb",
+    ]
+    with engine.connect() as conn:
+        for sql in statements:
+            conn.execute(text(sql))
+        conn.commit()
 
 
 @contextmanager

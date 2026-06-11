@@ -233,6 +233,7 @@ def save_report(report: EvaluationReport) -> None:
             overall=payload["overall"],
             summary=payload["summary"],
             needs_human_review=payload["needs_human_review"],
+            rag_context_chunk_ids=payload["rag_context_chunk_ids"],
         )
         s.merge(row)
 
@@ -251,6 +252,7 @@ def load_report(report_id: str) -> Optional[EvaluationReport]:
                 "overall": row.overall,
                 "summary": row.summary,
                 "needs_human_review": row.needs_human_review,
+                "rag_context_chunk_ids": row.rag_context_chunk_ids,
             }
         )
 
@@ -274,5 +276,6 @@ def load_report_by_session(session_id: str) -> Optional[EvaluationReport]:
                 "overall": row.overall,
                 "summary": row.summary,
                 "needs_human_review": row.needs_human_review,
+                "rag_context_chunk_ids": row.rag_context_chunk_ids,
             }
         )

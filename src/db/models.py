@@ -191,6 +191,10 @@ class EvaluationReportORM(Base):
     needs_human_review: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )
+    # Sprint 3-7: Evaluator RAG 溯源, JD/公司资料 chunk id 列表
+    rag_context_chunk_ids: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
