@@ -15,3 +15,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Milvus Lite 本地数据
+milvus_lite*
+*.db.lock
