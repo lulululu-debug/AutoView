@@ -1,0 +1,24 @@
+"""API 请求/响应模型 (HTTP 边界 DTO)。
+
+为什么不直接复用 src/schemas/:
+- src/schemas/ 是 agent 间的领域契约, server 自动生成的字段(job_id /
+  candidate_id / plan_id) 都带 default_factory, 客户端可以伪造覆盖。
+  在 API 边界把"客户端能传什么"显式列出来, 比给领域模型加 exclude/readonly
+  干净, 也避免 ORM 元数据(created_at / updated_at) 泄漏到响应体。
+- 响应模型仍然用 src/schemas 里的领域模型(JobContext 等), 用 FastAPI 的
+  response_model 过滤序列化, 客户端只看到约定的字段。
+
+本文件随 sprint 增长, 一资源一个 *Create / *Update 模型即可,
+不要演化成 ORM/DTO 两套大模型。
+"""
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class JobCreate(BaseModel):
+    """POST /jobs 请求体: server 自己生成 job_id, 客户端不传。"""
+    title: str = Field(..., min_length=1, description="职位标题")
+    jd: str = Field(..., min_length=1, description="职位描述原文 JD")
+    requirements: list[str] = Field(default_factory=list, description="岗位要求列表")
+    company_materials: str = Field(default="", description="公司资料(后期做 RAG 切片)")
