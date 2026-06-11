@@ -81,10 +81,14 @@ def create_candidate(
     )
     db.save_candidate(candidate)
 
-    background_tasks.add_task(_run_planner_in_background, job, candidate)
+    # 顺序关键: ingest_resume 先入 Milvus, Planner 再跑, 后者才能用 Resume RAG。
+    # FastAPI BackgroundTasks 顺序执行(非并行), 这里换一下就是 Planner 拿得到/拿不到
+    # Resume 切片召回的区别。Sprint 3-6 设计的"BG 并行"在 BackgroundTasks 模式下
+    # 失效, Sprint 7 接 RQ/Celery 时可以做真正并行。
     background_tasks.add_task(
         _ingest_resume_in_background, candidate.candidate_id, candidate.resume,
     )
+    background_tasks.add_task(_run_planner_in_background, job, candidate)
 
     return CandidateCreated(
         candidate_id=candidate.candidate_id,
