@@ -14,7 +14,10 @@
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from api.exceptions import register_handlers
 from api.routes import candidates as candidates_routes
@@ -24,9 +27,28 @@ from api.routes import jobs as jobs_routes
 API_TITLE = "AI Interview Platform API"
 API_VERSION = "0.0.1"
 
+# Sprint 4 起加 CORS, 允许候选人端 Next.js dev server 调用。
+# 生产期通过 CORS_ALLOWED_ORIGINS 环境变量配置具体源。
+_DEFAULT_DEV_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        return _DEFAULT_DEV_ORIGINS
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title=API_TITLE, version=API_VERSION)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     register_handlers(app)
     app.include_router(jobs_routes.router)

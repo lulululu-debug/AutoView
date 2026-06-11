@@ -1,13 +1,15 @@
-"""Job 资源端点 —— Sprint 2-3 + Sprint 3-4。
+"""Job 资源端点 —— Sprint 2-3 + Sprint 3-4 + Sprint 4-1。
 
-POST /jobs: HR 创建职位 -> 同步落 PG -> 后台 ingest JD + 公司资料到 Milvus
-            (Sprint 3-4)。job_id 由 server 生成, 客户端传过来的会被忽略。
+POST /jobs:        HR 创建职位 -> 同步落 PG -> 后台 ingest JD + 公司资料到 Milvus
+GET  /jobs/{id}:   候选人端进入面试时拿职位标题等信息, HR 端也可复用
+
+job_id 由 server 生成, 客户端传过来的会被忽略。
 """
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from api.schemas import JobCreate
 from src import db, ingestion
@@ -49,4 +51,15 @@ def create_job(body: JobCreate, background_tasks: BackgroundTasks) -> JobContext
         _ingest_job_docs_in_background,
         job.job_id, job.jd, job.company_materials,
     )
+    return job
+
+
+@router.get("/{job_id}", response_model=JobContext)
+def get_job(job_id: str) -> JobContext:
+    """读取职位信息。候选人进入面试链接时拿 title/jd 等信息;
+    返回的是完整 JobContext, 没做 HR/候选人视角的字段过滤
+    (公司资料是 HR 上传的展示性文本, 候选人看到无所谓)。"""
+    job = db.load_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} 不存在")
     return job

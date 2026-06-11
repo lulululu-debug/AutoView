@@ -97,6 +97,19 @@ def create_candidate(
     )
 
 
+@router.get("/{candidate_id}", response_model=CandidateProfile)
+def get_candidate(job_id: str, candidate_id: str) -> CandidateProfile:
+    """读取候选人信息。候选人端轮询 plan 就绪、检查 resume 是否已上传都用。
+    校验 candidate 确实在该 job 下, 防止用一个 job_id 偷看另一个 job 的 candidate。"""
+    candidate = db.load_candidate(candidate_id)
+    if candidate is None or candidate.job_id != job_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"candidate {candidate_id} 不在 job {job_id} 下",
+        )
+    return candidate
+
+
 @router.get("/{candidate_id}/plan", response_model=InterviewPlan)
 def get_candidate_plan(job_id: str, candidate_id: str) -> InterviewPlan:
     """轮询: plan 已生成则返回, 否则 404。"""

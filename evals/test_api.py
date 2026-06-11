@@ -438,6 +438,130 @@ class InterviewSessionTests(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+@unittest.skipUnless(os.environ.get("POSTGRES_URL"), "需要 POSTGRES_URL")
+class GetJobTests(unittest.TestCase):
+    """GET /jobs/{id} 候选人端要拿来显示职位标题等。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from src.db import init_db
+        init_db()
+        cls.client = TestClient(create_app())
+
+    def test_get_job_returns_persisted_fields(self):
+        r = self.client.post("/jobs", json={
+            "title": "后端工程师",
+            "jd": "负责交易系统",
+            "requirements": ["分布式"],
+            "company_materials": "x 公司",
+        })
+        job_id = r.json()["job_id"]
+
+        r = self.client.get(f"/jobs/{job_id}")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["job_id"], job_id)
+        self.assertEqual(body["title"], "后端工程师")
+        self.assertEqual(body["jd"], "负责交易系统")
+        self.assertEqual(body["role_family"], "backend", "默认 role_family")
+
+    def test_get_unknown_job_404(self):
+        r = self.client.get("/jobs/ghost-job")
+        self.assertEqual(r.status_code, 404)
+
+
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
+    "需要 POSTGRES_URL + REDIS_URL",
+)
+class GetCandidateTests(unittest.TestCase):
+    """GET /jobs/{id}/candidates/{cid} 给候选人端轮询用 (有没有 resume / plan 进度 等)。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from src.db import init_db
+        init_db()
+        cls.client = TestClient(create_app())
+
+    def test_get_candidate_after_post(self):
+        from src.db import save_job
+        from src.schemas import JobContext
+        job = JobContext(title="t", jd="x")
+        save_job(job)
+        r = self.client.post(
+            f"/jobs/{job.job_id}/candidates",
+            json={"resume": "张三 / 后端 / 4 年", "projects": ["P99"]},
+        )
+        cid = r.json()["candidate_id"]
+
+        r = self.client.get(f"/jobs/{job.job_id}/candidates/{cid}")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["candidate_id"], cid)
+        self.assertEqual(body["job_id"], job.job_id)
+        self.assertEqual(body["resume"], "张三 / 后端 / 4 年")
+
+    def test_cross_job_404(self):
+        """安全: 用另一个 job 的 path 偷看 candidate 应当 404。"""
+        from src.db import save_candidate, save_job
+        from src.schemas import CandidateProfile, JobContext
+        job_a = JobContext(title="A", jd="x")
+        job_b = JobContext(title="B", jd="y")
+        save_job(job_a)
+        save_job(job_b)
+        cand_a = CandidateProfile(job_id=job_a.job_id, resume="A 的简历")
+        save_candidate(cand_a)
+        r = self.client.get(f"/jobs/{job_b.job_id}/candidates/{cand_a.candidate_id}")
+        self.assertEqual(r.status_code, 404)
+
+
+class CorsTests(unittest.TestCase):
+    """CORS preflight 应当允许 Next.js dev server (localhost:3000)。"""
+
+    def setUp(self):
+        self.client = TestClient(create_app())
+
+    def test_preflight_from_localhost_3000_allowed(self):
+        r = self.client.options(
+            "/jobs",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            r.headers.get("access-control-allow-origin"),
+            "http://localhost:3000",
+        )
+
+    def test_actual_request_has_cors_header(self):
+        r = self.client.get(
+            "/health",
+            headers={"Origin": "http://localhost:3000"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            r.headers.get("access-control-allow-origin"),
+            "http://localhost:3000",
+        )
+
+    def test_disallowed_origin_no_cors_header(self):
+        r = self.client.options(
+            "/jobs",
+            headers={
+                "Origin": "http://evil.example.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        # FastAPI/Starlette 拒绝时不会带 allow-origin: evil.example.com
+        self.assertNotEqual(
+            r.headers.get("access-control-allow-origin"),
+            "http://evil.example.com",
+        )
+
+
 class ExceptionMappingTests(unittest.TestCase):
     """领域异常 -> HTTP 状态码映射 (无需真 infra, 用 mock 注入异常)。"""
 
