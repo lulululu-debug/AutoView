@@ -37,6 +37,8 @@ class JobContext(BaseModel):
     jd: str                                  # 职位描述原文
     requirements: list[str] = []             # 岗位要求(可由 jd 解析填充)
     company_materials: str = ""              # 公司资料(后期做 RAG 切片)
+    role_family: str = "backend"             # Sprint 3-5: 题库召回按 role_family + 维度过滤
+                                             # 当前题库只 seed 了 backend; 改职位族要先 seed 对应题库
 
 
 class CandidateProfile(BaseModel):
@@ -81,6 +83,9 @@ class Question(BaseModel):
     text: str
     type: QuestionType = QuestionType.OPEN
     category: QuestionCategory = QuestionCategory.KNOWLEDGE
+    # Sprint 3-5 召回溯源: 从 SeedQuestion 召回 + LLM 精修时, 记录原题 id;
+    # None 表示走的是 fallback / 现场生成路径, 没有题库来源。
+    source_question_id: str | None = None
 
 
 class InterviewRound(BaseModel):
