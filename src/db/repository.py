@@ -112,6 +112,22 @@ def load_plan(plan_id: str) -> Optional[InterviewPlan]:
         return InterviewPlan.model_validate(row.plan_data)
 
 
+def load_latest_plan_for_candidate(candidate_id: str) -> Optional[InterviewPlan]:
+    """同一候选人允许多版 plan (HR 重跑 Planner), 这里返回最新生成的那个。
+    用 created_at desc 而非 plan_id 排序: hex uuid 字典序无意义,
+    时间戳才是"最近一次"的真正信号。"""
+    with session_scope() as s:
+        row = (
+            s.query(InterviewPlanORM)
+            .filter(InterviewPlanORM.candidate_id == candidate_id)
+            .order_by(InterviewPlanORM.created_at.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        return InterviewPlan.model_validate(row.plan_data)
+
+
 # ---------- InterviewSession ----------
 
 def save_session(session: InterviewSession) -> None:

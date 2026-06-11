@@ -22,3 +22,21 @@ class JobCreate(BaseModel):
     jd: str = Field(..., min_length=1, description="职位描述原文 JD")
     requirements: list[str] = Field(default_factory=list, description="岗位要求列表")
     company_materials: str = Field(default="", description="公司资料(后期做 RAG 切片)")
+
+
+class CandidateCreate(BaseModel):
+    """POST /jobs/{job_id}/candidates 请求体。
+    job_id 走 path param, candidate_id 由 server 生成, 都不在 body 里。"""
+    resume: str = Field(..., min_length=1, description="Resume 原文")
+    projects: list[str] = Field(
+        default_factory=list,
+        description="已识别的项目/实习要点(可由 resume 解析填充)",
+    )
+
+
+class CandidateCreated(BaseModel):
+    """POST /jobs/{job_id}/candidates 响应: 202 Accepted。
+    plan_pending=True 表示 Planner 在后台跑, 客户端轮询 GET .../plan。"""
+    candidate_id: str
+    job_id: str
+    plan_pending: bool = True
