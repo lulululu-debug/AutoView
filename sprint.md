@@ -72,13 +72,16 @@
 
 ## Sprint 4 — 候选人端 Web（文本面试）
 
-- [ ] Next.js + TypeScript 初始化，候选人面试界面
-- [ ] 候选人端: 面试前 Resume 上传页（支持文本粘贴 / 文件上传, 至少存原文）
-- [ ] 对接面试会话 API，文本一问一答 + 追问
-- [ ] 会话进度、剩余轮次展示
-- [ ] 基础鉴权（候选人凭邀请链接进入）
+- [x] Next.js + TypeScript 初始化，候选人面试界面（Next.js 16 + App Router + Tailwind 4）
+- [x] 候选人端: 面试前 Resume 上传页（**仅 paste 模式**；文件上传移到 Sprint 5）
+- [x] 对接面试会话 API，文本一问一答 + 追问（含 localStorage 中断恢复 + 答题草稿）
+- [x] 会话进度、剩余轮次展示（"第 M/N 题" + 追问 amber 徽章；总数从 plan 取，不写死）
+- [x] 基础鉴权（candidate_id 作 path soft-auth；JWT 移到 Sprint 5 与 HR 端一起做）
 
-**完成标准**：候选人能在浏览器里完成一次完整文本面试。
+**完成标准**：候选人能在浏览器里完成一次完整文本面试。 ✅
+
+附加: 加 CORS 中间件、`GET /jobs/{id}` 与 `GET /candidates/{id}` 两个候选人端
+读取端点；全局 `error.tsx` 错误边界；Resume 长度三档颜色反馈。
 
 ---
 
