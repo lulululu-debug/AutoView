@@ -226,3 +226,6 @@ class EvaluationReport(BaseModel):
     overall: float                                          # 仅由 content_scores 得出
     summary: str
     needs_human_review: bool = True                         # 默认需人工复核
+    # Sprint 3-7 RAG 溯源: 评估时召回的 JD/公司资料 document_id 列表;
+    # 空列表表示没用 RAG (Milvus 未配置 / 召回为空 / embed stub)
+    rag_context_chunk_ids: list[str] = []
