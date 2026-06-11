@@ -30,6 +30,8 @@ pip install -e .            # 装依赖（pyproject.toml 已声明）
 
 python -m src.main          # Sprint 1 起：需要 Redis + Postgres 跑（无 API key 仍会进 stub 分支）
 
+uvicorn api.main:app --reload    # Sprint 2 起：HTTP API，热重载；/docs 看 OpenAPI
+
 brew services start postgresql   # 本机外部服务（macOS）
 brew services start redis
 brew services stop redis         # 停 Redis
@@ -55,8 +57,10 @@ python -m unittest discover -s evals                              # discover
 - `src/db/` — Postgres 归档：`base.py` engine、`models.py` ORM、`repository.py` save/load。
 - `src/cache/` — Redis 热存储（进行中会话）：`session_store.py` 的 save/load/delete。
 - `src/main.py` — 写死 JD + Resume + 候选人回答跑通全链路的 demo 入口。
+- `api/` — FastAPI 层（Sprint 2 起）：只做 HTTP 入口 + 校验 + 异常映射，业务下沉到 orchestrator。
+- `evals/` — stdlib unittest，结构性 + 合规护栏 + API smoke。
 
-后续 `api/`（FastAPI）、`web/`（Next.js）、`evals/` 见 sprint.md。
+后续 `web/`（Next.js）见 sprint.md。
 
 ## 关键设计模式（要看多文件才能拼出来）
 
