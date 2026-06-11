@@ -49,8 +49,34 @@ export type Health = {
   version: string;
 };
 
+export type JobContext = {
+  job_id: string;
+  title: string;
+  jd: string;
+  requirements: string[];
+  company_materials: string;
+  role_family: string;
+};
+
+export type CandidateCreate = {
+  resume: string;
+  projects: string[];
+};
+
+export type CandidateCreated = {
+  candidate_id: string;
+  job_id: string;
+  plan_pending: boolean;
+};
+
 export const api = {
   health: () => request<Health>("/health"),
+  getJob: (jobId: string) => request<JobContext>(`/jobs/${jobId}`),
+  createCandidate: (jobId: string, body: CandidateCreate) =>
+    request<CandidateCreated>(`/jobs/${jobId}/candidates`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 export { API_BASE };
