@@ -29,6 +29,7 @@ from src.schemas import (
     CandidateProfile,
     EvaluationReport,
     FollowUp,
+    InterviewPlan,
     InterviewSession,
     JobContext,
     Question,
@@ -66,9 +67,21 @@ def _last_interviewer_turn(session: InterviewSession) -> Turn | None:
 
 # ---------- 三段式 API ----------
 
-def start_session(job: JobContext, candidate: CandidateProfile) -> TurnResult:
-    """生成 plan + 新建 session, 写 Redis, 返回首问。"""
-    plan = planner.plan(job, candidate)
+def start_session(
+    job: JobContext,
+    candidate: CandidateProfile,
+    plan: InterviewPlan | None = None,
+) -> TurnResult:
+    """生成/复用 plan + 新建 session, 写 Redis, 返回首问。
+
+    plan: 显式传入时复用(不调 planner), 默认 None 时现场生成。
+    设计意图: API 路径(Sprint 2 之后) 从 PG 加载已生成的 plan 并显式传入,
+    确保 HR 端看到的 plan 与面试实际用的是同一份;
+    内存路径(run_interview / src.main / 旧 eval) 不传, 由 planner 现场生成
+    (backward compat)。
+    """
+    if plan is None:
+        plan = planner.plan(job, candidate)
     session = InterviewSession(
         plan_id=plan.plan_id,
         job_id=job.job_id,

@@ -221,6 +221,140 @@ class CreateCandidateTests(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
+    "需要 POSTGRES_URL + REDIS_URL",
+)
+class InterviewSessionTests(unittest.TestCase):
+    """面试会话三段式: POST /interviews + POST /answers + GET /interviews/{id}。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from src.db import init_db, save_candidate, save_job, save_plan
+        from src.agents.planner import plan as run_planner
+        from src.schemas import CandidateProfile, JobContext
+        init_db()
+        cls.client = TestClient(create_app())
+        # 准备: 1 个 job + 1 个 candidate + 1 个 plan
+        cls.job = JobContext(title="后端工程师", jd="负责交易系统")
+        save_job(cls.job)
+        cls.cand = CandidateProfile(
+            job_id=cls.job.job_id,
+            resume="张三/后端/4年, 订单 P99 优化",
+            projects=["P99 优化"],
+        )
+        save_candidate(cls.cand)
+        cls.plan = run_planner(cls.job, cls.cand)
+        save_plan(cls.plan, candidate_id=cls.cand.candidate_id)
+
+    def _start(self) -> dict:
+        r = self.client.post("/interviews", json={"candidate_id": self.cand.candidate_id})
+        self.assertEqual(r.status_code, 201)
+        return r.json()
+
+    def test_start_interview_returns_session_id_and_first_prompt(self):
+        body = self._start()
+        self.assertIn("session_id", body)
+        self.assertFalse(body["done"])
+        self.assertIsNotNone(body["prompt"])
+        self.assertIsNotNone(body["ref_id"])
+
+    def test_start_reuses_pg_plan_does_not_run_planner_again(self):
+        """关键: API 必须复用 PG 里的 plan, plan_id 不能漂移。"""
+        body = self._start()
+        # session 已写 Redis, 顺手从 Redis 拿出来对一下 plan_id
+        from src import cache
+        session = cache.load_session(body["session_id"])
+        self.assertEqual(
+            session.plan_id, self.plan.plan_id,
+            "API 路径用的 plan 必须是 PG 里那份, 不能让 orchestrator 重跑 planner",
+        )
+
+    def test_unknown_candidate_returns_404(self):
+        r = self.client.post("/interviews", json={"candidate_id": "ghost-candidate"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_no_plan_yet_returns_409(self):
+        """candidate 存在但 plan 还没出 (BG Planner 在跑或失败), 应 409。"""
+        from src.db import save_candidate
+        from src.schemas import CandidateProfile
+        cand = CandidateProfile(job_id=self.job.job_id, resume="r")
+        save_candidate(cand)  # 没 save_plan
+        r = self.client.post("/interviews", json={"candidate_id": cand.candidate_id})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("plan", r.json()["detail"].lower())
+
+    def test_submit_answer_advances_to_next_prompt(self):
+        start = self._start()
+        sid = start["session_id"]
+        r = self.client.post(
+            f"/interviews/{sid}/answers",
+            json={"text": "做过一些性能优化, 主要是慢查询和缓存。"},
+        )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["session_id"], sid)
+        self.assertIsNotNone(body["prompt"], "应有下一句(可能是追问也可能是下一题)")
+        self.assertNotEqual(body["ref_id"], start["ref_id"], "ref_id 应当推进")
+
+    def test_resume_returns_pending_prompt(self):
+        start = self._start()
+        sid = start["session_id"]
+        r = self.client.get(f"/interviews/{sid}")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["prompt"], start["prompt"], "GET 应当返回同一句待答提示")
+        self.assertEqual(body["ref_id"], start["ref_id"])
+
+    def test_resume_unknown_session_404(self):
+        r = self.client.get("/interviews/ghost-session")
+        self.assertEqual(r.status_code, 404)
+
+    def test_submit_to_unknown_session_404(self):
+        r = self.client.post("/interviews/ghost-session/answers", json={"text": "hi"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_walk_session_to_done_then_submit_404(self):
+        """注: finalize 后会话从 Redis 删除, 再 submit 是 SessionNotFound -> 404,
+        不是 SessionInvalidState -> 409。Sprint 2-6 加 GET /report 会自动 finalize,
+        此处仅验证走到 done 后状态机正确流转 (Redis 里 status=COMPLETED, 不在 PG)。"""
+        start = self._start()
+        sid = start["session_id"]
+        # 沿用 src/main.py 那套答案: 首答短触发追问, 后四答含 specificity hints
+        # (比如 / 我们 / 结果 / %) 避免重复触发, 一共 5 turn 走到 done。
+        answers = [
+            "做过一些性能优化, 主要是慢查询和缓存。",
+            "比如去年大促前, 订单查询 P99 从 800ms 涨到 2s。"
+            "我们排查发现是某个复合索引被改后失效, 同时 Redis 出现热点 key 击穿。"
+            "我加回索引并改造为本地缓存 + Redis 二级缓存, 最终 P99 回到 350ms。",
+            "通常我会先用数据让对方理解我担心的点, 比如拉一份线上回放或历史 case,"
+            "再一起定义可灰度的中间方案; 我们组上半年的风控规则争议就是这么收的。",
+            "对账中台那段最有挑战。日处理 2 亿笔, 早期对账延迟超过 30 分钟。"
+            "我们把单表对账改成分桶 + 并行 worker, 引入幂等键, 用 Kafka 做回放,"
+            "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
+            "上半年风控那次, 产品要求 24 小时内全量, 我担心误杀率。"
+            "我拉了 SRE 一起跑离线回放, 用数据让产品同意先灰度 5%, 一周后再全量,"
+            "误杀率从 3.1% 降到 0.4% 才放开。",
+        ]
+        done = False
+        for ans in answers:
+            r = self.client.post(f"/interviews/{sid}/answers", json={"text": ans})
+            self.assertEqual(r.status_code, 200)
+            if r.json()["done"]:
+                done = True
+                break
+        self.assertTrue(done, "5 条回答应当能走到 done")
+        # 已 COMPLETED 还在 Redis (没 finalize), 再 submit 应当 409
+        r = self.client.post(f"/interviews/{sid}/answers", json={"text": "再答一句"})
+        self.assertEqual(r.status_code, 409)
+
+    def test_validation_empty_answer_text(self):
+        start = self._start()
+        sid = start["session_id"]
+        r = self.client.post(f"/interviews/{sid}/answers", json={"text": ""})
+        self.assertEqual(r.status_code, 422)
+
+
 class ExceptionMappingTests(unittest.TestCase):
     """领域异常 -> HTTP 状态码映射 (无需真 infra, 用 mock 注入异常)。"""
 

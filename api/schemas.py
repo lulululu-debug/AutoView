@@ -40,3 +40,13 @@ class CandidateCreated(BaseModel):
     candidate_id: str
     job_id: str
     plan_pending: bool = True
+
+
+class InterviewStart(BaseModel):
+    """POST /interviews 请求体: 由 candidate_id 推出 job + plan, 客户端只传 candidate_id。"""
+    candidate_id: str = Field(..., min_length=1)
+
+
+class AnswerSubmit(BaseModel):
+    """POST /interviews/{session_id}/answers 请求体。"""
+    text: str = Field(..., min_length=1, description="候选人回答原文")
