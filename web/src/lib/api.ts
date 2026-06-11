@@ -101,6 +101,14 @@ export type InterviewPlan = {
   rounds: InterviewRound[];
 };
 
+// 面试会话推进结果 (与后端 schemas.TurnResult 对齐)
+export type TurnResult = {
+  session_id: string;
+  done: boolean;
+  prompt: string | null;
+  ref_id: string | null;
+};
+
 export const api = {
   health: () => request<Health>("/health"),
   getJob: (jobId: string) => request<JobContext>(`/jobs/${jobId}`),
@@ -113,6 +121,18 @@ export const api = {
     request<InterviewPlan>(
       `/jobs/${jobId}/candidates/${candidateId}/plan`,
     ),
+  startInterview: (candidateId: string) =>
+    request<TurnResult>("/interviews", {
+      method: "POST",
+      body: JSON.stringify({ candidate_id: candidateId }),
+    }),
+  resumeInterview: (sessionId: string) =>
+    request<TurnResult>(`/interviews/${sessionId}`),
+  submitAnswer: (sessionId: string, text: string) =>
+    request<TurnResult>(`/interviews/${sessionId}/answers`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
 };
 
 export { API_BASE };
