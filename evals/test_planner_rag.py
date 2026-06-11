@@ -158,6 +158,129 @@ class RagHitTests(_PlannerRagBase):
             self.assertIn("种子题", q.text, "LLM stub 时应当用种子原文")
 
 
+class ProjectRagHitTests(_PlannerRagBase):
+    """Resume 已 ingest 时, project 题应当带 source_chunk_ids。"""
+
+    def test_project_questions_carry_chunk_ids_when_resume_ingested(self):
+        from src.agents.planner import plan
+        from src.ingestion import ingest_resume
+        from src.schemas import (
+            CandidateProfile, JobContext, QuestionCategory,
+        )
+
+        # 1) monkey-patch embed 让 ingest + RAG 都用同一固定向量
+        restore = self._patch_embed_to_fixed()
+        try:
+            cand_id = "cand-proj-rag"
+            ingest_resume(
+                cand_id,
+                "张三 / 后端 / 4 年。" * 30  # 长足以切多片
+                + "对账中台日处理 2 亿笔。" * 30
+                + "P99 优化从 800ms 降到 350ms。" * 30,
+            )
+
+            job = JobContext(title="后端工程师", jd="负责交易系统", role_family="backend")
+            cand = CandidateProfile(
+                candidate_id=cand_id,
+                resume="dummy resume",  # planner 内部读切片不读这个
+                projects=[],
+            )
+            p = plan(job, cand)
+        finally:
+            restore()
+
+        # 2) project 题应当都有 source_chunk_ids
+        project_q = [
+            q for q in p.rounds[0].questions
+            if q.category == QuestionCategory.PROJECT_EXPERIENCE
+        ]
+        self.assertEqual(len(project_q), 2)
+        for q in project_q:
+            self.assertGreater(
+                len(q.source_chunk_ids), 0,
+                f"project 题应当带 source_chunk_ids; 实际题目: {q.text}",
+            )
+            # 切片 id 应当遵循 ingestion 的命名 "{cand_id}:resume:{idx}"
+            for cid in q.source_chunk_ids:
+                self.assertTrue(
+                    cid.startswith(f"{cand_id}:resume:"),
+                    f"chunk_id 格式不对: {cid}",
+                )
+
+        # 3) knowledge 题不应该有 source_chunk_ids (Milvus 没题库)
+        knowledge_q = [
+            q for q in p.rounds[0].questions
+            if q.category == QuestionCategory.KNOWLEDGE
+        ]
+        for q in knowledge_q:
+            self.assertEqual(
+                q.source_chunk_ids, [],
+                "knowledge 题不应携带 chunk 溯源",
+            )
+
+
+class ProjectRagMissTests(_PlannerRagBase):
+    """没 ingest resume 时, project 题 source_chunk_ids 应当为空。"""
+
+    def test_no_resume_ingest_chunks_empty(self):
+        from src.agents.planner import plan
+        from src.schemas import (
+            CandidateProfile, JobContext, QuestionCategory,
+        )
+
+        # 不 ingest_resume; Milvus documents 是空
+        restore = self._patch_embed_to_fixed()
+        try:
+            job = JobContext(title="t", jd="x", role_family="backend")
+            cand = CandidateProfile(resume="r", projects=[])
+            p = plan(job, cand)
+        finally:
+            restore()
+
+        project_q = [
+            q for q in p.rounds[0].questions
+            if q.category == QuestionCategory.PROJECT_EXPERIENCE
+        ]
+        for q in project_q:
+            self.assertEqual(
+                q.source_chunk_ids, [],
+                "无 resume 切片时不应有 source_chunk_ids",
+            )
+
+    def test_other_candidates_chunks_not_used(self):
+        """source_id 过滤: A 的 chunks 不能被 B 的 plan 召回。"""
+        from src.agents.planner import plan
+        from src.ingestion import ingest_resume
+        from src.schemas import (
+            CandidateProfile, JobContext, QuestionCategory,
+        )
+
+        restore = self._patch_embed_to_fixed()
+        try:
+            # 给 A 灌 chunks
+            ingest_resume("cand-A", "A 的简历内容。" * 30)
+            # plan B
+            job = JobContext(title="t", jd="x", role_family="backend")
+            cand_b = CandidateProfile(
+                candidate_id="cand-B", resume="B 的简历", projects=[],
+            )
+            p = plan(job, cand_b)
+        finally:
+            restore()
+
+        project_q = [
+            q for q in p.rounds[0].questions
+            if q.category == QuestionCategory.PROJECT_EXPERIENCE
+        ]
+        for q in project_q:
+            # 即使 RAG 走通了, source 也应只有 cand-B 的 (空, 因为 B 没 ingest)
+            for cid in q.source_chunk_ids:
+                self.assertFalse(
+                    cid.startswith("cand-A:"),
+                    f"不应召回到其他候选人的 chunks: {cid}",
+                )
+
+
 class RagMissTests(_PlannerRagBase):
     """题库为空 / 嵌入 stub 时, source 应当 None。"""
 

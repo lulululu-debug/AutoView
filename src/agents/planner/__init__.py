@@ -10,7 +10,11 @@ Sprint 3-5 起 knowledge 题走"题库召回 + LLM 精修":
 - Question.source_question_id 记录原题 id, 可追溯到题库
 - 多重 fallback: 无 Milvus / 召回空 / LLM stub -> 退到原现场生成路径
 
-Sprint 3-6 起 project 题会改成走 Resume RAG, 当前仍是现场 LLM 生成。
+Sprint 3-6 起 project 题走"Resume 切片 RAG + LLM 生成":
+- embed(维度描述) -> Milvus documents collection 按 kind=resume + source_id=candidate_id 过滤
+- 取 top-K 切片, 让 LLM 围绕具体内容生成深挖题
+- Question.source_chunk_ids 记录用到的 document_id 列表
+- 多重 fallback: 候选人未 ingest / 召回空 / LLM stub -> 退到原 Resume 全文生成路径
 """
 from __future__ import annotations
 
@@ -47,6 +51,14 @@ _PROJECT_SYSTEM = (
     "你是一名资深技术面试设计专家。"
     "根据给定职位、考察维度与候选人简历, 生成一道针对候选人具体项目/实习经历的中文深挖题。"
     "题目必须指向简历里的具体内容(项目、技术栈、角色或结果), 不要泛泛而问。"
+    "只输出题目本身, 不要任何解释或前后缀。"
+)
+
+_PROJECT_RAG_SYSTEM = (
+    "你是一名资深技术面试设计专家。"
+    "下面给出从候选人 Resume 中召回的若干相关片段。"
+    "请围绕这些具体内容生成一道针对候选人项目/实习经历的中文深挖题。"
+    "题目必须指向片段中的具体项目、技术栈、角色或结果, 不要泛泛而问, 也不要重复片段原文。"
     "只输出题目本身, 不要任何解释或前后缀。"
 )
 
@@ -131,11 +143,62 @@ def _knowledge_question(
     return text, None
 
 
+def _retrieve_resume_chunks(
+    candidate_id: str, competency: Competency,
+) -> list[dict]:
+    """从 Milvus 召回候选人 Resume 中与本维度相关的切片。
+    embed stub / MilvusNotConfigured / 网络异常 / 召回空 都返 [], 调用方退到 fallback。"""
+    query_text = f"考察维度: {competency.name} - {competency.description}"
+    vec = embeddings.embed(query_text)
+    if embeddings.is_stub_vector(vec):
+        return []
+    try:
+        return vector_store.search_documents(
+            embedding=vec,
+            top_k=_RAG_TOP_K,
+            kind=vector_store.DOC_KIND_RESUME,
+            source_id=candidate_id,
+        )
+    except vector_store.MilvusNotConfigured:
+        log.info("Milvus 未配置, project 题走 fallback 路径")
+        return []
+    except Exception:
+        log.exception("project Resume 召回失败, 走 fallback")
+        return []
+
+
 def _project_question(
     job: JobContext, candidate: CandidateProfile, comp: Competency, fallback: str,
-) -> str:
-    """生成一道项目深挖题。Sprint 3-6 会改造为走 Resume RAG;
-    Sprint 3-5 阶段仍是现场 LLM 生成。"""
+) -> tuple[str, list[str]]:
+    """生成一道项目深挖题。
+    返回 (题目文本, source_chunk_ids)。空列表表示没用到 RAG。
+
+    路径优先级:
+    1. Resume RAG 召回 + LLM 围绕切片生成: 理想路径, 题目锚定具体片段
+    2. Resume RAG 召回 + LLM stub:        fallback 模板, 但仍记 chunk_ids
+    3. Resume RAG 召回空 + LLM 现场生成:  退到 Sprint 0 路径(读 Resume 全文), chunk_ids=[]
+    4. Resume RAG 召回空 + LLM stub:      fallback, chunk_ids=[]
+    """
+    chunks = _retrieve_resume_chunks(candidate.candidate_id, comp)
+
+    # 路径 1/2: 有召回, 走 RAG
+    if chunks:
+        chunk_ids = [c["document_id"] for c in chunks]
+        chunks_text = "\n---\n".join(c["text"] for c in chunks)
+        prompt = (
+            f"职位: {job.title}\n"
+            f"JD: {job.jd[:300]}\n"
+            f"考察维度: {comp.name} - {comp.description}\n"
+            f"候选人 Resume 相关片段:\n{chunks_text}\n"
+            "请围绕这些具体内容生成一道项目深挖题。"
+        )
+        text = llm.complete(_PROJECT_RAG_SYSTEM, prompt, max_tokens=260)
+        if text and not llm.is_stub(text):
+            return text, chunk_ids
+        # LLM 不可用: fallback 模板, 但 chunk_ids 仍记录 (路径 2)
+        return fallback, chunk_ids
+
+    # 路径 3/4: 无召回, 退到 Sprint 0 风格的现场生成 (读 Resume 全文)
     projects_hint = "\n".join(f"- {p}" for p in candidate.projects) if candidate.projects else "(未结构化, 直接读 resume 原文)"
     prompt = (
         f"职位: {job.title}\n"
@@ -147,8 +210,8 @@ def _project_question(
     )
     text = llm.complete(_PROJECT_SYSTEM, prompt, max_tokens=220)
     if not text or llm.is_stub(text):
-        return fallback
-    return text
+        return fallback, []
+    return text, []
 
 
 def plan(job: JobContext, candidate: CandidateProfile) -> InterviewPlan:
@@ -187,23 +250,27 @@ def plan(job: JobContext, candidate: CandidateProfile) -> InterviewPlan:
         text=comm_text,
         source_question_id=comm_src,
     )
+    tech_proj_text, tech_proj_chunks = _project_question(
+        job, candidate, tech,
+        fallback="请挑你简历里最有挑战的一段技术工作, 讲清楚你的角色、做的关键决策, 以及最终的结果与复盘。",
+    )
+    comm_proj_text, comm_proj_chunks = _project_question(
+        job, candidate, comm,
+        fallback="请挑你简历里一次跨职能协作的经历, 讲清楚冲突点、你如何推动对齐, 以及最终是否落地。",
+    )
     q_tech_project = Question(
         competency_id=tech.competency_id,
         type=QuestionType.TECHNICAL,
         category=QuestionCategory.PROJECT_EXPERIENCE,
-        text=_project_question(
-            job, candidate, tech,
-            fallback="请挑你简历里最有挑战的一段技术工作, 讲清楚你的角色、做的关键决策, 以及最终的结果与复盘。",
-        ),
+        text=tech_proj_text,
+        source_chunk_ids=tech_proj_chunks,
     )
     q_comm_project = Question(
         competency_id=comm.competency_id,
         type=QuestionType.BEHAVIORAL,
         category=QuestionCategory.PROJECT_EXPERIENCE,
-        text=_project_question(
-            job, candidate, comm,
-            fallback="请挑你简历里一次跨职能协作的经历, 讲清楚冲突点、你如何推动对齐, 以及最终是否落地。",
-        ),
+        text=comm_proj_text,
+        source_chunk_ids=comm_proj_chunks,
     )
 
     round0 = InterviewRound(
