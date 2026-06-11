@@ -16,6 +16,7 @@ from src.db.models import (
     InterviewPlanORM,
     InterviewSessionORM,
     JobORM,
+    SeedQuestionORM,
 )
 from src.schemas import (
     CandidateProfile,
@@ -23,7 +24,60 @@ from src.schemas import (
     InterviewPlan,
     InterviewSession,
     JobContext,
+    SeedQuestion,
 )
+
+
+# ---------- SeedQuestion (Sprint 3-3) ----------
+
+def save_seed_question(question: SeedQuestion) -> None:
+    """按 question_id upsert; 同内容 = 同 id, 脚本重跑安全。"""
+    with session_scope() as s:
+        s.merge(SeedQuestionORM(
+            question_id=question.question_id,
+            role_family=question.role_family,
+            competency=question.competency,
+            text=question.text,
+            source=question.source,
+        ))
+
+
+def load_seed_question(question_id: str) -> Optional[SeedQuestion]:
+    with session_scope() as s:
+        row = s.get(SeedQuestionORM, question_id)
+        if row is None:
+            return None
+        return SeedQuestion.model_validate({
+            "question_id": row.question_id,
+            "role_family": row.role_family,
+            "competency": row.competency,
+            "text": row.text,
+            "source": row.source,
+        })
+
+
+def list_seed_questions(
+    *,
+    role_family: Optional[str] = None,
+    competency: Optional[str] = None,
+) -> list[SeedQuestion]:
+    """按可选过滤列出题库; 不带过滤就是全表。"""
+    with session_scope() as s:
+        q = s.query(SeedQuestionORM)
+        if role_family is not None:
+            q = q.filter(SeedQuestionORM.role_family == role_family)
+        if competency is not None:
+            q = q.filter(SeedQuestionORM.competency == competency)
+        return [
+            SeedQuestion.model_validate({
+                "question_id": r.question_id,
+                "role_family": r.role_family,
+                "competency": r.competency,
+                "text": r.text,
+                "source": r.source,
+            })
+            for r in q.all()
+        ]
 
 
 # ---------- Job ----------

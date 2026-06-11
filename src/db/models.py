@@ -39,6 +39,30 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.db.base import Base
 
 
+class SeedQuestionORM(Base):
+    """题库种子题。Sprint 3 起 Planner 走"召回 + LLM 精修", 题源在这里。
+
+    与 Milvus questions collection 的关系:
+    - 本表是真理之源, Milvus 仅作检索副本; Milvus 文件丢了能从本表重建。
+    - 写入顺序: PG -> embed -> Milvus, 顺序保证 PG 一致, Milvus 写挂不影响真理。
+
+    question_id 用内容哈希: 脚本重跑不重复。
+    """
+    __tablename__ = "seed_questions"
+
+    question_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role_family: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    competency: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="llm_generated"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class JobORM(Base):
     """对应 schemas.JobContext。HR 创建职位时落表。"""
     __tablename__ = "jobs"
