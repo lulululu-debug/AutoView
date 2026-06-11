@@ -69,6 +69,38 @@ export type CandidateCreated = {
   plan_pending: boolean;
 };
 
+// Plan 类型 (与后端 schemas.InterviewPlan 对应; 当前只用必要字段)
+export type Competency = {
+  competency_id: string;
+  name: string;
+  description: string;
+  weight: number;
+};
+
+export type Question = {
+  question_id: string;
+  competency_id: string;
+  text: string;
+  type: string;
+  category: string;
+  source_question_id: string | null;
+  source_chunk_ids: string[];
+};
+
+export type InterviewRound = {
+  round_id: string;
+  index: number;
+  title: string;
+  competencies: Competency[];
+  questions: Question[];
+};
+
+export type InterviewPlan = {
+  plan_id: string;
+  job_id: string;
+  rounds: InterviewRound[];
+};
+
 export const api = {
   health: () => request<Health>("/health"),
   getJob: (jobId: string) => request<JobContext>(`/jobs/${jobId}`),
@@ -77,6 +109,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  getCandidatePlan: (jobId: string, candidateId: string) =>
+    request<InterviewPlan>(
+      `/jobs/${jobId}/candidates/${candidateId}/plan`,
+    ),
 };
 
 export { API_BASE };
