@@ -6,6 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
     "pydantic>=2.5.0",
+    "sqlalchemy>=2.0.30",
+    "psycopg[binary]>=3.1.18",
 ]
 
 [build-system]
