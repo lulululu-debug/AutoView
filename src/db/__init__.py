@@ -23,8 +23,14 @@ from src.db.base import (
     session_scope,
 )
 from src.db.repository import (
+    load_candidate,
+    load_job,
+    load_plan,
     load_report,
     load_session,
+    save_candidate,
+    save_job,
+    save_plan,
     save_report,
     save_session,
 )
@@ -34,8 +40,14 @@ __all__ = [
     "get_engine",
     "init_db",
     "session_scope",
+    "load_candidate",
+    "load_job",
+    "load_plan",
     "load_report",
     "load_session",
+    "save_candidate",
+    "save_job",
+    "save_plan",
     "save_report",
     "save_session",
 ]

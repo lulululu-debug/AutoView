@@ -41,8 +41,13 @@ class JobContext(BaseModel):
 
 class CandidateProfile(BaseModel):
     """候选人面试前上传的简历/资料, Planner 的输入之二。
-    与 JobContext 一起决定面试计划: resume 用于生成项目/实习深挖题。"""
+    与 JobContext 一起决定面试计划: resume 用于生成项目/实习深挖题。
+
+    job_id Optional 是有意为之: 走 API 路径时由 path param 注入(必填),
+    走 src.main / evals 这种纯内存路径时不需要(planner 不消费 job_id),
+    持久化到 PG 时若仍为 None 会被 save_candidate 显式拒绝。"""
     candidate_id: str = Field(default_factory=_new_id)
+    job_id: str | None = None                # 关联职位; API 落库时必填, 见 db.save_candidate
     resume: str                              # Resume 原文(后期可结构化解析)
     projects: list[str] = []                 # 已识别的项目/实习要点(可由 resume 解析填充)
 

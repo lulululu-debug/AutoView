@@ -1,13 +1,24 @@
-"""ORM 模型: 仅 InterviewSession / EvaluationReport 两张表。
+"""ORM 模型。
 
-设计取舍(Sprint 1):
-- 嵌套结构(history / answers / content_scores / performance_observations) 走 JSONB,
-  不在本 sprint 拆子表。理由: 我们当前没有按嵌套字段查询的需求,
+Sprint 1: InterviewSession / EvaluationReport
+Sprint 2: + Job / Candidate / InterviewPlan, 让 API 端的"上传 JD -> 上传 Resume
+           -> 触发 Planner"完整链路有持久化承载。
+
+通用设计取舍:
+- 嵌套结构(history / answers / content_scores / performance_observations /
+  plan_data 等) 走 JSONB, 不在 sprint 阶段拆子表。理由: 没有按嵌套字段查询的需求,
   pydantic.model_dump <-> JSONB 来回最低成本。
 - 顶层可索引/可统计字段(status, job_id, overall, needs_human_review) 提出来当列,
   方便后续做仪表盘与筛选, 也为将来切表预留出口。
 - 主键直接复用 schemas 里生成的 hex uuid 字符串, 避免业务层与 DB 层 id 不一致。
-- created_at / updated_at 由 server_default = now() 控制, 不让业务层操心时区。
+- created_at / updated_at 由 server_default=now() / onupdate=now() 控制,
+  不让业务层操心时区。
+- FK 用 ondelete="RESTRICT": HR 误删职位时不静默级联干掉 candidate / plan / session,
+  审计场景下"硬挡住"比"自动清"更安全。真要清的话, 后续做 soft delete + 显式归档流程。
+
+interview_sessions.plan_id 暂不加 FK 到 interview_plans.plan_id:
+- Sprint 2-3 才把 plan 真的写进 PG, 在那之前老的 session 行 plan_id 不在 plans 表中,
+  现在加 FK 会让旧数据违约。等 Sprint 2-3 接通后再补 FK 约束。
 """
 from __future__ import annotations
 
@@ -26,6 +37,82 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base
+
+
+class JobORM(Base):
+    """对应 schemas.JobContext。HR 创建职位时落表。"""
+    __tablename__ = "jobs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    jd: Mapped[str] = mapped_column(String, nullable=False)
+    requirements: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    company_materials: Mapped[str] = mapped_column(String, nullable=False, default="")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    candidates: Mapped[list["CandidateORM"]] = relationship(back_populates="job")
+
+
+class CandidateORM(Base):
+    """对应 schemas.CandidateProfile。候选人上传 Resume 时落表, 强制关联到一个 job。"""
+    __tablename__ = "candidates"
+
+    candidate_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("jobs.job_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    resume: Mapped[str] = mapped_column(String, nullable=False)
+    projects: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    job: Mapped[JobORM] = relationship(back_populates="candidates")
+    plans: Mapped[list["InterviewPlanORM"]] = relationship(back_populates="candidate")
+
+
+class InterviewPlanORM(Base):
+    """对应 schemas.InterviewPlan。Planner 跑完后落表, HR 端可看, 面试会话从中读题。
+
+    不强制 unique(candidate_id): 允许同一候选人有多个版本的 plan(HR 重跑 Planner)。
+    plan.plan_id 才是定位主键, 面试会话靠 plan_id 锁定使用的版本。
+    """
+    __tablename__ = "interview_plans"
+
+    plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    candidate_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("candidates.candidate_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    # 完整 InterviewPlan (含 rounds/competencies/questions) 整体 JSONB
+    plan_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    candidate: Mapped[CandidateORM] = relationship(back_populates="plans")
 
 
 class InterviewSessionORM(Base):
