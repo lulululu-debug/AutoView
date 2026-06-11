@@ -140,9 +140,7 @@ export default function InterviewLandingPage({
             }
             className="w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-3 text-sm font-mono disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-zinc-400"
           />
-          <p className="text-xs text-zinc-500 mt-1">
-            当前 {resume.length} 字 · 建议 200 字以上, 系统会针对项目深挖
-          </p>
+          <ResumeLengthHint length={resume.length} />
         </div>
 
         {submitState.kind === "error" && (
@@ -177,6 +175,31 @@ function PageShell({ children }: { children: React.ReactNode }) {
       <div className="w-full max-w-2xl mt-12 mb-12">{children}</div>
     </main>
   );
+}
+
+/**
+ * Resume 长度反馈三档:
+ *   0 字            zinc 中性
+ *   1-199 字        zinc + "建议 200 字以上"
+ *   200-499 字      emerald + "可以了"
+ *   500+ 字         emerald + "详细, 系统能深挖更多"
+ */
+function ResumeLengthHint({ length }: { length: number }) {
+  const tier =
+    length === 0 ? "empty" : length < 200 ? "short" : length < 500 ? "ok" : "rich";
+  const klass =
+    tier === "ok" || tier === "rich"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : "text-zinc-500";
+  const hint =
+    tier === "empty"
+      ? "粘贴简历后开始"
+      : tier === "short"
+        ? `当前 ${length} 字, 建议 200 字以上, 系统才能针对项目深挖`
+        : tier === "ok"
+          ? `当前 ${length} 字 · 可以了`
+          : `当前 ${length} 字 · 内容详细, 系统能深挖更多细节`;
+  return <p className={`text-xs mt-1 ${klass}`}>{hint}</p>;
 }
 
 function errMessage(e: unknown): string {
