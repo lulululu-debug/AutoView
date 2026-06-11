@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from src.cache import RedisNotConfigured
 from src.db import DatabaseNotConfigured
+from src.orchestrator import SessionInvalidState, SessionNotFound
 
 
 def register_handlers(app: FastAPI) -> None:
@@ -35,4 +36,24 @@ def register_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=503,
             content={"detail": "Redis 未配置, 服务暂不可用", "error": str(exc)},
+        )
+
+    @app.exception_handler(SessionNotFound)
+    async def _session_not_found(
+        _req: Request, exc: SessionNotFound,
+    ) -> JSONResponse:
+        # session 在 Redis 中找不到: 过期 / 已 finalize / 无效 id; 一律 404
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "面试会话不存在或已结束", "error": str(exc)},
+        )
+
+    @app.exception_handler(SessionInvalidState)
+    async def _session_invalid_state(
+        _req: Request, exc: SessionInvalidState,
+    ) -> JSONResponse:
+        # 状态机不允许的操作: 比如对已 COMPLETED 会话 submit_answer; 409 Conflict
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "面试会话当前状态不允许此操作", "error": str(exc)},
         )
