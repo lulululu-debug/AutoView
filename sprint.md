@@ -29,24 +29,26 @@
 
 ## Sprint 1 — 持久化与会话态（Postgres + Redis）
 
-- [ ] 接入 Postgres，为 InterviewSession / EvaluationReport 建表与 ORM
-- [ ] 接入 **Redis**：进行中的会话状态存 Redis（热存储），结束后归档 Postgres
-- [ ] Orchestrator 改造：会话状态机基于 Redis 读写
-- [ ] 给 LLM 调用与 JD 解析结果加 Redis 缓存
-- [ ] 写第一个 eval：固定输入 → 校验报告结构与关键字段
+- [x] 接入 Postgres，为 InterviewSession / EvaluationReport 建表与 ORM
+- [x] 接入 **Redis**：进行中的会话状态存 Redis（热存储），结束后归档 Postgres
+- [x] Orchestrator 改造：会话状态机基于 Redis 读写（start/submit/resume/finalize 三段式 + 中断恢复）
+- [x] 给 LLM 调用与 JD 解析结果加 Redis 缓存（透明缓存 src/llm/complete，stub 不入缓存，Redis 不可用降级）
+- [x] 写第一个 eval：固定输入 → 校验报告结构与关键字段（含合规分区不变量护栏）
 
-**完成标准**：会话可中断后从 Redis 恢复；结束后能在 Postgres 查到归档。
+**完成标准**：会话可中断后从 Redis 恢复；结束后能在 Postgres 查到归档。 ✅
 
 ---
 
 ## Sprint 2 — API 层（FastAPI）与真实 JD 解析
 
-- [ ] FastAPI 骨架：健康检查 + 基础路由
-- [ ] 接口：创建职位（上传 JD/岗位/公司资料文本）
-- [ ] 接口：候选人上传 Resume，关联到某职位 → 触发 Planner 生成 InterviewPlan(JD + Resume)
-- [ ] 接口：创建/进行面试会话（提交回答 → 返回下一题/追问）
-- [ ] 接口：获取评估报告
-- [ ] Planner 接真实 JD + Resume 文本解析（替换写死输入）
+- [x] FastAPI 骨架：健康检查 + 基础路由（create_app 工厂；/health 不查上游）
+- [x] 接口：创建职位（POST /jobs；server 生成 job_id；异常映射 503/422）
+- [x] 接口：候选人上传 Resume，关联到某职位 → 触发 Planner 生成 InterviewPlan(JD + Resume)
+      （POST /jobs/{id}/candidates 异步触发 Planner via BackgroundTasks；GET 轮询 plan）
+- [x] 接口：创建/进行面试会话（POST /interviews + POST /answers + GET 中断恢复）
+- [x] 接口：获取评估报告（GET /interviews/{id}/report 隐式 finalize，幂等，IN_PROGRESS→409）
+- [x] Planner 接真实 JD + Resume 文本解析（替换写死输入）—— 通过 API 自然实现：
+      Planner 接受任意上传文本，src.main 写死输入仅作 Sprint 0 demo 用
 
 **完成标准**：用 HTTP 完整走完一次文本面试，全部经 API。
 

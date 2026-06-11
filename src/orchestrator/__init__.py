@@ -165,6 +165,33 @@ def resume_session(session_id: str) -> TurnResult:
     )
 
 
+def get_report(session_id: str) -> EvaluationReport:
+    """获取面试报告。三态:
+    - Redis 里仍在 + status=COMPLETED -> 调 finalize, 归档 PG, 清 Redis, 返报告
+    - Redis 里仍在 + status=IN_PROGRESS -> 抛 SessionInvalidState (不允许提前结束)
+    - Redis 里没了 (已 finalize 过) -> 从 PG 读, 没有则 SessionNotFound
+
+    幂等: 同一 session_id 多次调用都返同一份报告。
+    第一次走 Redis -> finalize 分支, 第二次起走 PG 分支。
+
+    与 finalize 的区别: finalize 会无条件把 IN_PROGRESS 强转成 COMPLETED
+    (允许调用方提前结束面试), 本函数严格拒绝 IN_PROGRESS。"""
+    session = cache.load_session(session_id)
+    if session is not None:
+        if session.status != SessionStatus.COMPLETED:
+            raise SessionInvalidState(
+                f"session {session_id} 尚未答完, 无法取报告"
+            )
+        return finalize(session_id)
+
+    report = db.load_report_by_session(session_id)
+    if report is None:
+        raise SessionNotFound(
+            f"session {session_id} 不存在 (从未创建, 或已超出归档保留期)"
+        )
+    return report
+
+
 def finalize(session_id: str) -> EvaluationReport:
     """跑 evaluator, 把 session + report 归档进 Postgres, 清 Redis。"""
     session = cache.load_session(session_id)
