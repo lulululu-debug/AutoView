@@ -56,14 +56,17 @@
 
 ## Sprint 3 — 题库与向量检索（Milvus + RAG）
 
-- [ ] 接入 **Milvus**，设计题库与资料片段的 collection
-- [ ] 公司资料 / JD / 候选人 Resume 切片 → 向量化 → 入 Milvus
-- [ ] Planner 改造：按考察维度从 Milvus 召回候选题，再由 LLM 精修/补充；
-      项目深挖题召回基于 Resume 片段
-- [ ] 面试与评估时对公司资料/Resume 做 RAG 召回相关片段
-- [ ] 扩展 eval：检验召回相关性与计划质量
+- [x] 接入 **Milvus**（Lite, in-process），questions + documents 两个 collection
+- [x] 公司资料 / JD / 候选人 Resume 切片 → 向量化 → 入 Milvus（POST 时挂 BG 任务）
+- [x] Planner 改造：knowledge 题从 Milvus 召回 + LLM 精修；project 题走 Resume 切片 RAG；
+      Question.source_question_id / source_chunk_ids 记录召回溯源
+- [x] 面试与评估时对公司资料 RAG 召回相关片段（Evaluator summary 接 JD+公司资料）
+- [x] 扩展 eval：组件级 RAG eval + 端到端 provenance + 跨 job/candidate 隔离
 
-**完成标准**：计划与提问明显更贴合岗位与公司语境，且可追溯到召回片段。
+**完成标准**：计划与提问明显更贴合岗位与公司语境，且可追溯到召回片段。 ✅
+
+附加: Sprint 3 中段把 LLM 从 anthropic 切到 OpenAI 单一 provider（embedding 一直
+就是 OpenAI，consolidate 简化 key/计费）。
 
 ---
 
