@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 
 from api.schemas import AnswerSubmit, InterviewStart
 from src import db, orchestrator
-from src.schemas import TurnResult
+from src.schemas import EvaluationReport, TurnResult
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 
@@ -69,3 +69,15 @@ def resume_interview(session_id: str) -> TurnResult:
     """中断恢复 / 查询: 返当前待答提示, 或 done=True。
     SessionNotFound -> 404。"""
     return orchestrator.resume_session(session_id)
+
+
+@router.get("/{session_id}/report", response_model=EvaluationReport)
+def get_interview_report(session_id: str) -> EvaluationReport:
+    """获取评估报告。
+    - 会话已答完 (status=COMPLETED, 仍在 Redis): 隐式 finalize 归档 PG, 返报告
+    - 会话尚未答完 (status=IN_PROGRESS): 409, 客户端先答完再来
+                                          (提前结束面试是另一个端点的事, Sprint 2 不做)
+    - 已归档 (Redis 已清, PG 有报告): 直接从 PG 读
+    - 都没有: 404
+    幂等: 同一 session_id 多次 GET 都返同一份。"""
+    return orchestrator.get_report(session_id)

@@ -354,6 +354,89 @@ class InterviewSessionTests(unittest.TestCase):
         r = self.client.post(f"/interviews/{sid}/answers", json={"text": ""})
         self.assertEqual(r.status_code, 422)
 
+    # ----- GET /interviews/{id}/report (Sprint 2-6) -----
+
+    _PROVEN_ANSWERS = [
+        # 同 Sprint 0: 首答短 -> fu, 后四答含 specificity hints 不触发 fu, 总 5 turn 走完
+        "做过一些性能优化, 主要是慢查询和缓存。",
+        "比如去年大促前, 订单查询 P99 从 800ms 涨到 2s。"
+        "我们排查发现是某个复合索引被改后失效, 同时 Redis 出现热点 key 击穿。"
+        "我加回索引并改造为本地缓存 + Redis 二级缓存, 最终 P99 回到 350ms。",
+        "通常我会先用数据让对方理解我担心的点, 比如拉一份线上回放或历史 case,"
+        "再一起定义可灰度的中间方案; 我们组上半年的风控规则争议就是这么收的。",
+        "对账中台那段最有挑战。日处理 2 亿笔, 早期对账延迟超过 30 分钟。"
+        "我们把单表对账改成分桶 + 并行 worker, 引入幂等键, 用 Kafka 做回放,"
+        "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
+        "上半年风控那次, 产品要求 24 小时内全量, 我担心误杀率。"
+        "我拉了 SRE 一起跑离线回放, 用数据让产品同意先灰度 5%, 一周后再全量,"
+        "误杀率从 3.1% 降到 0.4% 才放开。",
+    ]
+
+    def _walk_to_done(self) -> str:
+        """开一次会话, 喂答案到 done, 返回 session_id。"""
+        start = self._start()
+        sid = start["session_id"]
+        for ans in self._PROVEN_ANSWERS:
+            r = self.client.post(f"/interviews/{sid}/answers", json={"text": ans})
+            if r.json()["done"]:
+                return sid
+        self.fail("应当能走到 done")
+
+    def test_get_report_when_completed_returns_200(self):
+        sid = self._walk_to_done()
+        r = self.client.get(f"/interviews/{sid}/report")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["session_id"], sid)
+        self.assertEqual(len(body["content_scores"]), 2, "2 个考察维度")
+        self.assertTrue(body["needs_human_review"], "合规: 默认人工复核")
+        self.assertEqual(body["performance_observations"], [])
+
+    def test_get_report_finalizes_and_clears_redis(self):
+        """副作用: 第一次 GET 应当把 session + plan 从 Redis 清掉, 报告写入 PG。"""
+        from src import cache
+        from src.db import load_report_by_session
+        sid = self._walk_to_done()
+        # 走前: Redis 里仍有 session
+        session_before = cache.load_session(sid)
+        self.assertIsNotNone(session_before)
+        plan_id = session_before.plan_id
+
+        r = self.client.get(f"/interviews/{sid}/report")
+        self.assertEqual(r.status_code, 200)
+
+        # 走后: Redis 清空
+        self.assertIsNone(cache.load_session(sid))
+        self.assertIsNone(cache.load_plan(plan_id))
+        # PG 有报告
+        archived = load_report_by_session(sid)
+        self.assertIsNotNone(archived)
+        self.assertEqual(archived.overall, r.json()["overall"])
+
+    def test_get_report_idempotent(self):
+        """同一 session_id 多次 GET: 第一次走 Redis -> finalize 分支, 之后走 PG 分支。"""
+        sid = self._walk_to_done()
+        r1 = self.client.get(f"/interviews/{sid}/report")
+        r2 = self.client.get(f"/interviews/{sid}/report")
+        r3 = self.client.get(f"/interviews/{sid}/report")
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r3.status_code, 200)
+        # 同一份: report_id 相同(不会每次新生成)
+        self.assertEqual(r1.json()["report_id"], r2.json()["report_id"])
+        self.assertEqual(r2.json()["report_id"], r3.json()["report_id"])
+
+    def test_get_report_in_progress_returns_409(self):
+        """会话还在答题阶段, 不允许提前取报告(方案 B)。"""
+        start = self._start()
+        sid = start["session_id"]
+        r = self.client.get(f"/interviews/{sid}/report")
+        self.assertEqual(r.status_code, 409)
+
+    def test_get_report_unknown_session_404(self):
+        r = self.client.get("/interviews/ghost-session/report")
+        self.assertEqual(r.status_code, 404)
+
 
 class ExceptionMappingTests(unittest.TestCase):
     """领域异常 -> HTTP 状态码映射 (无需真 infra, 用 mock 注入异常)。"""
