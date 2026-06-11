@@ -35,9 +35,16 @@ brew services start redis
 brew services stop redis         # 停 Redis
 ```
 环境变量见 `.env.example`：`ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` / `POSTGRES_URL` /
-`REDIS_URL` / `SESSION_TTL_SECONDS`。运行时按需读取，缺哪个就退到对应的回退分支。
+`REDIS_URL` / `SESSION_TTL_SECONDS` / `LLM_CACHE_TTL_SECONDS`。运行时按需读取，缺哪个就退到对应的回退分支。
 
-测试目前尚未引入；Sprint 1 收尾会加第一个 eval（固定输入校验报告结构）。
+跑 eval（stdlib unittest，无第三方依赖）：
+```bash
+python -m unittest evals.test_skeleton                            # 全部
+python -m unittest evals.test_skeleton.ComplianceInvariantTests   # 单类
+python -m unittest discover -s evals                              # discover
+```
+`evals/` 里所有 TestCase 都被强制走 LLM stub（模块顶部清掉 `ANTHROPIC_API_KEY`），
+保证结构性护栏快、稳、不烧 token。需要 PG+Redis 的端到端 TestCase 在缺 env 时自动 skip。
 
 ## 代码结构（已实现部分）
 - `src/schemas/` — 全部 pydantic 数据契约。Agent 输入输出都是这里的类型。
