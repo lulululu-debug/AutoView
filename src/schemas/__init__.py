@@ -178,6 +178,16 @@ class PerformanceObservation(BaseModel):
     note: str = "参考信息, 不计入总分, 建议人工复核"
 
 
+class TurnResult(BaseModel):
+    """Orchestrator 的一次推进结果。
+    start_session / submit_answer / resume_session 都返回这个,
+    调用方据此决定下一步: 还要继续答(prompt 非空) 还是已结束(done=True)。"""
+    session_id: str
+    done: bool                               # True 表示面试已走完, 接下来该 finalize
+    prompt: str | None = None                # 下一句面试官话: question 或 follow-up
+    ref_id: str | None = None                # 对应 history 里 interviewer turn 的 ref_id
+
+
 class EvaluationReport(BaseModel):
     """Evaluator 的输出。
     内容维度(content_scores) 与表现维度(performance_observations) 分区。

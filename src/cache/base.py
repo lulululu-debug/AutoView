@@ -39,6 +39,22 @@ def get_redis() -> Redis:
     return _client
 
 
+_DEFAULT_TTL_SECONDS = 24 * 60 * 60  # 24h
+
+
+def ttl_seconds() -> int:
+    """会话/计划在 Redis 的 TTL, 由 SESSION_TTL_SECONDS 覆盖。
+    session_store 与 plan_store 共用同一个 TTL, 避免两者错位失效。"""
+    raw = os.environ.get("SESSION_TTL_SECONDS")
+    if not raw:
+        return _DEFAULT_TTL_SECONDS
+    try:
+        v = int(raw)
+        return v if v > 0 else _DEFAULT_TTL_SECONDS
+    except ValueError:
+        return _DEFAULT_TTL_SECONDS
+
+
 def reset_client_for_testing() -> None:
     """测试用: 清掉单例, 让下一次 get_redis() 重新读 REDIS_URL。
     业务代码不要调用本函数。"""

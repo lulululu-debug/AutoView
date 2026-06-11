@@ -12,35 +12,22 @@
 """
 from __future__ import annotations
 
-import os
 from typing import Optional
 
-from src.cache.base import get_redis
+from src.cache.base import get_redis, ttl_seconds
 from src.schemas import InterviewSession
 
 _KEY_PREFIX = "session:"
-_DEFAULT_TTL_SECONDS = 24 * 60 * 60  # 24h
 
 
 def _key(session_id: str) -> str:
     return f"{_KEY_PREFIX}{session_id}"
 
 
-def _ttl_seconds() -> int:
-    raw = os.environ.get("SESSION_TTL_SECONDS")
-    if not raw:
-        return _DEFAULT_TTL_SECONDS
-    try:
-        v = int(raw)
-        return v if v > 0 else _DEFAULT_TTL_SECONDS
-    except ValueError:
-        return _DEFAULT_TTL_SECONDS
-
-
 def save_session(session: InterviewSession) -> None:
     """写入(或覆盖)进行中的会话, 同时刷新 TTL。"""
     r = get_redis()
-    r.set(_key(session.session_id), session.model_dump_json(), ex=_ttl_seconds())
+    r.set(_key(session.session_id), session.model_dump_json(), ex=ttl_seconds())
 
 
 def load_session(session_id: str) -> Optional[InterviewSession]:
