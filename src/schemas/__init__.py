@@ -183,6 +183,20 @@ class PerformanceObservation(BaseModel):
     note: str = "参考信息, 不计入总分, 建议人工复核"
 
 
+class SeedQuestion(BaseModel):
+    """种子题库中的一道题 —— Sprint 3 起。
+    Planner 按维度从题库召回 (Milvus) 后再由 LLM 精修, 替换原来的现场生成。
+    PG 是真理之源, Milvus 仅作检索副本。
+
+    question_id 用内容哈希 (sha256(role+competency+text)[:16]), 让脚本可重跑:
+    同内容 = 同 id = upsert 不重复。"""
+    question_id: str
+    role_family: str                         # "backend" / "frontend" / "data_science" / ...
+    competency: str                          # "技术深度" / "沟通协作" / ...
+    text: str
+    source: str = "llm_generated"            # llm_generated / fallback_template / human_curated
+
+
 class TurnResult(BaseModel):
     """Orchestrator 的一次推进结果。
     start_session / submit_answer / resume_session 都返回这个,
