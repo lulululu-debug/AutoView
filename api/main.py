@@ -16,12 +16,18 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from api.exceptions import register_handlers
+from api.routes import jobs as jobs_routes
+
 API_TITLE = "AI Interview Platform API"
 API_VERSION = "0.0.1"
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title=API_TITLE, version=API_VERSION)
+
+    register_handlers(app)
+    app.include_router(jobs_routes.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
