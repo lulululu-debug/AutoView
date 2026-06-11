@@ -83,9 +83,12 @@ class Question(BaseModel):
     text: str
     type: QuestionType = QuestionType.OPEN
     category: QuestionCategory = QuestionCategory.KNOWLEDGE
-    # Sprint 3-5 召回溯源: 从 SeedQuestion 召回 + LLM 精修时, 记录原题 id;
+    # Sprint 3-5 溯源 (knowledge 题): 从 SeedQuestion 召回 + LLM 精修时, 记录原题 id;
     # None 表示走的是 fallback / 现场生成路径, 没有题库来源。
     source_question_id: str | None = None
+    # Sprint 3-6 溯源 (project 题): 从 Resume 切片召回时, 记录用到的 document_id 列表;
+    # 空列表表示走的是 fallback / 现场生成路径, 没有 RAG 切片来源。
+    source_chunk_ids: list[str] = []
 
 
 class InterviewRound(BaseModel):
