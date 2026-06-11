@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+from src.cache import llm_cache
 from src.cache.base import RedisNotConfigured, get_redis
 from src.cache.plan_store import (
     delete_plan,
@@ -33,6 +34,7 @@ from src.cache.session_store import (
 __all__ = [
     "RedisNotConfigured",
     "get_redis",
+    "llm_cache",
     "delete_plan",
     "load_plan",
     "save_plan",
