@@ -25,6 +25,7 @@ from src.db.base import (
 from src.db.repository import (
     load_candidate,
     load_job,
+    load_latest_plan_for_candidate,
     load_plan,
     load_report,
     load_session,
@@ -42,6 +43,7 @@ __all__ = [
     "session_scope",
     "load_candidate",
     "load_job",
+    "load_latest_plan_for_candidate",
     "load_plan",
     "load_report",
     "load_session",
