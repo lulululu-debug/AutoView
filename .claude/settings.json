@@ -3,11 +3,29 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Write|Edit|NotebookEdit",
+        "matcher": "Write",
         "hooks": [
           {
             "type": "command",
-            "command": "input=$(cat); { printf '\\n=== %s | tool=%s ===\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" \"$(printf '%s' \"$input\" | jq -r '.tool_name')\"; printf '%s' \"$input\" | jq '.tool_input'; } >> $HOME/.claude/projects/-Users-joy-Developer-Auto/file_ops.log"
+            "command": "input=$(cat); ts=$(date \"+%H:%M:%S\"); LOG=$HOME/.claude/projects/-Users-joy-Developer-Auto/file_ops.log; printf \"%s\" \"$input\" | jq -r --arg ts \"$ts\" 'def indent($p): split(\"\\n\") | map($p + .) | join(\"\\n\"); if .tool_name == \"Write\" then \"\\n▸ \\($ts)  Write   \\(.tool_input.file_path)\\n  ┌─ preview (head 15 lines) ─\\n\" + ((.tool_input.content // \"\") | split(\"\\n\")[:15] | join(\"\\n\") | indent(\"  │ \")) + \"\\n  └─\" elif .tool_name == \"Edit\" then \"\\n▸ \\($ts)  Edit    \\(.tool_input.file_path)\\n  ┌─ before ─\\n\" + ((.tool_input.old_string // \"\") | indent(\"  │ \")) + \"\\n  ├─ after ─\\n\" + ((.tool_input.new_string // \"\") | indent(\"  │ \")) + \"\\n  └─\" else \"\\n▸ \\($ts)  \\(.tool_name) \\(.tool_input.file_path // .tool_input.notebook_path // \"\")\" end' >> \"$LOG\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); ts=$(date \"+%H:%M:%S\"); LOG=$HOME/.claude/projects/-Users-joy-Developer-Auto/file_ops.log; printf \"%s\" \"$input\" | jq -r --arg ts \"$ts\" 'def indent($p): split(\"\\n\") | map($p + .) | join(\"\\n\"); if .tool_name == \"Write\" then \"\\n▸ \\($ts)  Write   \\(.tool_input.file_path)\\n  ┌─ preview (head 15 lines) ─\\n\" + ((.tool_input.content // \"\") | split(\"\\n\")[:15] | join(\"\\n\") | indent(\"  │ \")) + \"\\n  └─\" elif .tool_name == \"Edit\" then \"\\n▸ \\($ts)  Edit    \\(.tool_input.file_path)\\n  ┌─ before ─\\n\" + ((.tool_input.old_string // \"\") | indent(\"  │ \")) + \"\\n  ├─ after ─\\n\" + ((.tool_input.new_string // \"\") | indent(\"  │ \")) + \"\\n  └─\" else \"\\n▸ \\($ts)  \\(.tool_name) \\(.tool_input.file_path // .tool_input.notebook_path // \"\")\" end' >> \"$LOG\""
+          }
+        ]
+      },
+      {
+        "matcher": "NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); ts=$(date \"+%H:%M:%S\"); LOG=$HOME/.claude/projects/-Users-joy-Developer-Auto/file_ops.log; printf \"%s\" \"$input\" | jq -r --arg ts \"$ts\" 'def indent($p): split(\"\\n\") | map($p + .) | join(\"\\n\"); if .tool_name == \"Write\" then \"\\n▸ \\($ts)  Write   \\(.tool_input.file_path)\\n  ┌─ preview (head 15 lines) ─\\n\" + ((.tool_input.content // \"\") | split(\"\\n\")[:15] | join(\"\\n\") | indent(\"  │ \")) + \"\\n  └─\" elif .tool_name == \"Edit\" then \"\\n▸ \\($ts)  Edit    \\(.tool_input.file_path)\\n  ┌─ before ─\\n\" + ((.tool_input.old_string // \"\") | indent(\"  │ \")) + \"\\n  ├─ after ─\\n\" + ((.tool_input.new_string // \"\") | indent(\"  │ \")) + \"\\n  └─\" else \"\\n▸ \\($ts)  \\(.tool_name) \\(.tool_input.file_path // .tool_input.notebook_path // \"\")\" end' >> \"$LOG\""
           }
         ]
       }
