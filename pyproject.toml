@@ -12,6 +12,8 @@ dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.27.0",
     "openai>=1.30.0",
+    "pymilvus>=2.4.0",
+    "milvus-lite>=2.4.0",
 ]
 
 [build-system]
