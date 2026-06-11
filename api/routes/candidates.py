@@ -17,7 +17,7 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from api.schemas import CandidateCreate, CandidateCreated
-from src import cache, db
+from src import cache, db, ingestion
 from src.agents import planner
 from src.schemas import CandidateProfile, InterviewPlan, JobContext
 
@@ -45,6 +45,20 @@ def _run_planner_in_background(job: JobContext, candidate: CandidateProfile) -> 
         )
 
 
+def _ingest_resume_in_background(candidate_id: str, resume_text: str) -> None:
+    """后台任务 (Sprint 3-4): 切 Resume -> embed -> 入 Milvus, 给 Planner 项目深挖
+    RAG 召回用。失败仅日志, 与 Planner 并行跑, 互不阻塞。"""
+    try:
+        n = ingestion.ingest_resume(candidate_id, resume_text)
+        log.info(
+            "ingested resume: candidate=%s chunks=%d", candidate_id, n,
+        )
+    except Exception:
+        log.exception(
+            "background ingest_resume failed: candidate=%s", candidate_id,
+        )
+
+
 @router.post("", response_model=CandidateCreated, status_code=202)
 def create_candidate(
     job_id: str,
@@ -68,6 +82,9 @@ def create_candidate(
     db.save_candidate(candidate)
 
     background_tasks.add_task(_run_planner_in_background, job, candidate)
+    background_tasks.add_task(
+        _ingest_resume_in_background, candidate.candidate_id, candidate.resume,
+    )
 
     return CandidateCreated(
         candidate_id=candidate.candidate_id,
