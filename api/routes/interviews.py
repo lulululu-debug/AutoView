@@ -71,6 +71,27 @@ def resume_interview(session_id: str) -> TurnResult:
     return orchestrator.resume_session(session_id)
 
 
+@router.post("/{session_id}/finalize", status_code=204)
+def finalize_interview(session_id: str) -> None:
+    """触发归档但不返回 report 数据。
+
+    候选人 done 页 (Sprint 5-3) mount 时调用, 把 Redis 里 status=COMPLETED
+    的 session 尽快落 PG。否则 HR 端 list_candidates 永远看到 ready, 看不到
+    completed (候选人不调 GET /report 是 Sprint 4 的合规决策, 报告 JSON
+    一秒钟都不应经过候选人浏览器)。
+
+    内部走 orchestrator.get_report (含 finalize + 幂等), 丢掉返回值。
+    状态语义与 GET /report 一致:
+    - 不存在 -> 404
+    - IN_PROGRESS -> 409 (尚未答完, 不允许提前归档)
+    - 已 finalize 过 -> 204 幂等
+    - 第一次成功 finalize -> 204
+
+    合规: 不返回 report 内容; FastAPI 看到 status_code=204 自动空 body。
+    """
+    orchestrator.get_report(session_id)
+
+
 @router.get("/{session_id}/report", response_model=EvaluationReport)
 def get_interview_report(session_id: str) -> EvaluationReport:
     """获取评估报告。

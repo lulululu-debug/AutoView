@@ -5,9 +5,11 @@
  * - 统一 base URL 走 NEXT_PUBLIC_API_BASE_URL 环境变量, 缺省 dev 用 localhost:8000
  * - 所有调用走 request<T>(), 返回 typed JSON 或抛 ApiError
  * - ApiError 携带 status + detail, 让 UI 层映射 404/409 等成具体语义
- *
- * 后续 sprint 在 api.* 上加: jobs / candidates / interviews 等命名空间。
+ * - { auth: true } 让该次调用带上 HR JWT Bearer 头 (从 lib/auth 取 token)
+ * - 401 时自动 clearToken, 让 HrGuard 下一次渲染时把用户踢回登录页
  */
+
+import { clearToken, readToken } from "@/lib/auth";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -19,18 +21,29 @@ export class ApiError extends Error {
   }
 }
 
+type RequestOptions = RequestInit & { auth?: boolean };
+
 async function request<T>(
   path: string,
-  init?: RequestInit,
+  init?: RequestOptions,
 ): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (init?.auth) {
+    const token = readToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
   if (!res.ok) {
+    if (res.status === 401 && init?.auth) {
+      // token 过期 / 错; 清掉让下一次 HrGuard 跳登录
+      clearToken();
+    }
     let detail = `HTTP ${res.status}`;
     try {
       const body = await res.json();
@@ -41,6 +54,33 @@ async function request<T>(
     throw new ApiError(res.status, detail);
   }
   return (await res.json()) as T;
+}
+
+async function requestVoid(
+  path: string,
+  init?: RequestOptions,
+): Promise<void> {
+  // 用于 204 No Content 或 fire-and-forget; 不要求响应体
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (init?.auth) {
+    const token = readToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (!res.ok) {
+    if (res.status === 401 && init?.auth) clearToken();
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* 静默 */
+    }
+    throw new ApiError(res.status, detail);
+  }
 }
 
 export type Health = {
@@ -109,6 +149,14 @@ export type TurnResult = {
   ref_id: string | null;
 };
 
+// HR 登录响应 (与后端 api.schemas.TokenResponse 对齐)
+export type LoginResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  role: string;
+};
+
 export const api = {
   health: () => request<Health>("/health"),
   getJob: (jobId: string) => request<JobContext>(`/jobs/${jobId}`),
@@ -132,6 +180,13 @@ export const api = {
     request<TurnResult>(`/interviews/${sessionId}/answers`, {
       method: "POST",
       body: JSON.stringify({ text }),
+    }),
+  finalizeInterview: (sessionId: string) =>
+    requestVoid(`/interviews/${sessionId}/finalize`, { method: "POST" }),
+  login: (username: string, password: string) =>
+    request<LoginResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
     }),
 };
 
