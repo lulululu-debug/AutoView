@@ -23,6 +23,7 @@ from src.db.base import (
     session_scope,
 )
 from src.db.repository import (
+    get_candidate_with_status,
     list_candidates_with_status_for_job,
     list_jobs,
     list_seed_questions,
@@ -52,6 +53,7 @@ __all__ = [
     "get_engine",
     "init_db",
     "session_scope",
+    "get_candidate_with_status",
     "list_candidates_with_status_for_job",
     "list_jobs",
     "list_seed_questions",

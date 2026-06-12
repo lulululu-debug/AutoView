@@ -231,6 +231,34 @@ class ListCandidatesStatusTests(_HrApiBase):
         self.assertEqual(r.json(), [])
 
 
+class GetSingleCandidateTests(_HrApiBase):
+    """GET /hr/jobs/{j}/candidates/{c}: 单候选人 + 状态. Sprint 5-5 详情页用。"""
+
+    def test_get_returns_status(self):
+        job = self._seed_job()
+        cand = self._seed_candidate(job)
+        plan = self._seed_plan_for_candidate(cand, job)
+        _, rid = self._seed_session_and_report(plan, job)
+        r = self._hr_get(f"/hr/jobs/{job}/candidates/{cand}")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["candidate_id"], cand)
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["report_id"], rid)
+
+    def test_unknown_candidate_404(self):
+        r = self._hr_get("/hr/jobs/x/candidates/ghost")
+        self.assertEqual(r.status_code, 404)
+
+    def test_cross_job_404(self):
+        """安全: 用 job-A 的 path 偷看 job-B 的 candidate 应 404。"""
+        job_a = self._seed_job("A")
+        job_b = self._seed_job("B")
+        cand_b = self._seed_candidate(job_b)
+        r = self._hr_get(f"/hr/jobs/{job_a}/candidates/{cand_b}")
+        self.assertEqual(r.status_code, 404)
+
+
 class GetReportTests(_HrApiBase):
     def test_get_report_404(self):
         r = self._hr_get("/hr/reports/no-such")

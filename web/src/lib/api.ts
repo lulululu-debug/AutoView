@@ -175,6 +175,58 @@ export type CandidateWithStatus = {
   created_at: string;
 };
 
+// EvaluationReport + 子类型 (与后端 src.schemas 对齐)
+export type DimensionScore = {
+  competency_id: string;
+  score: number;
+  evidence: string[];
+};
+
+export type SignalKind = "language" | "tone" | "gaze";
+
+export type PerformanceObservation = {
+  kind: SignalKind;
+  observation: string;
+  confidence: number;
+  note: string;
+};
+
+export type EvaluationReport = {
+  report_id: string;
+  session_id: string;
+  content_scores: DimensionScore[];
+  performance_observations: PerformanceObservation[];
+  overall: number;
+  summary: string;
+  needs_human_review: boolean;
+  rag_context_chunk_ids: string[];
+};
+
+// 复核相关
+export type ReviewDecision = "recommend" | "reject" | "borderline";
+
+export type DimensionOverride = {
+  competency_id: string;
+  score: number;
+  note: string;
+};
+
+export type ReviewRecord = {
+  record_id: string;
+  report_id: string;
+  reviewer_id: string;
+  comments: string;
+  dimension_overrides: DimensionOverride[];
+  decision: ReviewDecision;
+  reviewed_at: string;
+};
+
+export type ReviewSubmit = {
+  comments: string;
+  dimension_overrides: DimensionOverride[];
+  decision: ReviewDecision;
+};
+
 export const api = {
   health: () => request<Health>("/health"),
   getJob: (jobId: string) => request<JobContext>(`/jobs/${jobId}`),
@@ -226,6 +278,24 @@ export const api = {
       `/hr/jobs/${jobId}/candidates`,
       { auth: true },
     ),
+  getHrCandidate: (jobId: string, candidateId: string) =>
+    request<CandidateWithStatus>(
+      `/hr/jobs/${jobId}/candidates/${candidateId}`,
+      { auth: true },
+    ),
+  getReport: (reportId: string) =>
+    request<EvaluationReport>(`/hr/reports/${reportId}`, { auth: true }),
+  getReview: (reportId: string) =>
+    // 后端 GET /hr/reports/{id}/review 在没复核时返 null body 而非 404
+    request<ReviewRecord | null>(`/hr/reports/${reportId}/review`, {
+      auth: true,
+    }),
+  submitReview: (reportId: string, body: ReviewSubmit) =>
+    request<ReviewRecord>(`/hr/reports/${reportId}/review`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+      auth: true,
+    }),
 };
 
 export { API_BASE };
