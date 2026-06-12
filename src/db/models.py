@@ -39,6 +39,37 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.db.base import Base
 
 
+class ReviewRecordORM(Base):
+    """HR 对 EvaluationReport 的复核记录 (Sprint 5-2)。
+    PK 单独用 record_id (而非 report_id), 给未来"多次复核 / 版本历史"留口子;
+    当前 MVP 通过 PATCH 同 report_id 覆盖, 一份 report 实际只有一条 review,
+    但 schema 允许多条。"""
+    __tablename__ = "review_records"
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    report_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("evaluation_reports.report_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    reviewer_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.user_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    comments: Mapped[str] = mapped_column(String, nullable=False, default="")
+    dimension_overrides: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list,
+    )
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+
 class UserORM(Base):
     """HR / admin 用户。Sprint 5-1 起接 JWT 鉴权。
     hashed_password 永远不向 pydantic User 暴露, 也不进任何响应体。"""

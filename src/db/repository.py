@@ -16,6 +16,7 @@ from src.db.models import (
     InterviewPlanORM,
     InterviewSessionORM,
     JobORM,
+    ReviewRecordORM,
     SeedQuestionORM,
     UserORM,
 )
@@ -25,6 +26,7 @@ from src.schemas import (
     InterviewPlan,
     InterviewSession,
     JobContext,
+    ReviewRecord,
     SeedQuestion,
     User,
 )
@@ -72,6 +74,143 @@ def load_user(user_id: str) -> Optional[User]:
         if row is None:
             return None
         return User(user_id=row.user_id, username=row.username, role=row.role)
+
+
+# ---------- HR-side listings (Sprint 5-2) ----------
+
+def list_jobs() -> list[JobContext]:
+    """列所有职位, 按 created_at 倒序。"""
+    with session_scope() as s:
+        rows = s.query(JobORM).order_by(JobORM.created_at.desc()).all()
+        return [
+            JobContext.model_validate({
+                "job_id": r.job_id,
+                "title": r.title,
+                "jd": r.jd,
+                "requirements": r.requirements,
+                "company_materials": r.company_materials,
+            })
+            for r in rows
+        ]
+
+
+def list_candidates_with_status_for_job(job_id: str) -> list[dict]:
+    """列某 job 下的候选人 + 进度状态。
+
+    状态规则 (从 PG 单一真理之源推):
+    - plan_pending: 候选人入库但 plan 还没生成 (BG planner 在跑或失败)
+    - ready:       plan 已生成, 但 session 还没归档 (没面试 / 面试中 /
+                   已完成但未触发 finalize)
+    - completed:   session + report 都已在 PG (已 finalize)
+    - reviewed:    report 之上还有 ReviewRecord
+
+    注意"ready"含义模糊: 候选人可能刚到 plan 就走了, 也可能正在面试,
+    也可能 Redis 里 status=COMPLETED 等 finalize。本表不查 Redis, 所有
+    "短期态"都收敛成 ready。HR 端 UI 上写明"等待面试 / 等待最终化"。
+    """
+    with session_scope() as s:
+        cands = (
+            s.query(CandidateORM)
+            .filter(CandidateORM.job_id == job_id)
+            .order_by(CandidateORM.created_at.desc())
+            .all()
+        )
+        results = []
+        for c in cands:
+            plans = (
+                s.query(InterviewPlanORM)
+                .filter(InterviewPlanORM.candidate_id == c.candidate_id)
+                .all()
+            )
+            has_plan = len(plans) > 0
+            session_row = None
+            report_row = None
+            review_row = None
+            for p in plans:
+                sess = (
+                    s.query(InterviewSessionORM)
+                    .filter(InterviewSessionORM.plan_id == p.plan_id)
+                    .first()
+                )
+                if sess is None:
+                    continue
+                session_row = sess
+                rep = (
+                    s.query(EvaluationReportORM)
+                    .filter(EvaluationReportORM.session_id == sess.session_id)
+                    .first()
+                )
+                if rep is not None:
+                    report_row = rep
+                    review_row = (
+                        s.query(ReviewRecordORM)
+                        .filter(ReviewRecordORM.report_id == rep.report_id)
+                        .order_by(ReviewRecordORM.reviewed_at.desc())
+                        .first()
+                    )
+                break  # 一个候选人当前只看一份 plan/session/report 链, 简化
+
+            if not has_plan:
+                status = "plan_pending"
+            elif report_row is None:
+                status = "ready"
+            elif review_row is None:
+                status = "completed"
+            else:
+                status = "reviewed"
+
+            results.append({
+                "candidate_id": c.candidate_id,
+                "job_id": c.job_id,
+                "resume_excerpt": (
+                    c.resume[:200] + ("..." if len(c.resume) > 200 else "")
+                ),
+                "status": status,
+                "session_id": session_row.session_id if session_row else None,
+                "report_id": report_row.report_id if report_row else None,
+                "review_decision": review_row.decision if review_row else None,
+                "created_at": c.created_at,
+            })
+        return results
+
+
+# ---------- ReviewRecord (Sprint 5-2) ----------
+
+def save_review_record(review: ReviewRecord) -> None:
+    """按 record_id upsert, 同时记录 reviewed_at (由 server 维护时间)。"""
+    payload = review.model_dump(mode="json")
+    with session_scope() as s:
+        s.merge(ReviewRecordORM(
+            record_id=payload["record_id"],
+            report_id=payload["report_id"],
+            reviewer_id=payload["reviewer_id"],
+            comments=payload["comments"],
+            dimension_overrides=payload["dimension_overrides"],
+            decision=payload["decision"],
+        ))
+
+
+def load_review_for_report(report_id: str) -> Optional[ReviewRecord]:
+    """读 report 的最新一条 review (按 reviewed_at desc)。
+    当前 PATCH 同 report_id 覆盖, 实际只一条; 留 desc 排序为未来扩展。"""
+    with session_scope() as s:
+        row = (
+            s.query(ReviewRecordORM)
+            .filter(ReviewRecordORM.report_id == report_id)
+            .order_by(ReviewRecordORM.reviewed_at.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        return ReviewRecord.model_validate({
+            "record_id": row.record_id,
+            "report_id": row.report_id,
+            "reviewer_id": row.reviewer_id,
+            "comments": row.comments,
+            "dimension_overrides": row.dimension_overrides,
+            "decision": row.decision,
+            "reviewed_at": row.reviewed_at,
+        })
 
 
 # ---------- SeedQuestion (Sprint 3-3) ----------

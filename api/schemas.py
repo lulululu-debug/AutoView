@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -55,6 +57,31 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int                                  # 秒
     role: str                                        # 让前端不用再解 JWT 就能切 UI
+
+
+# ---------- HR Dashboard (Sprint 5-2) ----------
+
+class CandidateWithStatus(BaseModel):
+    """GET /hr/jobs/{id}/candidates 单个候选人条目。
+    resume_excerpt 是 200 字截断, 详情进 GET /jobs/{id}/candidates/{cid} 看。"""
+    candidate_id: str
+    job_id: str
+    resume_excerpt: str
+    status: str                              # plan_pending / ready / completed / reviewed
+    session_id: str | None = None            # 走完 finalize 后才有
+    report_id: str | None = None             # status >= completed 时有
+    review_decision: str | None = None       # status == reviewed 时有
+    created_at: datetime
+
+
+class ReviewSubmit(BaseModel):
+    """PATCH /hr/reports/{id}/review 请求体。
+    reviewer_id 由 server 从 JWT 取, 客户端不传; record_id 也由 server 生成。"""
+    comments: str = ""
+    dimension_overrides: list[dict] = Field(default_factory=list)
+    decision: str = Field(..., min_length=1)
+    # decision 用 str 而非 Literal: 在 schema 层不引入 enum 重复定义,
+    # 由后端 route 校验在 ReviewDecision 合法值内
 
 
 class InterviewStart(BaseModel):
