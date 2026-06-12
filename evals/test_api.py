@@ -437,6 +437,41 @@ class InterviewSessionTests(unittest.TestCase):
         r = self.client.get("/interviews/ghost-session/report")
         self.assertEqual(r.status_code, 404)
 
+    # ----- POST /interviews/{id}/finalize (Sprint 5-3) -----
+
+    def test_finalize_walks_completed_session_to_204(self):
+        from src import cache
+        from src.db import load_report_by_session
+        sid = self._walk_to_done()
+        # 走前: Redis 里仍有 session
+        self.assertIsNotNone(cache.load_session(sid))
+        r = self.client.post(f"/interviews/{sid}/finalize")
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(r.text, "", "204 应当无 body")
+        # 走后: PG 有 report
+        self.assertIsNotNone(load_report_by_session(sid))
+        # Redis 清空
+        self.assertIsNone(cache.load_session(sid))
+
+    def test_finalize_idempotent(self):
+        sid = self._walk_to_done()
+        r1 = self.client.post(f"/interviews/{sid}/finalize")
+        r2 = self.client.post(f"/interviews/{sid}/finalize")
+        r3 = self.client.post(f"/interviews/{sid}/finalize")
+        for r in (r1, r2, r3):
+            self.assertEqual(r.status_code, 204, f"幂等 finalize 应 204, 实际 {r.status_code}")
+
+    def test_finalize_in_progress_returns_409(self):
+        start = self._start()
+        sid = start["session_id"]
+        # 没答完, 直接 finalize
+        r = self.client.post(f"/interviews/{sid}/finalize")
+        self.assertEqual(r.status_code, 409)
+
+    def test_finalize_unknown_session_404(self):
+        r = self.client.post("/interviews/ghost-session/finalize")
+        self.assertEqual(r.status_code, 404)
+
 
 @unittest.skipUnless(os.environ.get("POSTGRES_URL"), "需要 POSTGRES_URL")
 class GetJobTests(unittest.TestCase):

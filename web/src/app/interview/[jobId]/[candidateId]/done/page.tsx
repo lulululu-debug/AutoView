@@ -2,14 +2,15 @@
 
 import { use, useEffect } from "react";
 
+import { api } from "@/lib/api";
+
 /**
  * 面试完成页:
  * - 显示感谢 + 提醒结果由 HR 查阅
  * - 不展示报告内容: 合规(ARCHITECTURE.md §7) 候选人不应看到自己的 AI 评估,
  *   即便在网络层面也不应让报告 JSON 经过候选人浏览器
- * - 不触发 GET /report (会带回完整 EvaluationReport JSON), HR 后续访问报告时
- *   再触发 finalize 归档。session 在 Redis 里 status=COMPLETED 等着, TTL 内 HR
- *   一定能拿到。
+ * - Sprint 5-3: 触发 POST /interviews/{id}/finalize 让后端归档, 但只回 204
+ *   不带 report 数据 -> HR 端 list_candidates 才能尽快看到 completed 状态
  * - 清掉 localStorage 的 session_id, 用户按回退键不再误进 session 页
  */
 export default function DonePage({
@@ -20,8 +21,23 @@ export default function DonePage({
   const { candidateId } = use(params);
 
   useEffect(() => {
+    const key = `interview_session_${candidateId}`;
+    let sid: string | null = null;
     try {
-      localStorage.removeItem(`interview_session_${candidateId}`);
+      sid = localStorage.getItem(key);
+    } catch {
+      /* 静默 */
+    }
+
+    if (sid) {
+      // fire-and-forget; 已经 finalize 过 (404) 或网络故障都不阻塞感谢页
+      api.finalizeInterview(sid).catch(() => {
+        /* 静默 */
+      });
+    }
+
+    try {
+      localStorage.removeItem(key);
     } catch {
       /* 静默 */
     }
