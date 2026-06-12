@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from src.auth import AuthenticationError, AuthorizationError, JwtNotConfigured
 from src.cache import RedisNotConfigured
 from src.db import DatabaseNotConfigured
 from src.orchestrator import SessionInvalidState, SessionNotFound
@@ -56,4 +57,35 @@ def register_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=409,
             content={"detail": "面试会话当前状态不允许此操作", "error": str(exc)},
+        )
+
+    @app.exception_handler(AuthenticationError)
+    async def _auth_required(
+        _req: Request, exc: AuthenticationError,
+    ) -> JSONResponse:
+        # 缺 token / token 坏 / 过期 -> 401, 提示重新登录
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "请先登录", "error": str(exc)},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(AuthorizationError)
+    async def _forbidden(
+        _req: Request, exc: AuthorizationError,
+    ) -> JSONResponse:
+        # token 合法但 role 不够 -> 403
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "权限不足", "error": str(exc)},
+        )
+
+    @app.exception_handler(JwtNotConfigured)
+    async def _jwt_not_configured(
+        _req: Request, exc: JwtNotConfigured,
+    ) -> JSONResponse:
+        # 没配 JWT_SECRET, server 状态不对, 503
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "认证未配置", "error": str(exc)},
         )

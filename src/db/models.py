@@ -39,6 +39,23 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.db.base import Base
 
 
+class UserORM(Base):
+    """HR / admin 用户。Sprint 5-1 起接 JWT 鉴权。
+    hashed_password 永远不向 pydantic User 暴露, 也不进任何响应体。"""
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class SeedQuestionORM(Base):
     """题库种子题。Sprint 3 起 Planner 走"召回 + LLM 精修", 题源在这里。
 

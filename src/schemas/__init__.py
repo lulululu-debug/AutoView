@@ -191,6 +191,14 @@ class PerformanceObservation(BaseModel):
     note: str = "参考信息, 不计入总分, 建议人工复核"
 
 
+class User(BaseModel):
+    """HR / admin 用户 —— Sprint 5-1 起。
+    密码 hash 永远不出现在 pydantic 层, 只走 ORM。"""
+    user_id: str
+    username: str
+    role: str  # "hr" | "admin"
+
+
 class SeedQuestion(BaseModel):
     """种子题库中的一道题 —— Sprint 3 起。
     Planner 按维度从题库召回 (Milvus) 后再由 LLM 精修, 替换原来的现场生成。
