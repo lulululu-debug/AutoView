@@ -94,20 +94,76 @@ def list_jobs() -> list[JobContext]:
         ]
 
 
-def list_candidates_with_status_for_job(job_id: str) -> list[dict]:
-    """列某 job 下的候选人 + 进度状态。
+def _compute_candidate_status(s, c: CandidateORM) -> dict:
+    """单候选人的 status 推导, 复用给 list 与单查。
+    s: 当前 session_scope; c: 已加载的 CandidateORM 行。
 
     状态规则 (从 PG 单一真理之源推):
-    - plan_pending: 候选人入库但 plan 还没生成 (BG planner 在跑或失败)
-    - ready:       plan 已生成, 但 session 还没归档 (没面试 / 面试中 /
-                   已完成但未触发 finalize)
+    - plan_pending: 候选人入库但 plan 还没生成
+    - ready:       plan 已生成, 但 session 没归档 (没面试 / 面试中 /
+                   完成未 finalize)
     - completed:   session + report 都已在 PG (已 finalize)
     - reviewed:    report 之上还有 ReviewRecord
 
-    注意"ready"含义模糊: 候选人可能刚到 plan 就走了, 也可能正在面试,
-    也可能 Redis 里 status=COMPLETED 等 finalize。本表不查 Redis, 所有
-    "短期态"都收敛成 ready。HR 端 UI 上写明"等待面试 / 等待最终化"。
-    """
+    注: 不查 Redis, 所有"短期态"都收敛成 ready, UI 上写明含义。"""
+    plans = (
+        s.query(InterviewPlanORM)
+        .filter(InterviewPlanORM.candidate_id == c.candidate_id)
+        .all()
+    )
+    has_plan = len(plans) > 0
+    session_row = None
+    report_row = None
+    review_row = None
+    for p in plans:
+        sess = (
+            s.query(InterviewSessionORM)
+            .filter(InterviewSessionORM.plan_id == p.plan_id)
+            .first()
+        )
+        if sess is None:
+            continue
+        session_row = sess
+        rep = (
+            s.query(EvaluationReportORM)
+            .filter(EvaluationReportORM.session_id == sess.session_id)
+            .first()
+        )
+        if rep is not None:
+            report_row = rep
+            review_row = (
+                s.query(ReviewRecordORM)
+                .filter(ReviewRecordORM.report_id == rep.report_id)
+                .order_by(ReviewRecordORM.reviewed_at.desc())
+                .first()
+            )
+        break
+
+    if not has_plan:
+        status = "plan_pending"
+    elif report_row is None:
+        status = "ready"
+    elif review_row is None:
+        status = "completed"
+    else:
+        status = "reviewed"
+
+    return {
+        "candidate_id": c.candidate_id,
+        "job_id": c.job_id,
+        "resume_excerpt": (
+            c.resume[:200] + ("..." if len(c.resume) > 200 else "")
+        ),
+        "status": status,
+        "session_id": session_row.session_id if session_row else None,
+        "report_id": report_row.report_id if report_row else None,
+        "review_decision": review_row.decision if review_row else None,
+        "created_at": c.created_at,
+    }
+
+
+def list_candidates_with_status_for_job(job_id: str) -> list[dict]:
+    """列某 job 下的候选人 + 进度状态. 单个推导走 _compute_candidate_status."""
     with session_scope() as s:
         cands = (
             s.query(CandidateORM)
@@ -115,63 +171,16 @@ def list_candidates_with_status_for_job(job_id: str) -> list[dict]:
             .order_by(CandidateORM.created_at.desc())
             .all()
         )
-        results = []
-        for c in cands:
-            plans = (
-                s.query(InterviewPlanORM)
-                .filter(InterviewPlanORM.candidate_id == c.candidate_id)
-                .all()
-            )
-            has_plan = len(plans) > 0
-            session_row = None
-            report_row = None
-            review_row = None
-            for p in plans:
-                sess = (
-                    s.query(InterviewSessionORM)
-                    .filter(InterviewSessionORM.plan_id == p.plan_id)
-                    .first()
-                )
-                if sess is None:
-                    continue
-                session_row = sess
-                rep = (
-                    s.query(EvaluationReportORM)
-                    .filter(EvaluationReportORM.session_id == sess.session_id)
-                    .first()
-                )
-                if rep is not None:
-                    report_row = rep
-                    review_row = (
-                        s.query(ReviewRecordORM)
-                        .filter(ReviewRecordORM.report_id == rep.report_id)
-                        .order_by(ReviewRecordORM.reviewed_at.desc())
-                        .first()
-                    )
-                break  # 一个候选人当前只看一份 plan/session/report 链, 简化
+        return [_compute_candidate_status(s, c) for c in cands]
 
-            if not has_plan:
-                status = "plan_pending"
-            elif report_row is None:
-                status = "ready"
-            elif review_row is None:
-                status = "completed"
-            else:
-                status = "reviewed"
 
-            results.append({
-                "candidate_id": c.candidate_id,
-                "job_id": c.job_id,
-                "resume_excerpt": (
-                    c.resume[:200] + ("..." if len(c.resume) > 200 else "")
-                ),
-                "status": status,
-                "session_id": session_row.session_id if session_row else None,
-                "report_id": report_row.report_id if report_row else None,
-                "review_decision": review_row.decision if review_row else None,
-                "created_at": c.created_at,
-            })
-        return results
+def get_candidate_with_status(candidate_id: str) -> Optional[dict]:
+    """单候选人 + 进度状态. Sprint 5-5 HR 详情页用。"""
+    with session_scope() as s:
+        c = s.get(CandidateORM, candidate_id)
+        if c is None:
+            return None
+        return _compute_candidate_status(s, c)
 
 
 # ---------- ReviewRecord (Sprint 5-2) ----------

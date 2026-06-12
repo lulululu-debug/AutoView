@@ -87,12 +87,21 @@
 
 ## Sprint 5 — 招聘端 Dashboard
 
-- [ ] HR 端：创建职位、上传资料、查看生成的面试计划
-- [ ] 候选人列表与面试状态
-- [ ] 评估报告查看页：内容维度与表现维度分区展示
-- [ ] **人工复核**：HR 可标注/覆盖、留存复核记录
+- [x] HR 端：创建职位、上传资料、查看生成的面试计划
+      （JWT 鉴权 + `/hr` Dashboard + `/hr/jobs/[id]` 单 job 详情；候选人邀请链接 dev 期直接展示）
+- [x] 候选人列表与面试状态（四态徽章 plan_pending / ready / completed / reviewed）
+- [x] 评估报告查看页：内容维度与表现维度分区展示
+      （overall banner + summary + content_scores 主区 + performance_observations 副区"仅参考" + RAG chunks 可折叠）
+- [x] **人工复核**：HR 可标注/覆盖、留存复核记录
+      （comments / 按维度 score+note 覆盖 / 三态 decision；MVP 覆盖语义不做版本历史）
 
-**完成标准**：HR 能从建岗到查看报告全程在界面完成。
+**完成标准**：HR 能从建岗到查看报告全程在界面完成。 ✅
+
+附加：
+- 后端 JWT (HS256 + bcrypt) + `/auth/login` + `require_hr_user` dependency
+- `scripts/seed_users.py` 种 HR 账号
+- `POST /interviews/{id}/finalize` 返 204 让候选人 done 页自动归档
+- 推到 Sprint 6：Resume 文件上传 (PDF/docx 解析)、cookie + same-site=strict 鉴权升级
 
 ---
 

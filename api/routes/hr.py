@@ -58,6 +58,25 @@ def list_candidates_for_job(
     return [CandidateWithStatus.model_validate(r) for r in rows]
 
 
+@router.get(
+    "/jobs/{job_id}/candidates/{candidate_id}",
+    response_model=CandidateWithStatus,
+)
+def get_candidate(
+    job_id: str, candidate_id: str, _user: HrUser,
+) -> CandidateWithStatus:
+    """HR 单候选人详情 + 进度状态. Sprint 5-5 详情页用。
+    校验 candidate 确实在该 job 下, 防跨 job 偷看 (与候选人端
+    GET /jobs/{j}/candidates/{c} 同款护栏)。"""
+    row = db.get_candidate_with_status(candidate_id)
+    if row is None or row["job_id"] != job_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"candidate {candidate_id} 不在 job {job_id} 下",
+        )
+    return CandidateWithStatus.model_validate(row)
+
+
 @router.get("/reports/{report_id}", response_model=EvaluationReport)
 def get_report(report_id: str, _user: HrUser) -> EvaluationReport:
     """HR 视角的报告详情。
