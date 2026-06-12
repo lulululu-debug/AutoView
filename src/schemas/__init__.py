@@ -199,6 +199,41 @@ class User(BaseModel):
     role: str  # "hr" | "admin"
 
 
+class ReviewDecision(str, Enum):
+    """HR 复核的最终结论。这里只表"建议", 是否真的录用由企业自己的流程决定。"""
+    RECOMMEND = "recommend"
+    REJECT = "reject"
+    BORDERLINE = "borderline"
+
+
+class DimensionOverride(BaseModel):
+    """HR 在复核时对某个内容维度的分数 / 备注覆盖。
+    不直接改 EvaluationReport.content_scores, 而是单独留档 —— 保留 AI 原始
+    结论的可审计性, 同时让人工判断有自己的存储位置。"""
+    competency_id: str
+    score: float                              # 0~100, 与 DimensionScore 同口径
+    note: str = ""
+
+
+class ReviewRecord(BaseModel):
+    """Sprint 5-2 起: HR 对某份 EvaluationReport 的复核结论 + 注释 + 维度覆盖。
+
+    设计:
+    - 一份 report 当前只允许一条 review (PATCH 同 report_id 覆盖, 不做版本历史)。
+      真要追溯时, 可以加 created_at + 列出所有版本, 现在 MVP 不做。
+    - dimension_overrides 与 EvaluationReport.content_scores 解耦, 保留 AI
+      原始结论。HR 端 UI 同时展示两套, 让差异显式。
+    - decision 是 HR 给的"建议", 不是最终结论 (真录用流程在企业内部)。
+    """
+    record_id: str = Field(default_factory=_new_id)
+    report_id: str
+    reviewer_id: str                         # users.user_id, 哪个 HR 复核的
+    comments: str = ""
+    dimension_overrides: list[DimensionOverride] = []
+    decision: ReviewDecision
+    reviewed_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class SeedQuestion(BaseModel):
     """种子题库中的一道题 —— Sprint 3 起。
     Planner 按维度从题库召回 (Milvus) 后再由 LLM 精修, 替换原来的现场生成。

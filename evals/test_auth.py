@@ -118,7 +118,7 @@ class LoginEndpointTests(unittest.TestCase):
         import psycopg
         url = os.environ["POSTGRES_URL"].replace("+psycopg", "")
         with psycopg.connect(url) as conn:
-            conn.execute("TRUNCATE users")
+            conn.execute("TRUNCATE users CASCADE")
         from scripts.seed_users import seed_user
         seed_user(username="hr1", password="pw-hr1", role="hr")
         seed_user(username="boss", password="pw-boss", role="admin")
@@ -186,7 +186,7 @@ class RequireHrUserDependencyTests(unittest.TestCase):
         import psycopg
         url = os.environ["POSTGRES_URL"].replace("+psycopg", "")
         with psycopg.connect(url) as conn:
-            conn.execute("TRUNCATE users")
+            conn.execute("TRUNCATE users CASCADE")
 
     def _login(self, username: str, password: str, role: str = "hr") -> str:
         from scripts.seed_users import seed_user
