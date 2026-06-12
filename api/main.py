@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.exceptions import register_handlers
+from api.routes import auth as auth_routes
 from api.routes import candidates as candidates_routes
 from api.routes import interviews as interviews_routes
 from api.routes import jobs as jobs_routes
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     )
 
     register_handlers(app)
+    app.include_router(auth_routes.router)
     app.include_router(jobs_routes.router)
     app.include_router(candidates_routes.router)
     app.include_router(interviews_routes.router)

@@ -32,12 +32,15 @@ from src.db.repository import (
     load_report_by_session,
     load_seed_question,
     load_session,
+    load_user,
+    load_user_by_username,
     save_candidate,
     save_job,
     save_plan,
     save_report,
     save_seed_question,
     save_session,
+    save_user,
 )
 
 __all__ = [
@@ -54,10 +57,13 @@ __all__ = [
     "load_report_by_session",
     "load_seed_question",
     "load_session",
+    "load_user",
+    "load_user_by_username",
     "save_candidate",
     "save_job",
     "save_plan",
     "save_report",
     "save_seed_question",
     "save_session",
+    "save_user",
 ]

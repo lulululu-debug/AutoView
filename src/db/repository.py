@@ -17,6 +17,7 @@ from src.db.models import (
     InterviewSessionORM,
     JobORM,
     SeedQuestionORM,
+    UserORM,
 )
 from src.schemas import (
     CandidateProfile,
@@ -25,7 +26,52 @@ from src.schemas import (
     InterviewSession,
     JobContext,
     SeedQuestion,
+    User,
 )
+
+
+# ---------- User (Sprint 5-1) ----------
+
+def save_user(
+    *,
+    user_id: str,
+    username: str,
+    hashed_password: str,
+    role: str,
+) -> None:
+    """按 user_id upsert。hashed_password 必须已经过 bcrypt, 本层不再 hash。"""
+    with session_scope() as s:
+        s.merge(UserORM(
+            user_id=user_id,
+            username=username,
+            hashed_password=hashed_password,
+            role=role,
+        ))
+
+
+def load_user_by_username(username: str) -> Optional[tuple[User, str]]:
+    """返回 (User pydantic, hashed_password) 或 None。
+    密码 hash 仅给 verify_password 用, 上游不应进一步传播。"""
+    with session_scope() as s:
+        row = (
+            s.query(UserORM)
+            .filter(UserORM.username == username)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return (
+            User(user_id=row.user_id, username=row.username, role=row.role),
+            row.hashed_password,
+        )
+
+
+def load_user(user_id: str) -> Optional[User]:
+    with session_scope() as s:
+        row = s.get(UserORM, user_id)
+        if row is None:
+            return None
+        return User(user_id=row.user_id, username=row.username, role=row.role)
 
 
 # ---------- SeedQuestion (Sprint 3-3) ----------

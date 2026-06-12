@@ -42,6 +42,21 @@ class CandidateCreated(BaseModel):
     plan_pending: bool = True
 
 
+class LoginRequest(BaseModel):
+    """POST /auth/login 请求体。"""
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+
+
+class TokenResponse(BaseModel):
+    """POST /auth/login 响应体, 兼容 OAuth2 Bearer 约定。
+    expires_in 单位是秒, 让前端 SDK 直接拿去算续约时机。"""
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int                                  # 秒
+    role: str                                        # 让前端不用再解 JWT 就能切 UI
+
+
 class InterviewStart(BaseModel):
     """POST /interviews 请求体: 由 candidate_id 推出 job + plan, 客户端只传 candidate_id。"""
     candidate_id: str = Field(..., min_length=1)
