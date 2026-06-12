@@ -157,6 +157,24 @@ export type LoginResponse = {
   role: string;
 };
 
+// HR Dashboard 列表 (与后端 api.schemas.CandidateWithStatus 对齐)
+export type CandidateStatus =
+  | "plan_pending"
+  | "ready"
+  | "completed"
+  | "reviewed";
+
+export type CandidateWithStatus = {
+  candidate_id: string;
+  job_id: string;
+  resume_excerpt: string;
+  status: CandidateStatus;
+  session_id: string | null;
+  report_id: string | null;
+  review_decision: string | null;
+  created_at: string;
+};
+
 export const api = {
   health: () => request<Health>("/health"),
   getJob: (jobId: string) => request<JobContext>(`/jobs/${jobId}`),
@@ -188,6 +206,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+  // HR-end endpoints (走 require_hr_user, 自动注入 Bearer)
+  listJobs: () => request<JobContext[]>("/hr/jobs", { auth: true }),
+  createJob: (body: {
+    title: string;
+    jd: string;
+    requirements: string[];
+    company_materials: string;
+  }) =>
+    request<JobContext>("/jobs", {
+      method: "POST",
+      body: JSON.stringify(body),
+      // 注: POST /jobs 当前后端没挂 require_hr_user (Sprint 5 后期可考虑挂上)。
+      // 这里加 auth:true 也不会被后端拒绝, 是给未来收紧权限留口子。
+      auth: true,
+    }),
+  listCandidates: (jobId: string) =>
+    request<CandidateWithStatus[]>(
+      `/hr/jobs/${jobId}/candidates`,
+      { auth: true },
+    ),
 };
 
 export { API_BASE };
