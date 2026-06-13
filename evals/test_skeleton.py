@@ -33,44 +33,86 @@ from src.schemas import (  # noqa: E402
     CandidateProfile,
     EvaluationReport,
     InterviewSession,
+    InterviewStage,
     JobContext,
     QuestionCategory,
     SessionStatus,
     Signal,
     SignalKind,
+    Track,
     Turn,
     TurnRole,
 )
 
 # ---------- 固定输入 ----------
+# track=lateral 让 plan 出 7 题, 顺序: self_intro 1 + project 3 + scenario 2 + knowledge 1
+# 选 lateral 是因为 stub 路径下 fallback 文本可控, 且 knowledge 只 1 道好凑答案。
 _JOB = JobContext(
     title="后端工程师",
     jd="负责核心交易系统的稳定性与性能, 熟悉分布式与数据库优化。",
     requirements=["分布式系统", "数据库优化", "沟通协作"],
+    track=Track.LATERAL,
 )
 _CANDIDATE = CandidateProfile(
     resume="张三 / 后端 / 4 年。订单 P99 优化 (800ms->350ms); 对账中台从 0 到 1。",
     projects=["订单 P99 优化", "对账中台从 0 到 1"],
 )
-_ANSWERS = [
-    "做过一些性能优化, 主要是慢查询和缓存。",
-    "去年大促前订单 P99 从 800ms 到 2s, 排查是索引失效 + 热点 key 击穿, "
-    "我加回索引并改造为本地缓存 + Redis 二级缓存, P99 回到 350ms。",
-    "我先用数据让对方理解我担心的点, 比如拉线上回放或 case, 再定义可灰度的中间方案。",
-    "对账中台日处理 2 亿笔, 早期延迟 30 分钟+。我们改成分桶并行 + 幂等键 + Kafka 回放, "
-    "延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
-]
+# 按 stage 顺序固定答案: self_intro -> project*3 -> scenario*2 -> knowledge*1
+_ANSWERS_BY_STAGE: dict[InterviewStage, list[str]] = {
+    InterviewStage.SELF_INTRO: [
+        "我是张三, 后端 4 年, 最近在订单和对账中台上做高可用 + 性能, "
+        "最大挑战是 P99 抖动定位, 结果把 P99 从 800ms 降到 350ms。",
+    ],
+    InterviewStage.PROJECT: [
+        "去年大促前订单 P99 从 800ms 到 2s, 排查是索引失效 + 热点 key 击穿, "
+        "我加回索引并改造为本地缓存 + Redis 二级缓存, P99 回到 350ms。",
+        "对账中台日处理 2 亿笔, 早期延迟 30 分钟+。我们改成分桶并行 + 幂等键 + Kafka 回放, "
+        "延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
+        "我先用数据让对方理解我担心的点, 比如拉线上回放或 case, 再定义可灰度的中间方案,"
+        "结果是同事接受了我的设计, 上线后没有出现回滚。",
+    ],
+    InterviewStage.SCENARIO: [
+        "前 5 分钟先看链路 RT 和错误率分布, 比如哪个下游慢, 是不是热点 key,"
+        "再决定是先扩容还是先限流, 我会优先选不破坏可观测性的动作。",
+        "我会先在群里说我已经定位到根因 + ETA 15 分钟,"
+        "再 1on1 跟业务 PM 同步具体影响范围, 让他对外口径统一。",
+    ],
+    InterviewStage.KNOWLEDGE: [
+        "我对 CAP 的理解是: 实际工程里 P 是默认前提,"
+        "所以选 C 还是 A 是业务取舍, 比如订单状态我们选 C (用强一致性的状态机)。",
+    ],
+}
+
+
+def _answers_for_plan(plan) -> list[str]:
+    """按 plan 的 stage 顺序拼出答案数组。
+    每个 stage 取 _ANSWERS_BY_STAGE 里对应数量, 多 round 同 stage 时按序消费。
+    Plan 的 stage 配比由 Planner 硬编码, 这里要求 stage 答案池 >= 实际题数,
+    否则提示出问题(意味着 Planner 配比改了但 fixture 没跟)。"""
+    pool = {k: list(v) for k, v in _ANSWERS_BY_STAGE.items()}
+    answers: list[str] = []
+    for r in plan.rounds:
+        bucket = pool.get(r.stage, [])
+        for _ in r.questions:
+            if not bucket:
+                raise AssertionError(
+                    f"stage {r.stage} 答案池不够; 检查 _ANSWERS_BY_STAGE"
+                )
+            answers.append(bucket.pop(0))
+    return answers
 
 
 def _build_completed_session(plan):
-    """按照 plan 的题目顺序, 用固定回答构造一个已答完的 session。"""
+    """按照 plan 的题目顺序, 用固定回答构造一个已答完的 session。
+    需要 plan 的 lazy project 题已经 resolve (text 非空), 调用方负责。"""
     session = InterviewSession(
         plan_id=plan.plan_id,
         job_id=_JOB.job_id,
         status=SessionStatus.COMPLETED,
     )
+    answers = _answers_for_plan(plan)
     questions = [q for r in plan.rounds for q in r.questions]
-    for q, ans_text in zip(questions, _ANSWERS):
+    for q, ans_text in zip(questions, answers):
         session.history.append(
             Turn(role=TurnRole.INTERVIEWER, text=q.text, ref_id=q.question_id)
         )
@@ -92,25 +134,56 @@ class SkeletonPlanTests(unittest.TestCase):
     def test_plan_carries_job_id(self):
         self.assertEqual(self.plan.job_id, _JOB.job_id)
 
-    def test_plan_shape_1_round_2_dims_4_questions(self):
-        self.assertEqual(len(self.plan.rounds), 1, "Sprint 0 骨架: 1 轮")
-        round0 = self.plan.rounds[0]
-        self.assertEqual(len(round0.competencies), 2, "2 个考察维度")
-        self.assertEqual(len(round0.questions), 4, "每维度 1 知识 + 1 项目深挖 = 4 题")
+    def test_plan_shape_stage_sequence(self):
+        """Sprint 5.5: lateral track 出 4 stage 序列 + 7 题。
+        顺序: self_intro -> project -> scenario -> knowledge。"""
+        self.assertEqual(len(self.plan.rounds), 4, "lateral 4 stages")
+        stages = [r.stage for r in self.plan.rounds]
+        self.assertEqual(stages, [
+            InterviewStage.SELF_INTRO,
+            InterviewStage.PROJECT,
+            InterviewStage.SCENARIO,
+            InterviewStage.KNOWLEDGE,
+        ])
+        # plan.competencies 顶层权威 (跨 stage 共享 + 去重)
+        self.assertEqual(len(self.plan.competencies), 2,
+                         "顶层 competencies: 技术深度 + 沟通协作")
+        total = sum(len(r.questions) for r in self.plan.rounds)
+        self.assertEqual(total, 7, "lateral 配比 1+3+2+1")
 
-    def test_question_category_split(self):
-        """两类题 KNOWLEDGE / PROJECT_EXPERIENCE 各占一半, 这是 CLAUDE.md 写过的契约。"""
-        questions = self.plan.rounds[0].questions
-        knowledge = [q for q in questions if q.category == QuestionCategory.KNOWLEDGE]
-        project = [q for q in questions if q.category == QuestionCategory.PROJECT_EXPERIENCE]
-        self.assertEqual(len(knowledge), 2)
-        self.assertEqual(len(project), 2)
+    def test_question_category_distribution(self):
+        """Sprint 5.5: 4 类题都出现, 数量与 lateral 配比一致。"""
+        questions = [q for r in self.plan.rounds for q in r.questions]
+        from collections import Counter
+        by_cat = Counter(q.category for q in questions)
+        self.assertEqual(by_cat[QuestionCategory.SELF_INTRO], 1)
+        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 3)
+        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 2)
+        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 1)
 
     def test_each_question_links_to_a_competency(self):
-        comp_ids = {c.competency_id for c in self.plan.rounds[0].competencies}
-        for q in self.plan.rounds[0].questions:
-            self.assertIn(q.competency_id, comp_ids,
-                         f"Question {q.question_id} 关联了未知 competency")
+        """非 self_intro 题挂某个顶层 competency; self_intro 题 competency_id=None。"""
+        comp_ids = {c.competency_id for c in self.plan.competencies}
+        for q in [qq for r in self.plan.rounds for qq in r.questions]:
+            if q.category is QuestionCategory.SELF_INTRO:
+                self.assertIsNone(
+                    q.competency_id,
+                    "self_intro 题不挂 competency (合规: 不进 content_scores)",
+                )
+            else:
+                self.assertIn(
+                    q.competency_id, comp_ids,
+                    f"Question {q.question_id} 关联了未知 competency",
+                )
+
+    def test_lazy_marker_only_on_project_stage(self):
+        """Sprint 5.5: lazy=True 仅出现在 project stage; 其他 stage 一律 lazy=False。"""
+        for r in self.plan.rounds:
+            for q in r.questions:
+                if r.stage is InterviewStage.PROJECT:
+                    self.assertTrue(q.lazy, "project 题都是 lazy 占位")
+                else:
+                    self.assertFalse(q.lazy, f"{r.stage} 题不应是 lazy")
 
 
 # ---------- Report 结构 ----------
@@ -118,7 +191,9 @@ class SkeletonPlanTests(unittest.TestCase):
 class SkeletonReportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.plan = planner.plan(_JOB, _CANDIDATE)
+        cls.plan = planner.resolve_lazy_questions(
+            planner.plan(_JOB, _CANDIDATE), _JOB, _CANDIDATE,
+        )
         cls.session = _build_completed_session(cls.plan)
         cls.report = evaluator.evaluate(cls.session, cls.plan, signals=[])
 
@@ -127,7 +202,8 @@ class SkeletonReportTests(unittest.TestCase):
         self.assertEqual(self.report.session_id, self.session.session_id)
 
     def test_content_scores_cover_every_competency(self):
-        comp_ids = {c.competency_id for c in self.plan.rounds[0].competencies}
+        """Sprint 5.5: 走 plan.competencies 顶层 (跨 stage 共享去重后的权威列表)。"""
+        comp_ids = {c.competency_id for c in self.plan.competencies}
         scored_ids = {s.competency_id for s in self.report.content_scores}
         self.assertEqual(comp_ids, scored_ids, "每个维度都应当有一个 content score")
 
@@ -162,7 +238,9 @@ class ComplianceInvariantTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.plan = planner.plan(_JOB, _CANDIDATE)
+        cls.plan = planner.resolve_lazy_questions(
+            planner.plan(_JOB, _CANDIDATE), _JOB, _CANDIDATE,
+        )
         cls.session = _build_completed_session(cls.plan)
 
     def test_overall_unchanged_by_signals(self):
@@ -185,9 +263,9 @@ class ComplianceInvariantTests(unittest.TestCase):
         report = evaluator.evaluate(self.session, self.plan, signals=signals)
         # 1 个软信号 -> 1 条 performance_observation
         self.assertEqual(len(report.performance_observations), 1)
-        # content_scores 数量不应被信号污染
+        # content_scores 数量与 plan.competencies (顶层) 一致, 不被软信号污染
         self.assertEqual(
-            len(report.content_scores), len(self.plan.rounds[0].competencies)
+            len(report.content_scores), len(self.plan.competencies)
         )
 
 
@@ -217,7 +295,12 @@ class OrchestratorEndToEndTest(unittest.TestCase):
         from src.db import load_report
         from src.orchestrator import run_interview
 
-        report = run_interview(_JOB, _CANDIDATE, _ANSWERS)
+        # 走 Planner -> resolve_lazy -> _answers_for_plan 拿到按 stage 顺序的答案
+        pl = planner.resolve_lazy_questions(
+            planner.plan(_JOB, _CANDIDATE), _JOB, _CANDIDATE,
+        )
+        answers = _answers_for_plan(pl)
+        report = run_interview(_JOB, _CANDIDATE, answers)
         self.assertIsInstance(report, EvaluationReport)
         self.assertEqual(len(report.content_scores), 2)
         self.assertTrue(report.needs_human_review)
