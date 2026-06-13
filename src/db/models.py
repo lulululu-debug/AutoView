@@ -112,7 +112,9 @@ class SeedQuestionORM(Base):
 
 
 class JobORM(Base):
-    """对应 schemas.JobContext。HR 创建职位时落表。"""
+    """对应 schemas.JobContext。HR 创建职位时落表。
+    Sprint 5.5 加 track 列; server_default="lateral" 保证旧库 ALTER 加列时
+    历史行自动拿到 lateral, 与 pydantic 默认值一致。"""
     __tablename__ = "jobs"
 
     job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -120,6 +122,9 @@ class JobORM(Base):
     jd: Mapped[str] = mapped_column(String, nullable=False)
     requirements: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     company_materials: Mapped[str] = mapped_column(String, nullable=False, default="")
+    track: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="lateral", server_default="lateral",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -200,6 +205,11 @@ class InterviewSessionORM(Base):
     # 嵌套结构整体 JSONB; 反序列化时交给 pydantic 校验
     history: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     answers: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Sprint 5.5: 候选人 self_intro 阶段回答全文, 供 project lazy gen 使用;
+    # server_default="" 保证旧库 ALTER 加列时历史 session 行不违约。
+    intro_text: Mapped[str] = mapped_column(
+        String, nullable=False, default="", server_default="",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

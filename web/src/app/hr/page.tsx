@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { ApiError, api, type JobContext } from "@/lib/api";
+import { ApiError, api, type JobContext, type Track } from "@/lib/api";
 
 /**
  * HR Dashboard 主页:
@@ -109,9 +109,20 @@ function JobList({
           >
             <div className="flex items-center justify-between gap-3 mb-1">
               <h2 className="font-medium">{job.title}</h2>
-              <span className="text-xs text-zinc-400 font-mono">
-                {job.role_family}
-              </span>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-xs px-1.5 py-0.5 rounded uppercase tracking-wide ${
+                    job.track === "campus"
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                      : "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                  }`}
+                >
+                  {job.track === "campus" ? "校招" : "社招"}
+                </span>
+                <span className="text-xs text-zinc-400 font-mono">
+                  {job.role_family}
+                </span>
+              </div>
             </div>
             <p className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-2">
               {job.jd}
@@ -145,6 +156,7 @@ function CreateJobForm({
   const [jd, setJd] = useState("");
   const [requirements, setRequirements] = useState<string[]>([""]);
   const [companyMaterials, setCompanyMaterials] = useState("");
+  const [track, setTrack] = useState<Track>("lateral");
   const [state, setState] = useState<CreateState>({ kind: "idle" });
 
   function addRequirement() {
@@ -167,6 +179,7 @@ function CreateJobForm({
         jd: jd.trim(),
         requirements: requirements.map((r) => r.trim()).filter(Boolean),
         company_materials: companyMaterials.trim(),
+        track,
       });
       onSuccess();
     } catch (e) {
@@ -190,6 +203,36 @@ function CreateJobForm({
           placeholder="例如: 后端工程师"
           className="w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 p-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400 disabled:opacity-60"
         />
+      </div>
+
+      <div>
+        <label className="block text-xs text-zinc-500 mb-1">招聘类型 *</label>
+        <div className="flex items-center gap-2">
+          {(["lateral", "campus"] as const).map((opt) => (
+            <label
+              key={opt}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-sm cursor-pointer ${
+                track === opt
+                  ? "border-zinc-900 dark:border-zinc-100 bg-zinc-100 dark:bg-zinc-800"
+                  : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
+              } ${state.kind === "submitting" ? "opacity-60 cursor-not-allowed" : ""}`}
+            >
+              <input
+                type="radio"
+                name="track"
+                value={opt}
+                checked={track === opt}
+                onChange={() => setTrack(opt)}
+                disabled={state.kind === "submitting"}
+                className="accent-zinc-900 dark:accent-zinc-100"
+              />
+              {opt === "campus" ? "校招" : "社招"}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-zinc-400 mt-1">
+          影响面试 stage 序列: 校招重知识 + 项目轻; 社招重项目 + 场景。
+        </p>
       </div>
 
       <div>

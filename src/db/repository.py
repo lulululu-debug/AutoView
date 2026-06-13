@@ -89,6 +89,7 @@ def list_jobs() -> list[JobContext]:
                 "jd": r.jd,
                 "requirements": r.requirements,
                 "company_materials": r.company_materials,
+                "track": r.track,
             })
             for r in rows
         ]
@@ -286,6 +287,7 @@ def save_job(job: JobContext) -> None:
             jd=payload["jd"],
             requirements=payload["requirements"],
             company_materials=payload["company_materials"],
+            track=payload["track"],
         ))
 
 
@@ -300,6 +302,7 @@ def load_job(job_id: str) -> Optional[JobContext]:
             "jd": row.jd,
             "requirements": row.requirements,
             "company_materials": row.company_materials,
+            "track": row.track,
         })
 
 
@@ -390,6 +393,7 @@ def save_session(session: InterviewSession) -> None:
             current_round=payload["current_round"],
             history=payload["history"],
             answers=payload["answers"],
+            intro_text=payload["intro_text"],
         )
         s.merge(row)
 
@@ -409,6 +413,7 @@ def load_session(session_id: str) -> Optional[InterviewSession]:
                 "current_round": row.current_round,
                 "history": row.history,
                 "answers": row.answers,
+                "intro_text": row.intro_text,
             }
         )
 

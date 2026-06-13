@@ -5,9 +5,15 @@
       -> Interviewer 循环(Question / CandidateAnswer / FollowUp)
       -> InterviewSession -> Evaluator -> EvaluationReport
 
-Question.category 区分两类题:
+Question.category 区分四类题(Sprint 5.5 起从两类扩到四类):
 - KNOWLEDGE          基础知识考察, 由 JobContext 驱动
 - PROJECT_EXPERIENCE 项目/实习内容考察, 由 CandidateProfile.resume 驱动
+- SELF_INTRO         自我介绍, 永远 0 追问, 答案落 InterviewSession.intro_text
+- SCENARIO           场景题, 由场景题库召回 + LLM 精修
+
+JobContext.track 与 InterviewRound.stage 配套 (Sprint 5.5):
+- track="campus" 校招: self_intro -> knowledge(重) -> project(lazy gen) -> scenario(轻)
+- track="lateral" 社招: self_intro -> knowledge(轻) -> project(重) -> scenario(重)
 
 Signal 为多模态扩展预留, 骨架阶段恒为空。
 合规约束(见 ARCHITECTURE.md 第 7 节)在类型层面体现:
@@ -30,6 +36,14 @@ def _new_id() -> str:
 
 # ---------- 输入: 职位 + 候选人 ----------
 
+class Track(str, Enum):
+    """招聘类型(Sprint 5.5 起)。
+    决定 Planner 的 stage 序列 + 各 stage 题数配比;
+    lateral 是历史默认(老 Job 没 track 字段时退到 lateral)。"""
+    CAMPUS = "campus"      # 校招: 自我介绍 + 知识(重) + 项目(轻, lazy) + 场景(轻)
+    LATERAL = "lateral"    # 社招: 自我介绍 + 知识(轻) + 项目(重, lazy) + 场景(重)
+
+
 class JobContext(BaseModel):
     """HR 上传的原始资料, Planner 的输入之一。"""
     job_id: str = Field(default_factory=_new_id)
@@ -39,6 +53,7 @@ class JobContext(BaseModel):
     company_materials: str = ""              # 公司资料(后期做 RAG 切片)
     role_family: str = "backend"             # Sprint 3-5: 题库召回按 role_family + 维度过滤
                                              # 当前题库只 seed 了 backend; 改职位族要先 seed 对应题库
+    track: Track = Track.LATERAL             # Sprint 5.5: 校招 / 社招; 老 Job 缺这列默认 lateral
 
 
 class CandidateProfile(BaseModel):
@@ -72,9 +87,23 @@ class QuestionType(str, Enum):
 
 
 class QuestionCategory(str, Enum):
-    """题目类别 —— 与 type(题目风格) 正交, 表示"考察什么"。"""
+    """题目类别 —— 与 type(题目风格) 正交, 表示"考察什么"。
+    Sprint 5.5 从 2 类扩到 4 类, 与 InterviewStage 一一对应。"""
     KNOWLEDGE = "knowledge"                  # 基础知识考察, JD 驱动
     PROJECT_EXPERIENCE = "project_experience"  # 项目/实习内容考察, Resume 驱动
+    SELF_INTRO = "self_intro"                # 自我介绍, 永远 0 追问
+    SCENARIO = "scenario"                    # 场景题, 场景题库召回 + LLM 精修
+
+
+class InterviewStage(str, Enum):
+    """面试阶段(Sprint 5.5 起)。
+    Orchestrator 按 track 配的序列推进, 每 stage 跑完才进下一个。
+    与 QuestionCategory 一一对应, 但 stage 是 round 级、category 是题级,
+    一个 round 通常只装一类 category, lazy gen 的 round 例外。"""
+    SELF_INTRO = "self_intro"
+    KNOWLEDGE = "knowledge"
+    PROJECT = "project"
+    SCENARIO = "scenario"
 
 
 class Question(BaseModel):
@@ -92,12 +121,15 @@ class Question(BaseModel):
 
 
 class InterviewRound(BaseModel):
-    """一轮面试: 一组维度与对应题目。"""
+    """一轮面试: 一组维度与对应题目。
+    Sprint 5.5 起加 stage; 老 Plan JSON 缺该字段默认 KNOWLEDGE
+    (老链路是 knowledge + project 混在单 round, 用 knowledge 作占位防解析失败)。"""
     round_id: str = Field(default_factory=_new_id)
     index: int                               # 第几轮(从 0 开始)
     title: str
     competencies: list[Competency]
     questions: list[Question]
+    stage: InterviewStage = InterviewStage.KNOWLEDGE
 
 
 class InterviewPlan(BaseModel):
@@ -148,7 +180,11 @@ class SessionStatus(str, Enum):
 
 class InterviewSession(BaseModel):
     """一次面试的完整状态。Interviewer 读写, Evaluator 消费。
-    骨架阶段在内存; Sprint 1 起热存 Redis, 结束归档 Postgres。"""
+    骨架阶段在内存; Sprint 1 起热存 Redis, 结束归档 Postgres。
+
+    Sprint 5.5 起加 intro_text: 候选人 self_intro 阶段的回答全文,
+    会喂给 project stage 的 lazy 出题 prompt + 回灌 Evaluator 作软信号上下文。
+    老 Session JSON 缺该字段默认空字符串。"""
     session_id: str = Field(default_factory=_new_id)
     plan_id: str
     job_id: str
@@ -156,6 +192,7 @@ class InterviewSession(BaseModel):
     current_round: int = 0
     history: list[Turn] = []
     answers: list[CandidateAnswer] = []
+    intro_text: str = ""
 
 
 # ---------- 多模态信号(扩展, 骨架恒空) ----------
