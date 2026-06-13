@@ -277,12 +277,19 @@ class SeedQuestion(BaseModel):
     PG 是真理之源, Milvus 仅作检索副本。
 
     question_id 用内容哈希 (sha256(role+competency+text)[:16]), 让脚本可重跑:
-    同内容 = 同 id = upsert 不重复。"""
+    同内容 = 同 id = upsert 不重复。
+
+    Sprint 5.5 起加 category 区分 knowledge / scenario 两类题源:
+    - KNOWLEDGE: 知识考察, 历史 default; 老题库 ALTER 加列时全落到这一类
+    - SCENARIO: 场景题(线上故障、设计权衡等), Sprint 5.5 新加
+    SELF_INTRO / PROJECT_EXPERIENCE 不进种子库 (前者每场现拿候选人答案, 后者
+    走 Resume RAG 现场生成); 调用方/CLI 自行约束写入值。"""
     question_id: str
     role_family: str                         # "backend" / "frontend" / "data_science" / ...
     competency: str                          # "技术深度" / "沟通协作" / ...
     text: str
     source: str = "llm_generated"            # llm_generated / fallback_template / human_curated
+    category: QuestionCategory = QuestionCategory.KNOWLEDGE
 
 
 class TurnResult(BaseModel):
