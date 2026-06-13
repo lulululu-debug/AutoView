@@ -31,6 +31,7 @@ from src.schemas import (  # noqa: E402
     JobContext,
     Question,
     QuestionCategory,
+    SeedQuestion,
     Track,
     Competency,
 )
@@ -124,6 +125,48 @@ class InterviewRoundStageTests(unittest.TestCase):
         }
         r = InterviewRound(**old)
         self.assertIs(r.stage, InterviewStage.KNOWLEDGE)
+
+
+class SeedQuestionCategoryTests(unittest.TestCase):
+    def _seed(self, **kwargs):
+        defaults = dict(
+            question_id="qid-test",
+            role_family="backend",
+            competency="技术深度",
+            text="你怎么定位线上慢查询?",
+        )
+        defaults.update(kwargs)
+        return SeedQuestion(**defaults)
+
+    def test_default_category_is_knowledge(self):
+        q = self._seed()
+        self.assertIs(q.category, QuestionCategory.KNOWLEDGE)
+
+    def test_explicit_scenario(self):
+        q = self._seed(category=QuestionCategory.SCENARIO)
+        self.assertIs(q.category, QuestionCategory.SCENARIO)
+
+    def test_old_seed_json_without_category_parses(self):
+        # 老 PG seed_questions 行序列化时 category 字段不存在;
+        # ALTER 加列 + server_default='knowledge' 后, 老行 SELECT 出来带 'knowledge';
+        # 兼容这两种来源(完全缺字段 / 字符串值): 默认 + 字符串值都得能解析。
+        old_no_field = {
+            "question_id": "q1", "role_family": "backend",
+            "competency": "技术深度", "text": "x",
+        }
+        q1 = SeedQuestion(**old_no_field)
+        self.assertIs(q1.category, QuestionCategory.KNOWLEDGE)
+
+        old_with_str = {**old_no_field, "category": "knowledge"}
+        q2 = SeedQuestion(**old_with_str)
+        self.assertIs(q2.category, QuestionCategory.KNOWLEDGE)
+
+    def test_category_round_trip_via_model_dump(self):
+        q = self._seed(category=QuestionCategory.SCENARIO)
+        dumped = q.model_dump(mode="json")
+        self.assertEqual(dumped["category"], "scenario")
+        q2 = SeedQuestion(**dumped)
+        self.assertIs(q2.category, QuestionCategory.SCENARIO)
 
 
 class InterviewSessionIntroTextTests(unittest.TestCase):

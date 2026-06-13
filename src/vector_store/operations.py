@@ -20,7 +20,7 @@ from src.vector_store.collections import COLLECTION_DOCUMENTS, COLLECTION_QUESTI
 
 log = logging.getLogger(__name__)
 
-_QUESTIONS_OUTPUT = ("question_id", "role_family", "competency", "text")
+_QUESTIONS_OUTPUT = ("question_id", "role_family", "competency", "category", "text")
 _DOCUMENTS_OUTPUT = ("document_id", "kind", "source_id", "chunk_index", "text")
 
 
@@ -49,8 +49,10 @@ def upsert_question(
     competency: str,
     text: str,
     embedding: list[float],
+    category: str = "knowledge",
 ) -> bool:
-    """写入或更新一道题。返回 True 表示真的入库, False 表示因 stub 向量被跳过。"""
+    """写入或更新一道题。返回 True 表示真的入库, False 表示因 stub 向量被跳过。
+    Sprint 5.5: category 默认 knowledge 让老调用方零改动。"""
     if is_stub_vector(embedding):
         log.warning(
             "skip upsert_question(%s): stub vector (全零), 不污染向量空间",
@@ -64,6 +66,7 @@ def upsert_question(
             "question_id": question_id,
             "role_family": role_family,
             "competency": competency,
+            "category": category,
             "text": text,
             "embedding": embedding,
         }],
@@ -77,14 +80,18 @@ def search_questions(
     top_k: int = 5,
     role_family: Optional[str] = None,
     competency: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """按向量召回 top_k 道题, 可选 role_family / competency 过滤。
-    返回 list[dict], 含字段 + distance (COSINE: 越小越相似)。"""
+    """按向量召回 top_k 道题, 可选 role_family / competency / category 过滤。
+    返回 list[dict], 含字段 + distance (COSINE: 越小越相似)。
+    Sprint 5.5: category 过滤让 Planner 按 stage 分别拉 knowledge / scenario 题。"""
     if is_stub_vector(embedding):
         # stub 向量召回结果无意义, 返回空免得调用方误用
         return []
     client = get_client()
-    expr = _build_filter(role_family=role_family, competency=competency)
+    expr = _build_filter(
+        role_family=role_family, competency=competency, category=category,
+    )
     results = client.search(
         collection_name=COLLECTION_QUESTIONS,
         data=[embedding],

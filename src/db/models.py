@@ -95,6 +95,10 @@ class SeedQuestionORM(Base):
     - 写入顺序: PG -> embed -> Milvus, 顺序保证 PG 一致, Milvus 写挂不影响真理。
 
     question_id 用内容哈希: 脚本重跑不重复。
+
+    Sprint 5.5 加 category 列: 区分 knowledge / scenario;
+    server_default='knowledge' 让旧库 ALTER 加列时历史行落到 knowledge,
+    与 pydantic 默认一致。
     """
     __tablename__ = "seed_questions"
 
@@ -104,6 +108,11 @@ class SeedQuestionORM(Base):
     text: Mapped[str] = mapped_column(String, nullable=False)
     source: Mapped[str] = mapped_column(
         String(32), nullable=False, default="llm_generated"
+    )
+    category: Mapped[str] = mapped_column(
+        String(32), nullable=False,
+        default="knowledge", server_default="knowledge",
+        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

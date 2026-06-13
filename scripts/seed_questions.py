@@ -1,12 +1,13 @@
-"""种子题库填充脚本 —— Sprint 3-3。
+"""种子题库填充脚本 —— Sprint 3-3, Sprint 5.5 扩 scenario。
 
 职责: LLM 生成(或 fallback 模板) 题目 -> 写 PG (真理之源) -> 向量化 -> 写 Milvus
        (检索副本)。可重跑, 按内容哈希作 question_id 保证幂等。
 
 用法:
-    python -m scripts.seed_questions                   # 默认 backend role, 15/dim
-    python -m scripts.seed_questions --per 25          # 每维度 25 道
-    python -m scripts.seed_questions --dry-run         # 只打印, 不入库
+    python -m scripts.seed_questions                              # 默认 knowledge / backend / 15/dim
+    python -m scripts.seed_questions --category scenario          # 场景题(Sprint 5.5)
+    python -m scripts.seed_questions --per 25                     # 每维度 25 道
+    python -m scripts.seed_questions --dry-run                    # 只打印, 不入库
 
 设计:
 - PG 是真理之源: Milvus 文件丢了可从 PG 重建; 反过来不行
@@ -18,6 +19,12 @@
 - OPENAI_API_KEY 缺时 embed 走 stub 向量(全零), upsert_question 自动跳过 Milvus,
   PG 仍正常写
 
+Sprint 5.5:
+- --category=knowledge 是原有行为, 默认 (保兼容)
+- --category=scenario 改用"场景题"风格 prompt + fallback 池:
+  "你是 oncall, 凌晨 3 点收到 P99 报警..." 风格,
+  Planner 在 scenario stage 召回, knowledge stage 不会拉到。
+
 题目质量是 Sprint 5 (HR 端复核) 才优化的事; Sprint 3-3 关心的是"题库走通"。
 """
 from __future__ import annotations
@@ -28,14 +35,17 @@ import logging
 import re
 import sys
 from dataclasses import dataclass
+from typing import Literal
 
 from src import db, embeddings, llm, vector_store
-from src.schemas import SeedQuestion
+from src.schemas import QuestionCategory, SeedQuestion
 
 log = logging.getLogger(__name__)
 
 ROLE_FAMILY = "backend"
 PER_COMPETENCY_DEFAULT = 15
+
+CategoryArg = Literal["knowledge", "scenario"]
 
 
 @dataclass(frozen=True)
@@ -63,7 +73,24 @@ _LLM_SYSTEM = (
 )
 
 
-def _llm_prompt(competency: _CompetencySpec, n: int) -> str:
+def _llm_prompt(competency: _CompetencySpec, n: int, category: CategoryArg) -> str:
+    if category == "scenario":
+        return (
+            f"为「后端工程师」岗位的「{competency.name}」维度生成 {n} 道开放式中文"
+            "【场景题】。\n"
+            "\n"
+            "场景题要求 (与知识题不同):\n"
+            "- 必须给一个具体的【情境】, 让候选人当场推理、做决策, 而不是回顾经历\n"
+            "- 一句话情境 + 问『接下来 X 分钟/小时你做什么』/『怎么定』/『如何抉择』\n"
+            "- 不是『分享一次...』 (那是项目题), 不是『如何防止...』 (那是知识题)\n"
+            "- 例: 你是这条业务的 oncall, 凌晨 3 点收到 P99 告警从 200ms 涨到 4s,"
+            "你的前 10 分钟做什么? 为什么按这个顺序?\n"
+            "\n"
+            "输出要求:\n"
+            "- 每行一题, 不加编号, 不加任何前后缀\n"
+            "- 题目应可深挖, 避免 yes/no 题\n"
+            f"\n维度释义: {competency.description}"
+        )
     return (
         f"为「后端工程师」岗位的「{competency.name}」维度生成 {n} 道开放式中文面试题。\n"
         "\n"
@@ -92,6 +119,7 @@ def _parse_llm_output(text: str) -> list[str]:
 
 # ---------- Fallback 模板 (LLM 不可用时兜底) ----------
 
+# knowledge fallback: 提问"你怎么做 / 怎么理解 / 谈谈..."
 _FALLBACK: dict[str, list[str]] = {
     "技术深度": [
         "在你做过的系统中, 如何识别并定位性能瓶颈? 请讲一个具体案例。",
@@ -130,38 +158,93 @@ _FALLBACK: dict[str, list[str]] = {
 }
 
 
-def _fallback_questions(competency: _CompetencySpec, n: int) -> list[str]:
-    pool = _FALLBACK.get(competency.name, [])
+# scenario fallback (Sprint 5.5): "情境一句话 + 问候选人接下来做什么"
+# 后端方向, 偏故障 / 决策 / 取舍, 与 knowledge 区分清楚。
+_SCENARIO_FALLBACK: dict[str, list[str]] = {
+    "技术深度": [
+        "你是订单业务的 oncall, 凌晨 3 点收到 P99 告警从 200ms 涨到 4s, 业务量没显著变化。"
+        "你的前 10 分钟做什么? 为什么按这个顺序排?",
+        "DB 主库磁盘剩 5%, 业务读写正常, 监控告警刚响。你接下来 1 小时怎么处置? 哪些操作不能做?",
+        "灰度发布到 5% 流量后接口错误率从 0.1% 涨到 8%, 但没有具体堆栈。"
+        "你要决定继续灰度还是回滚, 5 分钟内你怎么定?",
+        "消息队列积压了 800 万条, 业务 SLA 要求 30 分钟内消化完。"
+        "你手上有 8 台消费机, 现在还能横扩。你的处置步骤是什么? 风险点是什么?",
+        "线上一个关键服务 Pod 频繁 OOMKilled 重启, 但本地压测复现不出来。"
+        "你 24 小时内的排查计划是什么? 在不能上 debug build 的前提下。",
+        "促销前一天发现核心接口的 SQL 突然慢了 5 倍, EXPLAIN 看走的索引和昨天不一样。"
+        "你怎么定: 立刻 force index 上线, 还是先查统计信息?",
+        "对账中台跑批昨天晚 2 小时, 今天又晚了 4 小时, 上游说数据量没大变。"
+        "你怎么拆这个问题? 哪些『看似常见』的解释你会先排除?",
+        "Redis 主从切换后业务出现明显抖动, 时长 90 秒, 之后恢复。事后你做哪几件事, 优先级怎么排?",
+        "新接的支付通道偶发返回 200 但 body 是错的, 概率约 0.3‰。"
+        "你要在不停业务的前提下定位+止血, 怎么做?",
+        "线上发现一个长期存在的数据一致性 bug, 影响约 2 万条历史订单。"
+        "你向上汇报后, 修复方案怎么定? 灰度策略 + 回滚预案分别是什么?",
+        "你接管一个老服务, 没有 owner、没有文档、依赖一堆『看起来不能动』的逻辑。"
+        "上线第一周 PR 要不要先动它? 怎么定第一个安全的改动?",
+        "服务依赖的下游 SLA 99%, 你这边要做到 99.9%。在不能换下游的前提下, 你的设计思路是什么?",
+        "一次大促前的全链路压测发现瓶颈在 Kafka, 但扩容需要 SRE 排期 3 天, 离大促剩 2 天。"
+        "你怎么决策? 给业务方什么承诺?",
+        "用户反馈『偶发性下单卡住』, 监控指标都正常, 链路追踪也没异常。"
+        "你怎么把这个问题『做出来』, 而不是依赖运气复现?",
+        "你设计的限流方案上线后误杀了一部分正常用户, 但产品强调不能下线。"
+        "你 1 小时内的处置 + 24 小时内的根因/复盘怎么安排?",
+    ],
+    "沟通协作": [
+        "线上 incident 进行中, SRE / 业务 PM / 运营三方都在群里追问 ETA, 你刚定位到根因还没修。"
+        "接下来 15 分钟你怎么沟通? 给谁什么信息?",
+        "你主导的方案被另一个团队 tech lead 当众否了, 理由你不完全认可。"
+        "会上、会后你各自做什么? 怎么把决策落地推进?",
+        "上线前一晚 QA 发现一个高风险 bug, 修要 2 天, 业务方要求按时上线。"
+        "你怎么和业务方谈? 你的底线是什么?",
+        "你负责的服务出了 P1 故障, 复盘会上下游团队互相甩锅。"
+        "你作为关键人怎么主持复盘, 让大家把『防止再次发生』真的落到行动项?",
+        "新人入职 2 周写出来的代码风格混乱、commit 信息缺失, 但人很努力。"
+        "你怎么 1-on-1 反馈? 第一次说什么、不说什么?",
+    ],
+}
+
+
+def _fallback_questions(
+    competency: _CompetencySpec, n: int, category: CategoryArg,
+) -> list[str]:
+    pool_dict = _SCENARIO_FALLBACK if category == "scenario" else _FALLBACK
+    pool = pool_dict.get(competency.name, [])
     return pool[:n]
 
 
 # ---------- 核心: 生成 + 双写 ----------
 
 def _question_id(role_family: str, competency: str, text: str) -> str:
-    """内容哈希作主键, 让重跑天然幂等。"""
+    """内容哈希作主键, 让重跑天然幂等。
+    注: 不把 category 放进 hash, 是因为同一题文本不应该同时出现在 knowledge + scenario
+    两类下; 真冲突时谁后写谁覆盖, 比让两份共存更安全。"""
     raw = f"{role_family}|{competency}|{text.strip()}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _generate_for_competency(
-    competency: _CompetencySpec, n: int,
+    competency: _CompetencySpec, n: int, category: CategoryArg,
 ) -> tuple[list[str], str]:
     """返回 (题目列表, 来源)。LLM 不可用时退到 fallback 模板。"""
     raw = llm.complete(
-        _LLM_SYSTEM, _llm_prompt(competency, n), max_tokens=2000,
+        _LLM_SYSTEM, _llm_prompt(competency, n, category), max_tokens=2000,
     )
     if llm.is_stub(raw):
-        log.info("LLM 不可用 (stub), 改用 fallback 模板: %s", competency.name)
-        return _fallback_questions(competency, n), "fallback_template"
+        log.info(
+            "LLM 不可用 (stub), 改用 fallback 模板: category=%s competency=%s",
+            category, competency.name,
+        )
+        return _fallback_questions(competency, n, category), "fallback_template"
 
     texts = _parse_llm_output(raw)
     if len(texts) < n:
         log.warning(
-            "LLM 只产出 %d 道题 (要 %d 道) for %s, 用 fallback 补足",
-            len(texts), n, competency.name,
+            "LLM 只产出 %d 道题 (要 %d 道) for category=%s competency=%s, 用 fallback 补足",
+            len(texts), n, category, competency.name,
         )
         existing = set(texts)
-        for fb in _fallback_questions(competency, n):
+        for fb in _fallback_questions(competency, n, category):
             if fb not in existing:
                 texts.append(fb)
                 if len(texts) >= n:
@@ -180,14 +263,25 @@ def seed_backend_questions(
     *,
     per_competency: int = PER_COMPETENCY_DEFAULT,
     dry_run: bool = False,
+    category: CategoryArg = "knowledge",
 ) -> SeedResult:
-    """跑题库填充。返回详细结果便于脚本/eval 输出。"""
+    """跑题库填充。返回详细结果便于脚本/eval 输出。
+    Sprint 5.5: category=scenario 走场景题 prompt + pool, 写入 SeedQuestion.category
+    并把 category 透传给 Milvus, 让 Planner 按 stage 召回各自题源。"""
     all_questions: list[SeedQuestion] = []
     pg_written = 0
     milvus_written = 0
+    cat_enum = QuestionCategory(category)
 
+    # scenario 池 fallback 偏少 (尤其沟通协作 5 道), 限定每维度上限,
+    # 防止重复/空填充。Knowledge 仍按 per_competency 走。
     for comp in _COMPETENCIES:
-        texts, source = _generate_for_competency(comp, per_competency)
+        if category == "scenario":
+            pool_size = len(_SCENARIO_FALLBACK.get(comp.name, []))
+            n = min(per_competency, max(pool_size, 1))
+        else:
+            n = per_competency
+        texts, source = _generate_for_competency(comp, n, category)
         for t in texts:
             qid = _question_id(ROLE_FAMILY, comp.name, t)
             q = SeedQuestion(
@@ -196,6 +290,7 @@ def seed_backend_questions(
                 competency=comp.name,
                 text=t,
                 source=source,
+                category=cat_enum,
             )
             all_questions.append(q)
             if dry_run:
@@ -213,6 +308,7 @@ def seed_backend_questions(
                 competency=comp.name,
                 text=t,
                 embedding=vec,
+                category=category,
             )
             if ok:
                 milvus_written += 1
@@ -231,6 +327,10 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--per", type=int, default=PER_COMPETENCY_DEFAULT,
         help=f"每个维度的题数 (默认 {PER_COMPETENCY_DEFAULT})",
+    )
+    parser.add_argument(
+        "--category", choices=["knowledge", "scenario"], default="knowledge",
+        help="题源类别 (Sprint 5.5): knowledge 知识题(默认) / scenario 场景题",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -252,14 +352,16 @@ def _main(argv: list[str] | None = None) -> int:
         vector_store.init_collections()
 
     result = seed_backend_questions(
-        per_competency=args.per, dry_run=args.dry_run,
+        per_competency=args.per,
+        dry_run=args.dry_run,
+        category=args.category,
     )
 
-    print(f"\n[seed_questions] 候选题目数: {len(result.questions)}")
+    print(f"\n[seed_questions] category={args.category} 候选题目数: {len(result.questions)}")
     if args.dry_run:
         print("[seed_questions] dry-run, 未写库:")
         for q in result.questions:
-            print(f"  ({q.competency}) {q.text}")
+            print(f"  ({q.competency}) [{q.category.value}] {q.text}")
     else:
         print(f"[seed_questions] PG 写入: {result.pg_written}")
         print(

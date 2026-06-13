@@ -227,13 +227,15 @@ def load_review_for_report(report_id: str) -> Optional[ReviewRecord]:
 
 def save_seed_question(question: SeedQuestion) -> None:
     """按 question_id upsert; 同内容 = 同 id, 脚本重跑安全。"""
+    payload = question.model_dump(mode="json")
     with session_scope() as s:
         s.merge(SeedQuestionORM(
-            question_id=question.question_id,
-            role_family=question.role_family,
-            competency=question.competency,
-            text=question.text,
-            source=question.source,
+            question_id=payload["question_id"],
+            role_family=payload["role_family"],
+            competency=payload["competency"],
+            text=payload["text"],
+            source=payload["source"],
+            category=payload["category"],
         ))
 
 
@@ -248,6 +250,7 @@ def load_seed_question(question_id: str) -> Optional[SeedQuestion]:
             "competency": row.competency,
             "text": row.text,
             "source": row.source,
+            "category": row.category,
         })
 
 
@@ -255,14 +258,19 @@ def list_seed_questions(
     *,
     role_family: Optional[str] = None,
     competency: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> list[SeedQuestion]:
-    """按可选过滤列出题库; 不带过滤就是全表。"""
+    """按可选过滤列出题库; 不带过滤就是全表。
+    Sprint 5.5: category 过滤让 Planner 按 stage 取对应题源
+    (knowledge / scenario)。"""
     with session_scope() as s:
         q = s.query(SeedQuestionORM)
         if role_family is not None:
             q = q.filter(SeedQuestionORM.role_family == role_family)
         if competency is not None:
             q = q.filter(SeedQuestionORM.competency == competency)
+        if category is not None:
+            q = q.filter(SeedQuestionORM.category == category)
         return [
             SeedQuestion.model_validate({
                 "question_id": r.question_id,
@@ -270,6 +278,7 @@ def list_seed_questions(
                 "competency": r.competency,
                 "text": r.text,
                 "source": r.source,
+                "category": r.category,
             })
             for r in q.all()
         ]
