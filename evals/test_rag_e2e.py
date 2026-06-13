@@ -21,12 +21,48 @@ import os
 import tempfile
 import unittest
 
+# 让 .env (POSTGRES_URL / REDIS_URL) 在测试入口被读到, 否则 skipUnless 总跳过
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+os.environ.pop("OPENAI_API_KEY", None)
+
 
 def _fixed_vector(dim: int = 1536) -> list[float]:
     """固定向量让所有 search COSINE 距离=0, 全部命中。"""
     v = [0.0] * dim
     v[0] = 1.0
     return v
+
+
+# Sprint 5.5: lateral plan 默认 7 题 (self_intro+project*3+scenario*2+knowledge*1)。
+# 每条答案 >60 字 + 含 _SPECIFICITY_HINTS 至少一个 ("比如"/"我们"/"结果"/"%" 等),
+# 避免现行 Interviewer heuristic 触发追问让 walk 超出 pool。
+# (FollowUpPolicy 之后, self_intro 强制 0 追问会让这些约束放宽。)
+_PROVEN_ANSWERS = [
+    "我是张三, 后端 4 年, 最近主要在订单系统和对账中台做高可用与性能, 比如把订单 P99 从 800ms 降到 350ms, "
+    "我们组同时把对账延迟从 30 分钟降到 3 分钟。",
+    "去年大促前订单 P99 从 800ms 涨到 2s, 比如某个复合索引失效 + 热点 key 击穿, "
+    "我们加回索引并改造成本地缓存 + Redis 二级缓存, 结果 P99 回到 350ms。",
+    "对账中台日处理 2 亿笔, 早期延迟 30 分钟+。我们改成分桶 + 并行 + 幂等键 + Kafka 回放, "
+    "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
+    "通常我会先用数据让对方理解我担心的点, 比如拉一份线上回放, "
+    "我们再一起定义可灰度的中间方案, 结果上半年风控争议就是这么收的。",
+    "前 5 分钟先看链路 RT 和错误率分布, 比如下游谁慢、是不是热点 key, "
+    "我们再决定先扩容还是先限流, 结果优先选不破坏可观测性的动作。",
+    "我会先在群里说定位到根因 + ETA 15 分钟, 比如先告知业务 PM 影响范围, "
+    "我们再 1on1 同步细节, 结果对外口径不会跑偏。",
+    "我对 CAP 的理解是: P 是默认前提, 比如订单状态我们选 C 用强一致状态机, "
+    "结果不会出现『已支付未发货』那种异常态。",
+    "补一句: 在 A/B 实验里我们最看重误判, 比如下游业务对一致性敏感, "
+    "结果会让我们倾向保守的发布节奏。",
+    "再补一段: 我会把 SLO 和 SLA 拆开看, 比如 SLA 是对外承诺, 我们内部 SLO 留 buffer, "
+    "结果 oncall 不会被边界值反复打扰。",
+    "最后补一段: 灰度策略上, 比如订单类我们走 1% → 10% → 全量, "
+    "结果异常能在 10% 之前被捕获。",
+]
 
 
 @unittest.skipUnless(
@@ -167,12 +203,13 @@ class RagE2EProvenanceTests(_RagE2EBase):
         self.assertEqual(r.status_code, 200)
         plan = r.json()
 
-        questions = plan["rounds"][0]["questions"]
+        # Sprint 5.5: lateral 4 rounds 7 题, walk 所有 round
+        questions = [q for r in plan["rounds"] for q in r["questions"]]
         knowledge_q = [q for q in questions if q["category"] == "knowledge"]
         project_q = [q for q in questions if q["category"] == "project_experience"]
 
-        # 4a) knowledge 题: source_question_id 必须指向真实 SeedQuestion (PG 中能查到)
-        self.assertEqual(len(knowledge_q), 2)
+        # 4a) knowledge 题 (lateral 1 道): source_question_id 必须指向真实 SeedQuestion
+        self.assertEqual(len(knowledge_q), 1)
         for q in knowledge_q:
             src_id = q.get("source_question_id")
             self.assertIsNotNone(src_id, f"knowledge 题缺 source_question_id: {q}")
@@ -181,44 +218,25 @@ class RagE2EProvenanceTests(_RagE2EBase):
                 seed, f"source_question_id {src_id} 在 PG seed_questions 找不到",
             )
             self.assertEqual(seed.role_family, "backend")
-            # 知识题维度应当与种子维度一致 (Milvus filter 应当生效)
             self.assertIn(seed.competency, {"技术深度", "沟通协作"})
 
-        # 4b) project 题: source_chunk_ids 非空, 且全部指向本 candidate 的 resume 切片
-        self.assertEqual(len(project_q), 2)
+        # 4b) project 题 (lateral 3 道, 经 orchestrator.start_session 已 resolve_lazy):
+        #     source_chunk_ids 非空, 且全部指向本 candidate 的 resume 切片。
+        #     注: plan API 返回的是 cache.load_plan, start_session 之前未 resolve,
+        #     所以这里 plan 阶段 project 题 chunk_ids 应当还是空 (lazy 占位)。
+        self.assertEqual(len(project_q), 3)
         for q in project_q:
-            chunk_ids = q.get("source_chunk_ids", [])
-            self.assertGreater(
-                len(chunk_ids), 0, f"project 题缺 chunk_ids: {q}",
+            self.assertTrue(q.get("lazy"), "plan 阶段 project 题应当还是 lazy 占位")
+            self.assertEqual(
+                q.get("source_chunk_ids", []), [],
+                "plan 阶段还没 resolve, chunk_ids 应当空",
             )
-            for cid in chunk_ids:
-                self.assertTrue(
-                    cid.startswith(f"{cand_id}:resume:"),
-                    f"chunk_id 不属于本 candidate: {cid}",
-                )
 
         # 5) POST /interviews + 一路答到 done + GET /report
         r = self.client.post("/interviews", json={"candidate_id": cand_id})
         self.assertEqual(r.status_code, 201)
         sid = r.json()["session_id"]
-
-        # 用 Sprint 0 验过的长答案: 首答短触发追问, 后四答 >60 字且含
-        # specificity hints 不触发, 总 5 turn 到 done
-        proven_answers = [
-            "做过一些性能优化, 主要是慢查询和缓存。",
-            "比如去年大促前, 订单查询 P99 从 800ms 涨到 2s。"
-            "我们排查发现是某个复合索引被改后失效, 同时 Redis 出现热点 key 击穿。"
-            "我加回索引并改造为本地缓存 + Redis 二级缓存, 最终 P99 回到 350ms。",
-            "通常我会先用数据让对方理解我担心的点, 比如拉一份线上回放或历史 case,"
-            "再一起定义可灰度的中间方案; 我们组上半年的风控规则争议就是这么收的。",
-            "对账中台那段最有挑战。日处理 2 亿笔, 早期对账延迟超过 30 分钟。"
-            "我们把单表对账改成分桶 + 并行 worker, 引入幂等键, 用 Kafka 做回放,"
-            "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
-            "上半年风控那次, 产品要求 24 小时内全量, 我担心误杀率。"
-            "我拉了 SRE 一起跑离线回放, 用数据让产品同意先灰度 5%, 一周后再全量,"
-            "误杀率从 3.1% 降到 0.4% 才放开。",
-        ]
-        for ans in proven_answers:
+        for ans in _PROVEN_ANSWERS:
             r = self.client.post(f"/interviews/{sid}/answers", json={"text": ans})
             self.assertEqual(r.status_code, 200)
             if r.json()["done"]:
@@ -302,22 +320,7 @@ class RagE2EIsolationTests(_RagE2EBase):
         cand_b = r.json()["candidate_id"]
         r = self.client.post("/interviews", json={"candidate_id": cand_b})
         sid = r.json()["session_id"]
-        # Sprint 0 验过的长答案 (首答短触发追问, 其余 >60 字 + specificity hints)
-        proven_answers = [
-            "做过一些性能优化, 主要是慢查询和缓存。",
-            "比如去年大促前, 订单查询 P99 从 800ms 涨到 2s。"
-            "我们排查发现是某个复合索引被改后失效, 同时 Redis 出现热点 key 击穿。"
-            "我加回索引并改造为本地缓存 + Redis 二级缓存, 最终 P99 回到 350ms。",
-            "通常我会先用数据让对方理解我担心的点, 比如拉一份线上回放或历史 case,"
-            "再一起定义可灰度的中间方案; 我们组上半年的风控规则争议就是这么收的。",
-            "对账中台那段最有挑战。日处理 2 亿笔, 早期对账延迟超过 30 分钟。"
-            "我们把单表对账改成分桶 + 并行 worker, 引入幂等键, 用 Kafka 做回放,"
-            "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
-            "上半年风控那次, 产品要求 24 小时内全量, 我担心误杀率。"
-            "我拉了 SRE 一起跑离线回放, 用数据让产品同意先灰度 5%, 一周后再全量,"
-            "误杀率从 3.1% 降到 0.4% 才放开。",
-        ]
-        for ans in proven_answers:
+        for ans in _PROVEN_ANSWERS:
             r = self.client.post(f"/interviews/{sid}/answers", json={"text": ans})
             if r.json()["done"]:
                 break

@@ -107,11 +107,24 @@ class InterviewStage(str, Enum):
 
 
 class Question(BaseModel):
+    """一道面试题。
+    Sprint 5.5 起:
+    - competency_id 改 Optional: self_intro 题不挂任何 competency (用 None);
+      Evaluator 聚合时 q.competency_id == comp.competency_id 对 None 自动 False,
+      所以 self_intro 不污染任何 DimensionScore。
+    - 新增 lazy: 标志该题"计划走懒生成路径"(project stage 用), plan 时设死;
+      `text == ""` 才是动态"是否已生成"的信号, 两个 signal 正交。
+      生成后 lazy 保留 True 作 HR 审计可见性, 不被回写覆盖。"""
     question_id: str = Field(default_factory=_new_id)
-    competency_id: str                       # 所属考察维度
+    # self_intro 题 None; 其他题挂某个 competency
+    competency_id: str | None = None
     text: str
     type: QuestionType = QuestionType.OPEN
     category: QuestionCategory = QuestionCategory.KNOWLEDGE
+    # Sprint 5.5: True 表示"计划懒生成"(plan 阶段只占位 text=""),
+    # 进入对应 stage 时 orchestrator 调 planner.resolve_lazy_questions 回灌 text。
+    # 静态信号: 生成后不清零, 用 text != "" 判已生成。
+    lazy: bool = False
     # Sprint 3-5 溯源 (knowledge 题): 从 SeedQuestion 召回 + LLM 精修时, 记录原题 id;
     # None 表示走的是 fallback / 现场生成路径, 没有题库来源。
     source_question_id: str | None = None
@@ -133,10 +146,16 @@ class InterviewRound(BaseModel):
 
 
 class InterviewPlan(BaseModel):
-    """Planner 的输出, Interviewer 的依据。"""
+    """Planner 的输出, Interviewer 的依据。
+    Sprint 5.5: 加 competencies 顶层作权威 competency 列表 (跨 stage 共享);
+    round.competencies 仍保留为该 stage 涉及的子集 (用于 HR stage 视图展示),
+    但 Evaluator / 聚合一律走 plan.competencies。
+    老 Plan JSON 缺 competencies 时默认 [], Evaluator 会得到空 content_scores ——
+    实际触发是 5.5 之后新生成的 plan, 老 plan 走完 finalize 不重跑就无影响。"""
     plan_id: str = Field(default_factory=_new_id)
     job_id: str
     rounds: list[InterviewRound]
+    competencies: list[Competency] = []
 
 
 # ---------- 面试过程 ----------

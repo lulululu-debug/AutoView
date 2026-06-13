@@ -115,19 +115,20 @@ class RagHitTests(_PlannerRagBase):
         finally:
             restore()
 
-        # 3) knowledge 题 (前两道) 应当都有 source_question_id 指向种子
-        questions = p.rounds[0].questions
+        # Sprint 5.5: lateral track 1 knowledge (tech), 3 project (lazy 占位)
+        questions = [q for r in p.rounds for q in r.questions]
         knowledge_q = [q for q in questions if q.category == QuestionCategory.KNOWLEDGE]
-        self.assertEqual(len(knowledge_q), 2)
-        srcs = {q.source_question_id for q in knowledge_q}
-        self.assertEqual(srcs, {"seed-tech-001", "seed-comm-001"})
+        self.assertEqual(len(knowledge_q), 1, "lateral 1 道 knowledge")
+        # tech 维度的种子题应当被命中
+        self.assertEqual(knowledge_q[0].source_question_id, "seed-tech-001")
 
-        # 4) project 题 (后两道) source 应当是 None (Sprint 3-5 还没接 Resume RAG)
+        # project 题在 plan 阶段是 lazy 占位, source_question_id 不取自 knowledge 题库
         project_q = [
             q for q in questions if q.category == QuestionCategory.PROJECT_EXPERIENCE
         ]
-        self.assertEqual(len(project_q), 2)
+        self.assertEqual(len(project_q), 3, "lateral 3 道 project")
         self.assertTrue(all(q.source_question_id is None for q in project_q))
+        self.assertTrue(all(q.lazy for q in project_q), "project 题在 plan 阶段都是 lazy")
 
     def test_llm_stub_falls_back_to_seed_text_but_keeps_source(self):
         """题库有题 + embed 可用 + LLM stub 时, 应当用种子题原文且仍记 source。"""
@@ -149,10 +150,12 @@ class RagHitTests(_PlannerRagBase):
         finally:
             restore()
 
+        # Sprint 5.5: lateral 1 knowledge, 走遍 rounds
         knowledge_q = [
-            q for q in p.rounds[0].questions
+            q for r in p.rounds for q in r.questions
             if q.category == QuestionCategory.KNOWLEDGE
         ]
+        self.assertTrue(len(knowledge_q) >= 1)
         for q in knowledge_q:
             self.assertTrue(q.source_question_id in {"seed-T", "seed-C"})
             self.assertIn("种子题", q.text, "LLM stub 时应当用种子原文")
@@ -162,7 +165,7 @@ class ProjectRagHitTests(_PlannerRagBase):
     """Resume 已 ingest 时, project 题应当带 source_chunk_ids。"""
 
     def test_project_questions_carry_chunk_ids_when_resume_ingested(self):
-        from src.agents.planner import plan
+        from src.agents.planner import plan, resolve_lazy_questions
         from src.ingestion import ingest_resume
         from src.schemas import (
             CandidateProfile, JobContext, QuestionCategory,
@@ -185,31 +188,32 @@ class ProjectRagHitTests(_PlannerRagBase):
                 resume="dummy resume",  # planner 内部读切片不读这个
                 projects=[],
             )
-            p = plan(job, cand)
+            # Sprint 5.5: project 题 plan 阶段只占位, resolve_lazy 时才走 Resume RAG
+            p = resolve_lazy_questions(plan(job, cand), job, cand)
         finally:
             restore()
 
-        # 2) project 题应当都有 source_chunk_ids
+        # 2) project 题应当都有 source_chunk_ids (lateral 3 道)
         project_q = [
-            q for q in p.rounds[0].questions
+            q for r in p.rounds for q in r.questions
             if q.category == QuestionCategory.PROJECT_EXPERIENCE
         ]
-        self.assertEqual(len(project_q), 2)
+        self.assertEqual(len(project_q), 3, "lateral 3 道 project")
         for q in project_q:
+            self.assertTrue(q.lazy, "lazy 静态信号生成后仍 True 作审计")
             self.assertGreater(
                 len(q.source_chunk_ids), 0,
                 f"project 题应当带 source_chunk_ids; 实际题目: {q.text}",
             )
-            # 切片 id 应当遵循 ingestion 的命名 "{cand_id}:resume:{idx}"
             for cid in q.source_chunk_ids:
                 self.assertTrue(
                     cid.startswith(f"{cand_id}:resume:"),
                     f"chunk_id 格式不对: {cid}",
                 )
 
-        # 3) knowledge 题不应该有 source_chunk_ids (Milvus 没题库)
+        # 3) knowledge 题不应该有 source_chunk_ids (那是 project 路径的溯源)
         knowledge_q = [
-            q for q in p.rounds[0].questions
+            q for r in p.rounds for q in r.questions
             if q.category == QuestionCategory.KNOWLEDGE
         ]
         for q in knowledge_q:

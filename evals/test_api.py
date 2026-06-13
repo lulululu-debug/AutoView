@@ -18,6 +18,35 @@ from fastapi.testclient import TestClient
 from api.main import API_TITLE, API_VERSION, create_app
 
 
+# Sprint 5.5: lateral plan 默认 7 题 (self_intro+project*3+scenario*2+knowledge*1)。
+# 每条答案 >60 字 + 含 _SPECIFICITY_HINTS 至少一个 ("比如"/"我们"/"结果"/"%"),
+# 避免现行 Interviewer 启发式触发额外追问让 walk 超出 pool。
+# 池子放 10 条留 buffer; walk loop 自带 done short-circuit, 多余的不消费。
+# task 4 接 FollowUpPolicy 之后, self_intro 强制 0 追问, 这里的约束会进一步放宽。
+_PROVEN_ANSWERS = [
+    "我是张三, 后端 4 年, 比如最近在订单和对账中台做高可用 + 性能, "
+    "我们组同时把 P99 从 800ms 降到 350ms, 结果对线上影响很可控。",
+    "去年大促前订单 P99 从 800ms 涨到 2s, 比如复合索引失效 + 热点 key 击穿, "
+    "我们加回索引并改造成本地缓存 + Redis 二级缓存, 结果 P99 回到 350ms。",
+    "对账中台日处理 2 亿笔, 早期延迟 30 分钟+。我们改成分桶 + 并行 + 幂等键 + Kafka 回放, "
+    "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
+    "我会先用数据让对方理解我担心的点, 比如拉一份线上回放, "
+    "我们再一起定义可灰度的中间方案, 结果上半年风控争议就这么收的。",
+    "前 5 分钟先看链路 RT 和错误率分布, 比如下游谁慢、是不是热点 key, "
+    "我们再决定先扩容还是先限流, 结果优先选不破坏可观测性的动作。",
+    "我先在群里说定位到根因 + ETA 15 分钟, 比如先告知业务 PM 影响范围, "
+    "我们再 1on1 同步细节, 结果对外口径不会跑偏。",
+    "我对 CAP 的理解是: P 是默认前提, 比如订单状态我们选 C 用强一致状态机, "
+    "结果不会出现『已支付未发货』那种异常态。",
+    "补一句: A/B 实验里我们最看重误判, 比如下游业务对一致性敏感, "
+    "结果会让我们倾向保守的发布节奏。",
+    "再补一段: 我会把 SLO 和 SLA 拆开看, 比如 SLA 是对外承诺, 我们内部 SLO 留 buffer, "
+    "结果 oncall 不会被边界值反复打扰。",
+    "最后补一段: 灰度策略上, 比如订单类我们走 1% → 10% → 全量, "
+    "结果异常能在 10% 之前被捕获。",
+]
+
+
 class HealthEndpointTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -154,7 +183,10 @@ class CreateCandidateTests(unittest.TestCase):
         # PG
         plan_pg = load_latest_plan_for_candidate(cid)
         self.assertIsNotNone(plan_pg, "Planner 应当已写 PG")
-        self.assertEqual(len(plan_pg.rounds[0].questions), 4, "骨架: 4 题")
+        # Sprint 5.5: 默认 lateral track 4 stage 7 题
+        total = sum(len(r.questions) for r in plan_pg.rounds)
+        self.assertEqual(len(plan_pg.rounds), 4, "lateral 4 stage 序列")
+        self.assertEqual(total, 7, "lateral 配比 1+3+2+1")
         # Redis
         plan_redis = cache.load_plan(plan_pg.plan_id)
         self.assertIsNotNone(plan_redis, "Planner 应当已写 Redis")
@@ -192,8 +224,10 @@ class CreateCandidateTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         plan = r.json()
         self.assertEqual(plan["job_id"], self.job.job_id)
-        self.assertEqual(len(plan["rounds"]), 1)
-        self.assertEqual(len(plan["rounds"][0]["questions"]), 4)
+        # Sprint 5.5: 默认 lateral track 4 stage 7 题
+        self.assertEqual(len(plan["rounds"]), 4)
+        total = sum(len(r["questions"]) for r in plan["rounds"])
+        self.assertEqual(total, 7)
 
     def test_get_plan_404_when_candidate_not_in_job(self):
         """安全: candidate_id 不在该 job 下的, 不能跨 job 偷看 plan。"""
@@ -320,30 +354,14 @@ class InterviewSessionTests(unittest.TestCase):
         此处仅验证走到 done 后状态机正确流转 (Redis 里 status=COMPLETED, 不在 PG)。"""
         start = self._start()
         sid = start["session_id"]
-        # 沿用 src/main.py 那套答案: 首答短触发追问, 后四答含 specificity hints
-        # (比如 / 我们 / 结果 / %) 避免重复触发, 一共 5 turn 走到 done。
-        answers = [
-            "做过一些性能优化, 主要是慢查询和缓存。",
-            "比如去年大促前, 订单查询 P99 从 800ms 涨到 2s。"
-            "我们排查发现是某个复合索引被改后失效, 同时 Redis 出现热点 key 击穿。"
-            "我加回索引并改造为本地缓存 + Redis 二级缓存, 最终 P99 回到 350ms。",
-            "通常我会先用数据让对方理解我担心的点, 比如拉一份线上回放或历史 case,"
-            "再一起定义可灰度的中间方案; 我们组上半年的风控规则争议就是这么收的。",
-            "对账中台那段最有挑战。日处理 2 亿笔, 早期对账延迟超过 30 分钟。"
-            "我们把单表对账改成分桶 + 并行 worker, 引入幂等键, 用 Kafka 做回放,"
-            "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
-            "上半年风控那次, 产品要求 24 小时内全量, 我担心误杀率。"
-            "我拉了 SRE 一起跑离线回放, 用数据让产品同意先灰度 5%, 一周后再全量,"
-            "误杀率从 3.1% 降到 0.4% 才放开。",
-        ]
         done = False
-        for ans in answers:
+        for ans in _PROVEN_ANSWERS:
             r = self.client.post(f"/interviews/{sid}/answers", json={"text": ans})
             self.assertEqual(r.status_code, 200)
             if r.json()["done"]:
                 done = True
                 break
-        self.assertTrue(done, "5 条回答应当能走到 done")
+        self.assertTrue(done, "答案池应当能走到 done")
         # 已 COMPLETED 还在 Redis (没 finalize), 再 submit 应当 409
         r = self.client.post(f"/interviews/{sid}/answers", json={"text": "再答一句"})
         self.assertEqual(r.status_code, 409)
@@ -356,27 +374,11 @@ class InterviewSessionTests(unittest.TestCase):
 
     # ----- GET /interviews/{id}/report (Sprint 2-6) -----
 
-    _PROVEN_ANSWERS = [
-        # 同 Sprint 0: 首答短 -> fu, 后四答含 specificity hints 不触发 fu, 总 5 turn 走完
-        "做过一些性能优化, 主要是慢查询和缓存。",
-        "比如去年大促前, 订单查询 P99 从 800ms 涨到 2s。"
-        "我们排查发现是某个复合索引被改后失效, 同时 Redis 出现热点 key 击穿。"
-        "我加回索引并改造为本地缓存 + Redis 二级缓存, 最终 P99 回到 350ms。",
-        "通常我会先用数据让对方理解我担心的点, 比如拉一份线上回放或历史 case,"
-        "再一起定义可灰度的中间方案; 我们组上半年的风控规则争议就是这么收的。",
-        "对账中台那段最有挑战。日处理 2 亿笔, 早期对账延迟超过 30 分钟。"
-        "我们把单表对账改成分桶 + 并行 worker, 引入幂等键, 用 Kafka 做回放,"
-        "结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
-        "上半年风控那次, 产品要求 24 小时内全量, 我担心误杀率。"
-        "我拉了 SRE 一起跑离线回放, 用数据让产品同意先灰度 5%, 一周后再全量,"
-        "误杀率从 3.1% 降到 0.4% 才放开。",
-    ]
-
     def _walk_to_done(self) -> str:
         """开一次会话, 喂答案到 done, 返回 session_id。"""
         start = self._start()
         sid = start["session_id"]
-        for ans in self._PROVEN_ANSWERS:
+        for ans in _PROVEN_ANSWERS:
             r = self.client.post(f"/interviews/{sid}/answers", json={"text": ans})
             if r.json()["done"]:
                 return sid

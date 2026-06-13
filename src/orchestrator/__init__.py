@@ -82,6 +82,10 @@ def start_session(
     """
     if plan is None:
         plan = planner.plan(job, candidate)
+    # Sprint 5.5 task 3: 在 session 开始时把 lazy 占位题先回灌掉, 让 Interviewer
+    # 能正常 ask. task 4 会把这个 resolve 挪到 project stage 入口, 并喂 intro_text;
+    # 当前 intro_text="" 等于沿用 Sprint 3 的 Resume RAG 现场生成路径。
+    plan = planner.resolve_lazy_questions(plan, job, candidate)
     session = InterviewSession(
         plan_id=plan.plan_id,
         job_id=job.job_id,

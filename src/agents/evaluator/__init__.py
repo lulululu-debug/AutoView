@@ -169,7 +169,15 @@ def evaluate(
 ) -> EvaluationReport:
     """Evaluator 入口: Session + Plan + (可选) Signals -> EvaluationReport。"""
     signals = signals or []
-    comps = [c for r in plan.rounds for c in r.competencies]
+    # Sprint 5.5: plan.competencies 是顶层权威列表 (跨 stage 共享去重);
+    # round.competencies 退化为该 stage 的子集视图, 仅供 HR 阶段视图使用。
+    # 老 plan (Sprint 5.5 之前) plan.competencies 为空时回退到 round 聚合,
+    # 兼容老 session 重跑 evaluate 的场景。
+    comps = list(plan.competencies) or [
+        c for r in plan.rounds for c in r.competencies
+    ]
+    # 注: self_intro 题 competency_id=None, 自动不匹配任何 comp.competency_id,
+    # 所以不会进任何 DimensionScore.evidence —— 符合设计意图。
     questions = [q for r in plan.rounds for q in r.questions]
 
     content_scores = [_score_for_competency(c, questions, session) for c in comps]
