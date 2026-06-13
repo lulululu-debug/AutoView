@@ -89,6 +89,8 @@ export type Health = {
   version: string;
 };
 
+export type Track = "campus" | "lateral";
+
 export type JobContext = {
   job_id: string;
   title: string;
@@ -96,6 +98,7 @@ export type JobContext = {
   requirements: string[];
   company_materials: string;
   role_family: string;
+  track: Track;
 };
 
 export type CandidateCreate = {
@@ -265,6 +268,7 @@ export const api = {
     jd: string;
     requirements: string[];
     company_materials: string;
+    track: Track;
   }) =>
     request<JobContext>("/jobs", {
       method: "POST",

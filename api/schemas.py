@@ -14,16 +14,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class JobCreate(BaseModel):
-    """POST /jobs 请求体: server 自己生成 job_id, 客户端不传。"""
+    """POST /jobs 请求体: server 自己生成 job_id, 客户端不传。
+    Sprint 5.5: track 决定面试 stage 序列 + 各 stage 题数配比, 默认 lateral。"""
     title: str = Field(..., min_length=1, description="职位标题")
     jd: str = Field(..., min_length=1, description="职位描述原文 JD")
     requirements: list[str] = Field(default_factory=list, description="岗位要求列表")
     company_materials: str = Field(default="", description="公司资料(后期做 RAG 切片)")
+    track: Literal["campus", "lateral"] = Field(
+        default="lateral",
+        description="招聘类型: campus 校招 / lateral 社招",
+    )
 
 
 class CandidateCreate(BaseModel):

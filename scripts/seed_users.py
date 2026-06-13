@@ -18,7 +18,9 @@ import sys
 
 from src import auth, db
 from src.schemas import User
+from dotenv import load_dotenv
 
+load_dotenv()
 log = logging.getLogger(__name__)
 
 _ALLOWED_ROLES = ("hr", "admin")
