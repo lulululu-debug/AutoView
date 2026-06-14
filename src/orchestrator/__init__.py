@@ -191,10 +191,14 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
         cache.save_session(session)
         return TurnResult(session_id=session_id, done=True)
 
-    # 若下一题是 lazy 占位, 现场 resolve 整 plan, 写回 cache, 找到回灌后的题。
+    # 若下一题是 lazy 占位, 现场 resolve 整 plan, 写回 cache + PG, 找到回灌后的题。
     if isinstance(nxt, Question) and nxt.lazy and not nxt.text:
         plan = _resolve_lazy_now(plan, session)
         cache.save_plan(plan)
+        # Sprint 5.8 patch: 同步把 resolve 后的 plan 写回 PG, 让 HR 端 StageView
+        # (走 GET /jobs/{j}/candidates/{c}/plan 拉 PG) 显示已生成的项目题 text;
+        # 不然 finalize 之后永远显示 "待懒生成"。
+        _persist_resolved_plan(plan)
         nxt = _find_question(plan, nxt.question_id) or nxt
 
     ref_id = _append_interviewer_turn(session, nxt)
@@ -231,6 +235,28 @@ def _resolve_lazy_now(plan: InterviewPlan, session: InterviewSession) -> Intervi
     return planner.resolve_lazy_questions(
         plan, job, candidate, intro_text=session.intro_text,
     )
+
+
+def _persist_resolved_plan(plan: InterviewPlan) -> None:
+    """Sprint 5.8 patch: 把 resolve 后的 plan 写回 PG。
+    PG.InterviewPlanORM 是按 candidate_id 落的, 反查一次拿 id。
+    内存路径 (run_interview / src.main 没 candidate 在 PG) 直接静默吞,
+    不阻塞面试链路。"""
+    candidate = db.load_candidate_for_plan(plan.plan_id)
+    if candidate is None or candidate.candidate_id is None:
+        log.info(
+            "resolved plan 没找到对应 candidate, 跳过 PG sync (plan_id=%s)",
+            plan.plan_id,
+        )
+        return
+    try:
+        db.save_plan(plan, candidate_id=candidate.candidate_id)
+    except Exception:
+        # PG 写挂不能让面试停 (Redis 那份 plan 已 saved); 只 log + 继续
+        log.exception(
+            "persist resolved plan to PG 失败 (plan_id=%s), Redis 那份仍有效",
+            plan.plan_id,
+        )
 
 
 def resume_session(session_id: str) -> TurnResult:
