@@ -66,18 +66,18 @@ export default function CandidateDetailPage({
       ]);
       let report: EvaluationReport | null = null;
       let review: ReviewRecord | null = null;
-      let plan: InterviewPlan | null = null;
+      // Sprint 5.5: plan 单独拉 (plan_pending 状态下 plan 未生成会 404, 静默吞);
+      // 用于 HR 看面试 stage 视图 + report 里 competency 名映射。
+      const plan: InterviewPlan | null = await api
+        .getCandidatePlan(jobId, candidateId)
+        .catch(() => null as InterviewPlan | null);
       if (
         (candidate.status === "completed" || candidate.status === "reviewed") &&
         candidate.report_id
       ) {
-        [report, review, plan] = await Promise.all([
+        [report, review] = await Promise.all([
           api.getReport(candidate.report_id),
           api.getReview(candidate.report_id),
-          // plan 拉失败不致命: 没有 plan 时, competency 名退到 id 显示
-          api
-            .getCandidatePlan(jobId, candidateId)
-            .catch(() => null as InterviewPlan | null),
         ]);
       }
       setState({
@@ -194,6 +194,8 @@ function Detail({
         />
       )}
 
+      {plan && <StageView plan={plan} />}
+
       {(candidate.status === "completed" || candidate.status === "reviewed") &&
         report && (
           <>
@@ -207,6 +209,131 @@ function Detail({
           </>
         )}
     </div>
+  );
+}
+
+// ---------- 面试阶段视图 (Sprint 5.5 task 5) ----------
+
+const STAGE_LABEL: Record<string, string> = {
+  self_intro: "自我介绍",
+  knowledge: "基础知识",
+  project: "项目深挖",
+  scenario: "场景题",
+};
+
+const STAGE_BADGE_COLOR: Record<string, string> = {
+  self_intro:
+    "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  knowledge:
+    "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300",
+  project:
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+  scenario:
+    "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+};
+
+/**
+ * 给一道题计算来源标签。每类 category 各自的溯源字段:
+ * - knowledge / scenario: source_question_id 指向 SeedQuestion 题库行
+ * - project_experience:   source_chunk_ids 指向 Resume 切片
+ * - self_intro:           Planner 固定模板, 无溯源
+ */
+function describeSource(q: {
+  category: string;
+  source_question_id: string | null;
+  source_chunk_ids: string[];
+  lazy: boolean;
+  text: string;
+}): { label: string; tone: "muted" | "info" } {
+  if (q.category === "self_intro") {
+    return { label: "固定模板", tone: "muted" };
+  }
+  if (q.category === "knowledge" || q.category === "scenario") {
+    if (q.source_question_id) {
+      return {
+        label: `题库 ${q.source_question_id.slice(0, 10)}`,
+        tone: "info",
+      };
+    }
+    return { label: "LLM 生成 (无题库匹配)", tone: "muted" };
+  }
+  if (q.category === "project_experience") {
+    if (q.source_chunk_ids.length > 0) {
+      return {
+        label: `Resume 切片 ×${q.source_chunk_ids.length}`,
+        tone: "info",
+      };
+    }
+    if (q.lazy && !q.text) {
+      return { label: "待懒生成", tone: "muted" };
+    }
+    return { label: "Resume 全文 fallback", tone: "muted" };
+  }
+  return { label: q.category, tone: "muted" };
+}
+
+function StageView({ plan }: { plan: InterviewPlan }) {
+  return (
+    <section className="mb-8">
+      <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-wide mb-3">
+        面试阶段 ({plan.rounds.length} 个 stage,{" "}
+        {plan.rounds.reduce((n, r) => n + r.questions.length, 0)} 道题)
+      </h2>
+      <div className="space-y-3">
+        {plan.rounds.map((round) => (
+          <div
+            key={round.round_id}
+            className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4"
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <span
+                className={`text-xs px-2 py-0.5 rounded uppercase tracking-wide ${
+                  STAGE_BADGE_COLOR[round.stage] ?? STAGE_BADGE_COLOR.knowledge
+                }`}
+              >
+                {STAGE_LABEL[round.stage] ?? round.stage}
+              </span>
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                {round.questions.length} 题
+              </span>
+            </div>
+            <ul className="space-y-2">
+              {round.questions.map((q, idx) => {
+                const src = describeSource(q);
+                return (
+                  <li
+                    key={q.question_id}
+                    className="border-l-2 border-zinc-200 dark:border-zinc-700 pl-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed">
+                        <span className="text-zinc-400 tabular-nums mr-2">
+                          {idx + 1}.
+                        </span>
+                        {q.text || (
+                          <span className="text-zinc-400 italic">
+                            (待生成 — 候选人进入此 stage 时由 Resume RAG 现场生成)
+                          </span>
+                        )}
+                      </p>
+                      <span
+                        className={`text-xs whitespace-nowrap px-1.5 py-0.5 rounded shrink-0 font-mono ${
+                          src.tone === "info"
+                            ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                            : "text-zinc-400"
+                        }`}
+                      >
+                        {src.label}
+                      </span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

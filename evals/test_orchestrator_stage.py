@@ -32,6 +32,25 @@ def _short_intro() -> str:
     return "我叫张三, 后端 4 年。"
 
 
+def _CAMPUS_REST_ANSWERS() -> list[str]:
+    """campus 路径剩 6 道题的答案。stage 顺序: knowledge*3, project*2, scenario*1。
+    每条 >60 字 + 含 hint ("比如" / "我们" / "结果" / "%"), 防 followup 把题数推爆。"""
+    return [
+        "在分布式场景里, 比如订单服务, 我们用一致性哈希分桶 + 副本备份, "
+        "结果 P99 在大促也稳定在 80ms 以内, 没出现热点 key 击穿的情况。",
+        "缓存与 DB 一致性, 比如订单写入我们走 write-through + Cache Aside, "
+        "结果一致性窗口控制在 5ms 内, 业务感知不到不一致。",
+        "我会先用数据让对方理解风险, 比如拉历史 incident 复盘记录, "
+        "我们再共同定灰度方案, 结果上半年风控争议这么收的, 没有回滚。",
+        "比如订单 P99 优化, 我们改本地缓存 + Redis 二级缓存, "
+        "结果 P99 从 800ms 回到 350ms, 漏对率从 0.4‰ 降到 0.02‰。",
+        "对账中台从 0 到 1, 比如分桶并行 + 幂等键 + Kafka 回放, "
+        "我们结果延迟从 30 分钟降到 3 分钟, 漏对率显著下降。",
+        "前 5 分钟先看链路 RT, 比如下游谁慢、是不是热点 key, "
+        "我们再决定是先扩容还是先限流, 结果优先不破坏可观测性。",
+    ]
+
+
 def _LATERAL_REST_ANSWERS() -> list[str]:
     """self_intro 之后剩下 6 道题的答案。每条 >60 字 + 含 hint, 防 followup。
     顺序: project*3, scenario*2, knowledge*1。"""
@@ -162,6 +181,146 @@ class StageTransitionTests(unittest.TestCase):
 
         report = finalize(sid)
         # 内容维度 = plan.competencies 数 (2)
+        self.assertEqual(len(report.content_scores), 2)
+
+
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
+    "需要 POSTGRES_URL + REDIS_URL 跑 orchestrator 状态机",
+)
+class IntroTextFlowsIntoProjectPromptTests(unittest.TestCase):
+    """Sprint 5.5 task 4 核心承诺: project 题在 lazy gen 时把 intro_text 喂进 LLM,
+    让题目真正反映候选人自我介绍里提到的内容。
+    用魔法字符串 + monkey-patch llm.complete 验证流转链路。"""
+
+    MAGIC = "ZQ8X-INTRO-MARKER-9K7P"
+
+    @classmethod
+    def setUpClass(cls):
+        from src import db
+        from src.agents import planner
+        from src.schemas import CandidateProfile, JobContext, Track
+        db.init_db()
+        job = JobContext(
+            title="后端工程师", jd="负责核心交易系统的稳定性与性能。",
+            requirements=["分布式"], track=Track.LATERAL,
+        )
+        candidate = CandidateProfile(
+            job_id=job.job_id,
+            resume="王五 / 后端 / 5 年。订单 P99 优化; 风控引擎。",
+            projects=["订单 P99 优化"],
+        )
+        plan = planner.plan(job, candidate)
+        db.save_job(job)
+        db.save_candidate(candidate)
+        db.save_plan(plan, candidate.candidate_id)
+        cls.job = job
+        cls.candidate = candidate
+        cls.plan = plan
+
+    def test_intro_text_appears_in_some_project_llm_prompt(self):
+        """流转链路:
+        candidate self_intro 答 -> orchestrator.submit_answer 落 session.intro_text
+        -> 下一题 lazy + empty -> _resolve_lazy_now -> planner.resolve_lazy_questions
+        -> _project_question 把 intro_text 拼进 user prompt -> llm.complete
+
+        验证: monkey-patch llm.complete 记录所有调用, 至少有一条 user prompt
+        包含 magic marker (= 候选人自我介绍内容)。"""
+        from src import llm
+        from src.orchestrator import start_session, submit_answer
+
+        # 记录所有 LLM 调用的 (system, user)
+        recorded: list[tuple[str, str]] = []
+        original = llm.complete
+
+        def recording_complete(system: str, user: str, **kwargs) -> str:
+            recorded.append((system, user))
+            return original(system, user, **kwargs)
+
+        llm.complete = recording_complete  # type: ignore[assignment]
+        try:
+            result = start_session(self.job, self.candidate, plan=self.plan)
+            # self_intro 答案带魔法字 (真实候选人不会这么答, 但模拟"独特识别串"是有效手段)
+            intro_with_marker = (
+                f"我是王五, 比如最近做订单 P99 优化, 我们结果把 P99 从 800ms "
+                f"降到 350ms。我的项目里有个特殊标识 {self.MAGIC} 用来测试链路。"
+            )
+            submit_answer(result.session_id, intro_with_marker)
+        finally:
+            llm.complete = original  # type: ignore[assignment]
+
+        # 项目题 lazy gen 必触发至少一次包含 marker 的 LLM 调用
+        # (3 道 project 题用同一份 intro_text, 至少 1-3 次 user prompt 含 marker)
+        marker_prompts = [
+            (s, u) for (s, u) in recorded if self.MAGIC in u
+        ]
+        self.assertGreater(
+            len(marker_prompts), 0,
+            f"intro_text 应至少出现在一次 LLM 调用的 user prompt 里. "
+            f"记录到 {len(recorded)} 次调用, 系统提示样本: "
+            f"{[s[:40] for s, _ in recorded[:5]]}",
+        )
+        # 进一步: 包含 marker 的 system prompt 应当是项目题生成的 (含"项目"或"深挖")
+        for system, _ in marker_prompts:
+            self.assertTrue(
+                "项目" in system or "深挖" in system,
+                f"含 intro marker 的应当是项目题生成 prompt, 实际 system: {system[:80]}",
+            )
+
+
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
+    "需要 POSTGRES_URL + REDIS_URL 跑 orchestrator 状态机",
+)
+class CampusEndToEndTests(unittest.TestCase):
+    """端到端跑 campus track: self_intro -> knowledge*3 -> project*2 -> scenario."""
+
+    @classmethod
+    def setUpClass(cls):
+        from src import db
+        from src.agents import planner
+        from src.schemas import CandidateProfile, JobContext, Track
+        db.init_db()
+        job = JobContext(
+            title="校招后端工程师", jd="负责核心交易系统的稳定性与性能。",
+            requirements=["分布式", "数据库优化"],
+            track=Track.CAMPUS,
+        )
+        candidate = CandidateProfile(
+            job_id=job.job_id,
+            resume="李四 / 2025 届硕士 / 实习: 订单系统 P99 优化。",
+            projects=["订单系统 P99 优化"],
+        )
+        plan = planner.plan(job, candidate)
+        db.save_job(job)
+        db.save_candidate(candidate)
+        db.save_plan(plan, candidate.candidate_id)
+        cls.job = job
+        cls.candidate = candidate
+        cls.plan = plan
+
+    def test_plan_shape_matches_campus_config(self):
+        """sprint 5.5 spec: campus 7-8 题; 当前硬编码 1+3+2+1=7。
+        断言 stage 序列正确 + 题数在 7-8 范围。"""
+        stages = [r.stage.value for r in self.plan.rounds]
+        self.assertEqual(stages, ["self_intro", "knowledge", "project", "scenario"])
+        total = sum(len(r.questions) for r in self.plan.rounds)
+        self.assertIn(total, (7, 8), f"campus 应当 7-8 题, 实际 {total}")
+
+    def test_full_campus_walk_to_done(self):
+        """campus 走完 7 题 (1 self_intro + 6 其他), finalize 拿报告。"""
+        from src.orchestrator import finalize, start_session, submit_answer
+        result = start_session(self.job, self.candidate, plan=self.plan)
+        sid = result.session_id
+        # self_intro
+        result = submit_answer(sid, _short_intro())
+        # 剩下 6 道 (knowledge*3 -> project*2 -> scenario*1)
+        for ans in _CAMPUS_REST_ANSWERS():
+            if result.done:
+                break
+            result = submit_answer(sid, ans)
+        self.assertTrue(result.done, "campus 走完应当 done")
+        report = finalize(sid)
         self.assertEqual(len(report.content_scores), 2)
 
 
