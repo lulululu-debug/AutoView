@@ -316,6 +316,76 @@ track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
 
 ---
 
+## Sprint 5.8 — 运维收尾（PDF Resume + Cookie 鉴权 + 追问 UI）
+
+> Sprint 5/5.5 留的债。不动 agent 内核, 把"先 paste / localStorage / 后端默认"
+> 三处临时方案换成 prod-ready 的版本。Sprint 6 视频面试不依赖本 sprint, 但
+> 上 prod 前必须做完 (Cookie + Secure flag + CORS 是安全前提)。
+
+**背景**: Sprint 4-5 推进过程中, 三个不影响 agent 决策、但影响候选人 / HR 实际
+体验和上 prod 的项被一路推到 Sprint 6 / 5.8: (1) Resume 文件上传 (现在只能 paste);
+(2) HR JWT 还在 localStorage (XSS 抗性弱于 httpOnly cookie); (3) HR 没法调
+"每题最多追问次数" (只能改后端默认重启)。本 sprint 一并收尾。
+
+- [ ] **PDF/docx Resume 解析端点**：
+      新 `POST /jobs/{job_id}/candidates/parse-resume` 接 multipart, 返回
+      `{parsed_text: str}`; 前端把 parsed_text 填回现有 textarea, 用户可编辑后
+      走旧 `POST .../candidates {resume: text}` 提交 (现有 JSON 端点保持纯净)；
+      库选型: `pypdf` (PDF) + `python-docx` (docx), 都加进 pyproject.toml；
+      校验: 文件大小 ≤ 5 MB; mime + extension 双判 (`application/pdf` + `.pdf`
+      / `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+      + `.docx`); 解析后文本 <100 字符直接 422 "解析失败, 请贴文本" (兜底扫描件)。
+
+- [ ] **Cookie httpOnly + SameSite=Strict 鉴权升级**：
+      `POST /auth/login` 同时 set httpOnly cookie (HttpOnly / SameSite=Strict /
+      Path=/ / Max-Age=JWT_EXPIRE_MINUTES*60) **和** 返 access_token JSON
+      (转期共存, 让 evals + 脚本继续用 Bearer 头不用全改); Secure 标志由
+      新 env `JWT_COOKIE_SECURE=false` 控制 (dev http 默 false, prod 翻 true);
+      `require_hr_user` 先读 Cookie 未命中再读 `Authorization: Bearer`
+      (双路径, 至少保留到 Sprint 6+);
+      新 `GET /auth/me` 走 `require_hr_user` 返 `{username, role}`, HrGuard
+      改成调它判 session 有效;
+      新 `POST /auth/logout` Set-Cookie Max-Age=0 把 token 清掉;
+      CORS 从 `allow_origins=["*"]` 改成 explicit `["http://localhost:3000"]`
+      (dev) + `allow_credentials=True`, 用 env `CORS_ALLOW_ORIGINS` 配。
+
+- [ ] **前端鉴权切 Cookie**：
+      `web/src/lib/auth.ts` 改成 noop: readToken 返 null, writeToken 不写
+      localStorage (cookie 由后端 set); fetch 全局加 `credentials: "include"`
+      让 cookie 自动带上; HrGuard 改成调 `GET /auth/me` 判 session
+      (401 -> 跳登录); 退出按钮调 `POST /auth/logout`; 旧 localStorage
+      token 在 Sprint 5.8 deploy 那一刻一次性清掉, evals 仍走 Bearer 头不变。
+
+- [ ] **`max_followups_per_question` HR UI**：
+      `web/src/app/hr/page.tsx` 高级折叠区加 1 个 NumberField "每题最多追问
+      次数 (0-3)", 整 job 一刀切。HR 不动 = 后端 null = stage 默认 (self_intro=0
+      / knowledge=1 / project=2 / scenario=2) 仍生效。文档写明: 即使 HR 设
+      max=2, Interviewer 的 SELF_INTRO 类别二次保护仍在 (
+      `if question.category is SELF_INTRO: return False`), 自我介绍永远 0 次追问。
+
+- [ ] **eval 护栏**：
+      `evals/test_parse_resume.py`: 用 mock PDF/docx bytes 跑端点, 验返回的
+      parsed_text 含已知 fixture 字符串; 大小超 5MB → 422; mime 不匹配 → 422;
+      解析后 <100 字 → 422。
+      `evals/test_auth_cookie.py`: 登录 Set-Cookie 含 HttpOnly / SameSite=Strict;
+      cookie 单独命中 require_hr_user (无 Bearer); Bearer 单独命中 (无 cookie);
+      logout 清空 cookie; GET /auth/me 返 user info; CORS preflight 含
+      Access-Control-Allow-Credentials。
+
+**完成标准**: 候选人能上传 PDF/docx Resume, 解析失败时优雅提示; HR JWT 走
+httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题最多
+追问次数"; evals 双路径 (Bearer + Cookie) 全绿。
+
+**显式不在 5.8 scope**:
+- `CompletionPolicy.mandatory_competencies` HR UI: 推后 Sprint 5.9+
+  (HR 在新建 job 时不知道 competency_id, 该字段需要"先建 job → plan 生成 →
+  回头编辑 mandatory" 编辑流程, 跟 5.8 "运维收尾" 不匹配; 维持默认 "全
+  plan.competencies 都 mandatory")
+- per-stage `max_followups_per_question` 配置: schema 改 + UI 改 + eval, 不在
+  5.8 范围内
+
+---
+
 ## Sprint 6 — 实时媒体（视频面试）
 
 - [ ] WebRTC 接入，候选人端音视频采集
