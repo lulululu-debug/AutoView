@@ -188,6 +188,63 @@ class StageTransitionTests(unittest.TestCase):
     os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
     "需要 POSTGRES_URL + REDIS_URL 跑 orchestrator 状态机",
 )
+class LazyResolveSyncsPgPlanTests(unittest.TestCase):
+    """Sprint 5.8 patch: lazy resolve 后 PG.plan_data 同步, 让 HR StageView
+    走 GET /jobs/{j}/candidates/{c}/plan (拉 PG) 不再永远显示"待懒生成"。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from src import db
+        from src.agents import planner
+        from src.schemas import CandidateProfile, JobContext, Track
+        db.init_db()
+        job = JobContext(
+            title="后端", jd="x", requirements=[], track=Track.LATERAL,
+        )
+        candidate = CandidateProfile(
+            job_id=job.job_id, resume="张三 / 后端 / 4年", projects=[],
+        )
+        plan = planner.plan(job, candidate)
+        db.save_job(job)
+        db.save_candidate(candidate)
+        db.save_plan(plan, candidate.candidate_id)
+        cls.job = job
+        cls.candidate = candidate
+        cls.plan = plan
+
+    def test_pg_plan_data_synced_after_lazy_resolve(self):
+        """submit self_intro 触发 resolve_lazy_questions, PG.plan_data 应当
+        反映 project 题已生成 (text 非空) + lazy 仍为 True (审计静态信号)。
+        在 patch 之前 PG.plan_data 是 stale 的 -> HR StageView 永远显示
+        "待懒生成"。"""
+        from src import db
+        from src.orchestrator import start_session, submit_answer
+
+        result = start_session(self.job, self.candidate, plan=self.plan)
+        sid = result.session_id
+        submit_answer(
+            sid,
+            "我是张三, 后端 4 年, 比如最近在订单系统做 P99 优化, 我们结果 P99 降到 350ms。",
+        )
+        pg_plan = db.load_latest_plan_for_candidate(self.candidate.candidate_id)
+        self.assertIsNotNone(pg_plan)
+        project_qs = [
+            q for r in pg_plan.rounds for q in r.questions
+            if r.stage.value == "project"
+        ]
+        self.assertTrue(project_qs)
+        for q in project_qs:
+            self.assertNotEqual(
+                q.text, "",
+                f"PG plan_data 里 project 题 text 应非空 (text='{q.text}')",
+            )
+            self.assertTrue(q.lazy, "lazy 静态信号生成后仍 True (审计)")
+
+
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
+    "需要 POSTGRES_URL + REDIS_URL 跑 orchestrator 状态机",
+)
 class IntroTextFlowsIntoProjectPromptTests(unittest.TestCase):
     """Sprint 5.5 task 4 核心承诺: project 题在 lazy gen 时把 intro_text 喂进 LLM,
     让题目真正反映候选人自我介绍里提到的内容。
