@@ -252,41 +252,67 @@ track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
 > "维度证据足够"。**显式不做动态补题**（可能无限循环 / 报告题目数对不上 plan /
 > 生成质量无保证）, 真要做单独立 5.8 评估风险后再决定。
 
-- [ ] **数据契约扩展**：
+- [x] **数据契约扩展**：
       `InterviewSession.assessments: list[AnswerAssessment] = []`（增量加 JSONB 列）；
       `EvaluationReport.competency_coverage: dict[str, float] = {}`（每维度证据
       充分性聚合, 0~1）；
       orchestrator.submit_answer 调 assessor 后把结果追加到 session.assessments
+      实际落地: assessments JSONB 列 ALTER 加完 (server_default '[]'); coverage
+      JSONB 列 ALTER 加完 (server_default '{}'); orchestrator.submit_answer 在
+      Sprint 5.6 已经追加 (ASSESSOR_ENABLED 启用时), 本 sprint 把它落 PG。
 
-- [ ] **HR 详情页 assessment 视图**：
+- [x] **HR 详情页 assessment 视图**：
       候选人详情页报告区上方加「面试过程」视图；
       每题展示 question + answer + assessment.missing_signals + concerns + strengths
       （展示自然语言字段比展示 sufficiency 数字可信）；
       followup 题展示 followup_goal（"为什么发这条追问"）；
       **不**让 HR 直接看 sufficiency 数字（避免被无校准模型误导）
+      实际落地: AssessmentView 在 StageView 与 ReportView 之间; 按
+      interviewer/candidate turn 配对显示, followup turn 借父题 followup_goal
+      解释"为什么追问"; sufficiency / confidence 字段在 API 返回但前端 UI 不
+      渲染 (合规守在前端层, 不剥离 API 层让"内部诊断"未来仍可拿)。GET
+      /hr/sessions/{id} 新端点拉完整 session。
 
-- [ ] **CompletionPolicy（按 coverage 决定结束）**：
+- [x] **CompletionPolicy（按 coverage 决定结束）**：
       新 schema `CompletionPolicy`（min_competency_coverage / max_total_questions /
       mandatory_competencies[]）；
       Interviewer.next_turn 末尾判断：所有 mandatory 题答完 + 每个 mandatory
       competency 的 coverage >= 阈值 → 结束；否则只要还有非 lazy 题就继续；
       **硬上限** `max_total_questions`（如 15）封顶防无限循环；
       **不做动态补题**：超出 plan 不允许临时生成题
+      实际落地: src/coverage.py 单一计算源 (compute_coverage 取 max(sufficiency)
+      per competency, self_intro 不计; 老 plan 顶层空时返 {} 短路); Interviewer
+      next_turn 末尾 hard cap -> mandatory met 提前 done -> 还有题继续 -> 题答
+      完 coverage 不达 done 标 evidence_insufficient 4 步; **绝不动态补题**。
 
-- [ ] **JobContext 加 HR 可配置项 + UI**：
+- [x] **JobContext 加 HR 可配置项 + UI**：
       `JobContext.followup_policy: FollowUpPolicy | None`（None = 用 stage 默认）；
       `JobContext.completion_policy: CompletionPolicy | None`；
       HR 端新建 job 表单加「高级」折叠区, 让 HR 调阈值；默认值合理, HR 不动也能用
+      实际落地: schema 字段 + JobORM JSONB 列 + repository 双路兼容. HR 新建
+      job 表单加「高级 (折叠)」, 4 个 NumberField (题数硬上限/coverage 门槛/
+      Assessor 双阈值), 默认折叠 + 不动 = 后端 null = 用默认; HR 大多不动也
+      能用。
 
-- [ ] **端到端 eval**：
+- [x] **端到端 eval**：
       足够的 sufficient 答案 → 0 次 followup + coverage 达标 → 提前结束；
       不足的答案 → 跟随 policy 触发 followup, 到 max 仍不足 → 进入下一题, 记录
       coverage 低；
       所有题答完但 coverage 不达 → 报告标记"证据不充分, 建议人工面谈"
+      实际落地: test_completion_policy 12 条 (coverage 单元 + Interviewer
+      CompletionPolicy + Evaluator evidence_insufficient + 老 plan 短路);
+      "证据不充分, 建议人工面谈: <names> 等维度证据不足。" 自动加 summary 前缀
+      + needs_human_review=True (不引新 schema 字段)。
 
 **完成标准**：HR 在详情页能看到每题的过程评估（自然语言, 不是分数）；面试结束
 基于 coverage 而非简单题数；候选人回答足够时面试自动提前结束（节省时间）；
-所有 5.6 的延迟/降级护栏在持久化层依旧成立。
+所有 5.6 的延迟/降级护栏在持久化层依旧成立。 ✅
+
+附加:
+- evals 数: Sprint 5.6 收尾 233 → Sprint 5.7 收尾 245 (+12)
+- 合规层级: HR UI 展示自然语言字段, 数字仅展示 coverage (Evaluator 已基于其判);
+  sufficiency / confidence 经 API 但不上 UI, 内部诊断 future 仍可拿
+- 1 个 commit 完成: f333beb
 
 ---
 
