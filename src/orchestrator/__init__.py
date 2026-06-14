@@ -33,6 +33,7 @@ from src.schemas import (
     InterviewSession,
     JobContext,
     Question,
+    QuestionCategory,
     SessionStatus,
     Turn,
     TurnResult,
@@ -82,10 +83,10 @@ def start_session(
     """
     if plan is None:
         plan = planner.plan(job, candidate)
-    # Sprint 5.5 task 3: 在 session 开始时把 lazy 占位题先回灌掉, 让 Interviewer
-    # 能正常 ask. task 4 会把这个 resolve 挪到 project stage 入口, 并喂 intro_text;
-    # 当前 intro_text="" 等于沿用 Sprint 3 的 Resume RAG 现场生成路径。
-    plan = planner.resolve_lazy_questions(plan, job, candidate)
+    # Sprint 5.5 task 4: lazy 占位题不再在 start_session 回灌. 改在 submit_answer
+    # 检测到"下一题是 lazy + text 空"时, 用 session.intro_text + Resume RAG 现场
+    # resolve. 这样 lateral / campus 都自然在候选人答完 self_intro 之后才生成
+    # project 题, 题目能反映候选人自我介绍里提到的具体内容。
     session = InterviewSession(
         plan_id=plan.plan_id,
         job_id=job.job_id,
@@ -109,7 +110,17 @@ def start_session(
 
 
 def submit_answer(session_id: str, answer_text: str) -> TurnResult:
-    """记录候选人回答, 推进一步, 返回下一问或 done。"""
+    """记录候选人回答, 推进一步, 返回下一问或 done。
+
+    Sprint 5.5 task 4:
+    - 若刚答的是 self_intro 题, 把答案存到 session.intro_text, 供 project 题
+      lazy gen 用 (前端 / HR UI 不直接展示这个字段)。
+    - 若 Interviewer 给出的下一题是 lazy 占位 (text 空), 在返回 prompt 之前
+      调 planner.resolve_lazy_questions 把整 plan 的 lazy 题都回灌, 写回 Redis,
+      再用 question_id 找到回灌后的题给出 prompt。
+      一次性回灌整 plan 比"逐题回灌"省 LLM round; project stage 多道题用同一份
+      intro_text + 同一次 Resume RAG 调用, 也保证主题一致性。
+    """
     session = cache.load_session(session_id)
     if session is None:
         raise SessionNotFound(
@@ -137,16 +148,57 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
         Turn(role=TurnRole.CANDIDATE, text=answer_text, ref_id=answer.answer_id)
     )
 
+    # 若刚答的是 self_intro 题, 落 intro_text (覆盖式 —— 实际 plan 只 1 道,
+    # 多道场景 task 4 不考虑, 取最后一条)。
+    answered_q = _find_question(plan, last.ref_id)
+    if answered_q is not None and answered_q.category is QuestionCategory.SELF_INTRO:
+        session.intro_text = answer_text
+
     nxt = interviewer.next_turn(session, plan)
     if nxt is None:
         session.status = SessionStatus.COMPLETED
         cache.save_session(session)
         return TurnResult(session_id=session_id, done=True)
 
+    # 若下一题是 lazy 占位, 现场 resolve 整 plan, 写回 cache, 找到回灌后的题。
+    if isinstance(nxt, Question) and nxt.lazy and not nxt.text:
+        plan = _resolve_lazy_now(plan, session)
+        cache.save_plan(plan)
+        nxt = _find_question(plan, nxt.question_id) or nxt
+
     ref_id = _append_interviewer_turn(session, nxt)
     cache.save_session(session)
     return TurnResult(
         session_id=session_id, done=False, prompt=nxt.text, ref_id=ref_id,
+    )
+
+
+def _find_question(plan: InterviewPlan, question_id: str) -> Question | None:
+    """按 id 在 plan 各 round 中找题。resolve 前后 question_id 不变, 这是
+    Planner 的契约 —— resolve 只换 text + chunks。"""
+    for r in plan.rounds:
+        for q in r.questions:
+            if q.question_id == question_id:
+                return q
+    return None
+
+
+def _resolve_lazy_now(plan: InterviewPlan, session: InterviewSession) -> InterviewPlan:
+    """从 PG 反查 job + candidate, 调 planner.resolve_lazy_questions 把整 plan
+    的 lazy 题回灌。任何 PG 缺失走静态 fallback, 不让面试卡死。"""
+    job = db.load_job(session.job_id)
+    candidate = db.load_candidate_for_plan(plan.plan_id)
+    if job is None or candidate is None:
+        # 极端兜底: PG 里的 job / candidate 找不到 (内存路径 / 老数据);
+        # 用空 candidate / 占位 job 让 resolve 走 fallback 模板, 至少题面非空。
+        job = job or JobContext(
+            job_id=session.job_id, title="(unknown job)", jd="",
+        )
+        candidate = candidate or CandidateProfile(
+            candidate_id=session.session_id, resume="",
+        )
+    return planner.resolve_lazy_questions(
+        plan, job, candidate, intro_text=session.intro_text,
     )
 
 
