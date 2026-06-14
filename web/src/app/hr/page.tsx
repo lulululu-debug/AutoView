@@ -173,6 +173,10 @@ function CreateJobForm({
   const [minCoverage, setMinCoverage] = useState("0.7");
   const [minSufficiency, setMinSufficiency] = useState("0.7");
   const [minConfidence, setMinConfidence] = useState("0.5");
+  // Sprint 5.8: 一刀切 max_followups_per_question; HR 不动 = 后端 null =
+  // stage 默认仍生效 (self_intro=0/knowledge=1/project=2/scenario=2);
+  // 即使 HR 设 max=2, Interviewer 的 SELF_INTRO 类别二次保护永远 0 次。
+  const [maxFollowups, setMaxFollowups] = useState("1");
 
   function addRequirement() {
     setRequirements((rs) => [...rs, ""]);
@@ -201,7 +205,7 @@ function CreateJobForm({
           mandatory_competencies: [],
         };
         followup_policy = {
-          max_followups_per_question: 1, // stage-aware default 不在 UI 暴露 (留 5.8)
+          max_followups_per_question: parseInt(maxFollowups, 10),
           min_sufficiency_to_stop: f(minSufficiency),
           min_confidence_to_stop: f(minConfidence),
         };
@@ -375,7 +379,18 @@ function CreateJobForm({
                 step="0.05"
                 disabled={state.kind === "submitting"}
               />
+              <NumberField
+                label="每题最多追问次数 (0-3)"
+                value={maxFollowups}
+                onChange={setMaxFollowups}
+                step="1"
+                disabled={state.kind === "submitting"}
+              />
             </div>
+            <p className="text-xs text-zinc-500 mt-2">
+              注: 即使设为 ≥1, 自我介绍 (self_intro) 永远不追问 (Interviewer
+              类别二次保护)。
+            </p>
           </div>
         )}
       </div>
