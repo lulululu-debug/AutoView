@@ -11,6 +11,7 @@ import {
   type DimensionScore,
   type EvaluationReport,
   type InterviewPlan,
+  type InterviewSessionDetail,
   type JobContext,
   type ReviewDecision,
   type ReviewRecord,
@@ -42,6 +43,8 @@ type FullData = {
   report: EvaluationReport | null;
   review: ReviewRecord | null;
   plan: InterviewPlan | null;
+  // Sprint 5.7: 含 assessments / answers / intro_text, 拉得到才有
+  session: InterviewSessionDetail | null;
 };
 
 type LoadState =
@@ -66,6 +69,7 @@ export default function CandidateDetailPage({
       ]);
       let report: EvaluationReport | null = null;
       let review: ReviewRecord | null = null;
+      let session: InterviewSessionDetail | null = null;
       // Sprint 5.5: plan 单独拉 (plan_pending 状态下 plan 未生成会 404, 静默吞);
       // 用于 HR 看面试 stage 视图 + report 里 competency 名映射。
       const plan: InterviewPlan | null = await api
@@ -80,9 +84,16 @@ export default function CandidateDetailPage({
           api.getReview(candidate.report_id),
         ]);
       }
+      // Sprint 5.7: 拉 session (含 assessments) 让 AssessmentView 渲染面试过程;
+      // session_id 来自 candidate 列表, 没 session (面试未启动) 时 null 跳过。
+      if (candidate.session_id) {
+        session = await api
+          .getHrSession(candidate.session_id)
+          .catch(() => null as InterviewSessionDetail | null);
+      }
       setState({
         kind: "ok",
-        data: { candidate, job, report, review, plan },
+        data: { candidate, job, report, review, plan, session },
       });
     } catch (e) {
       setState({ kind: "error", message: errMessage(e) });
@@ -143,7 +154,7 @@ function Detail({
   data: FullData;
   onReviewSubmitted: (review: ReviewRecord) => void;
 }) {
-  const { candidate, job, report, review, plan } = data;
+  const { candidate, job, report, review, plan, session } = data;
 
   // 把 plan 里的 competency 信息编成 id -> {name, description, weight} 映射
   const competencyById = useMemo(() => {
@@ -195,6 +206,10 @@ function Detail({
       )}
 
       {plan && <StageView plan={plan} />}
+
+      {session && plan && (
+        <AssessmentView session={session} plan={plan} />
+      )}
 
       {(candidate.status === "completed" || candidate.status === "reviewed") &&
         report && (
@@ -335,6 +350,230 @@ function StageView({ plan }: { plan: InterviewPlan }) {
       </div>
     </section>
   );
+}
+
+// ---------- 面试过程视图 (Sprint 5.7 task 5) ----------
+//
+// 展示每题 + 候选人回答 + AnswerAssessment 的自然语言字段。
+// **合规约束**: 绝不渲染 sufficiency / confidence 数字, 那是 LLM-as-judge 中间
+// 产物校准前不可信; 只展示自然语言 (missing_signals / strengths / concerns /
+// followup_goal), HR 看得到"为什么追问"+"信号缺什么" 但看不到数字。
+//
+// 数据流: session.history 是完整对话, session.assessments 是 Assessor 每题打的;
+// followup turn 不在 session.assessments 里有专属 entry, 而是用其 parent question
+// 的 assessment.followup_goal 解释。所以下面把 session 按"题分组": 主题 + 该题
+// 的 assessment + 该题之后的所有 followup turns + 候选人对它们的回答。
+
+function AssessmentView({
+  session,
+  plan,
+}: {
+  session: InterviewSessionDetail;
+  plan: InterviewPlan;
+}) {
+  // 把 plan 题平摊到 question_id -> Question 索引
+  const questionById = new Map(
+    plan.rounds.flatMap((r) => r.questions).map((q) => [q.question_id, q]),
+  );
+  const assessmentByQid = new Map(
+    session.assessments.map((a) => [a.question_id, a]),
+  );
+
+  // 把 session.history 按"interviewer turn -> 跟随的 candidate turn"配对
+  type Pair = {
+    interviewer_text: string;
+    interviewer_ref_id: string | null;
+    candidate_text: string | null;
+  };
+  const pairs: Pair[] = [];
+  for (const t of session.history) {
+    if (t.role === "interviewer") {
+      pairs.push({
+        interviewer_text: t.text,
+        interviewer_ref_id: t.ref_id,
+        candidate_text: null,
+      });
+    } else if (t.role === "candidate" && pairs.length > 0) {
+      pairs[pairs.length - 1].candidate_text = t.text;
+    }
+  }
+
+  if (pairs.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-wide mb-3">
+        面试过程 ({pairs.length} 个回合)
+      </h2>
+      <ol className="space-y-4">
+        {pairs.map((p, idx) => {
+          const isMainQuestion =
+            p.interviewer_ref_id !== null &&
+            questionById.has(p.interviewer_ref_id);
+          const assessment =
+            isMainQuestion && p.interviewer_ref_id
+              ? assessmentByQid.get(p.interviewer_ref_id) ?? null
+              : null;
+          return (
+            <li
+              key={idx}
+              className={`rounded-lg border bg-white dark:bg-zinc-900 p-4 ${
+                isMainQuestion
+                  ? "border-zinc-200 dark:border-zinc-800"
+                  : "border-amber-200 dark:border-amber-900 bg-amber-50/30 dark:bg-amber-950/20"
+              }`}
+            >
+              <div className="flex items-baseline gap-2 mb-2">
+                <span className="text-xs uppercase tracking-wide text-zinc-400">
+                  {isMainQuestion ? `Q${idx + 1}` : "追问"}
+                </span>
+              </div>
+              <p className="text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed mb-2">
+                {p.interviewer_text}
+              </p>
+              {p.candidate_text && (
+                <div className="bg-zinc-50 dark:bg-zinc-800/40 rounded p-2 mb-3">
+                  <p className="text-xs text-zinc-400 mb-1">候选人回答</p>
+                  <p className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">
+                    {p.candidate_text}
+                  </p>
+                </div>
+              )}
+              {assessment && (
+                <AssessmentBlock assessment={assessment} />
+              )}
+              {!isMainQuestion && (
+                <FollowupGoalBlock
+                  pairs={pairs}
+                  currentIdx={idx}
+                  assessmentByQid={assessmentByQid}
+                  questionById={questionById}
+                />
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+function AssessmentBlock({
+  assessment,
+}: {
+  assessment: NonNullable<ReturnType<Map<string, never>["get"]>> | {
+    missing_signals: string[];
+    strengths: string[];
+    concerns: string[];
+    followup_goal: string;
+    stop_reason: string;
+  };
+}) {
+  // 上面 type 写得有点冗长, 是为了 narrow 而不引入新顶层 type alias
+  const a = assessment as {
+    missing_signals: string[];
+    strengths: string[];
+    concerns: string[];
+    followup_goal: string;
+    stop_reason: string;
+  };
+  const hasAny =
+    a.missing_signals.length > 0 ||
+    a.strengths.length > 0 ||
+    a.concerns.length > 0 ||
+    a.followup_goal ||
+    a.stop_reason;
+  if (!hasAny) return null;
+  return (
+    <div className="grid sm:grid-cols-2 gap-3 mt-2 text-xs">
+      <SignalList
+        label="缺失信号"
+        items={a.missing_signals}
+        tone="amber"
+      />
+      <SignalList label="亮点" items={a.strengths} tone="emerald" />
+      <SignalList label="疑虑" items={a.concerns} tone="rose" />
+      {a.followup_goal && (
+        <div>
+          <p className="text-zinc-400 uppercase tracking-wide mb-1">
+            追问意图
+          </p>
+          <p className="text-zinc-700 dark:text-zinc-300">{a.followup_goal}</p>
+        </div>
+      )}
+      {a.stop_reason && (
+        <div>
+          <p className="text-zinc-400 uppercase tracking-wide mb-1">
+            不追问原因
+          </p>
+          <p className="text-zinc-700 dark:text-zinc-300 font-mono">
+            {a.stop_reason}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignalList({
+  label,
+  items,
+  tone,
+}: {
+  label: string;
+  items: string[];
+  tone: "amber" | "emerald" | "rose";
+}) {
+  if (items.length === 0) return null;
+  const colorClass = {
+    amber: "text-amber-700 dark:text-amber-300",
+    emerald: "text-emerald-700 dark:text-emerald-300",
+    rose: "text-rose-700 dark:text-rose-300",
+  }[tone];
+  return (
+    <div>
+      <p className={`uppercase tracking-wide mb-1 ${colorClass}`}>{label}</p>
+      <ul className="space-y-0.5 text-zinc-700 dark:text-zinc-300">
+        {items.map((s, i) => (
+          <li key={i}>· {s}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function FollowupGoalBlock({
+  pairs,
+  currentIdx,
+  assessmentByQid,
+  questionById,
+}: {
+  pairs: { interviewer_ref_id: string | null }[];
+  currentIdx: number;
+  assessmentByQid: Map<string, { followup_goal: string }>;
+  questionById: Map<string, unknown>;
+}) {
+  // 向前找最近的主题 (ref_id 在 questionById), 取它的 followup_goal 解释这条追问
+  for (let i = currentIdx - 1; i >= 0; i--) {
+    const refId = pairs[i].interviewer_ref_id;
+    if (refId && questionById.has(refId)) {
+      const a = assessmentByQid.get(refId);
+      if (a?.followup_goal) {
+        return (
+          <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
+            <span className="uppercase tracking-wide text-amber-500 mr-1">
+              为什么追问:
+            </span>
+            {a.followup_goal}
+          </p>
+        );
+      }
+      break;
+    }
+  }
+  return null;
 }
 
 // ---------- Report 区 ----------

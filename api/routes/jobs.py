@@ -46,6 +46,8 @@ def create_job(body: JobCreate, background_tasks: BackgroundTasks) -> JobContext
         requirements=body.requirements,
         company_materials=body.company_materials,
         track=body.track,
+        followup_policy=body.followup_policy,
+        completion_policy=body.completion_policy,
     )
     db.save_job(job)
     background_tasks.add_task(

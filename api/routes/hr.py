@@ -27,6 +27,7 @@ from api.schemas import CandidateWithStatus, ReviewSubmit
 from src import auth, db
 from src.schemas import (
     EvaluationReport,
+    InterviewSession,
     JobContext,
     ReviewDecision,
     ReviewRecord,
@@ -75,6 +76,24 @@ def get_candidate(
             detail=f"candidate {candidate_id} 不在 job {job_id} 下",
         )
     return CandidateWithStatus.model_validate(row)
+
+
+@router.get("/sessions/{session_id}", response_model=InterviewSession)
+def get_session(session_id: str, _user: HrUser) -> InterviewSession:
+    """HR 视角的完整 session: 含 history / answers / intro_text / assessments。
+    Sprint 5.7: HR 阶段视图 "面试过程" 区域用 assessments 字段展示每题的
+    missing_signals / strengths / concerns / followup_goal。
+
+    注: 不暴露 sufficiency / confidence 数字给前端? 这里 API 把 session 全量返回,
+    合规约束在前端 UI 层守 —— AssessmentView 不渲染这两个字段, 不在 schema 层
+    剥离, 让"内部诊断" 接口 (future) 仍能拿到完整数据。"""
+    session = db.load_session(session_id)
+    if session is None:
+        # session 已 finalize 归档 PG, db.load_session 仍能命中; 真不存在才 404
+        raise HTTPException(
+            status_code=404, detail=f"session {session_id} 不存在",
+        )
+    return session
 
 
 @router.get("/reports/{report_id}", response_model=EvaluationReport)

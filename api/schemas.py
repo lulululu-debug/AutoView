@@ -21,7 +21,9 @@ from pydantic import BaseModel, Field
 
 class JobCreate(BaseModel):
     """POST /jobs 请求体: server 自己生成 job_id, 客户端不传。
-    Sprint 5.5: track 决定面试 stage 序列 + 各 stage 题数配比, 默认 lateral。"""
+    Sprint 5.5: track 决定面试 stage 序列 + 各 stage 题数配比, 默认 lateral。
+    Sprint 5.7: 可选 followup_policy / completion_policy 来自 HR 高级折叠区,
+    None / 不传 = 用 stage / schema 默认。"""
     title: str = Field(..., min_length=1, description="职位标题")
     jd: str = Field(..., min_length=1, description="职位描述原文 JD")
     requirements: list[str] = Field(default_factory=list, description="岗位要求列表")
@@ -29,6 +31,16 @@ class JobCreate(BaseModel):
     track: Literal["campus", "lateral"] = Field(
         default="lateral",
         description="招聘类型: campus 校招 / lateral 社招",
+    )
+    # Sprint 5.7 高级折叠区配置; 用 dict 接, src.schemas.FollowUpPolicy /
+    # CompletionPolicy 在 JobContext 构造时校验, 让 api/schemas 不重复声明字段。
+    followup_policy: dict | None = Field(
+        default=None,
+        description="覆盖 FollowUpPolicy 默认 (None=用 stage 默认)",
+    )
+    completion_policy: dict | None = Field(
+        default=None,
+        description="覆盖 CompletionPolicy 默认 (None=用 schema 默认)",
     )
 
 
