@@ -179,42 +179,69 @@ track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
 无关；每题至多 1 次硬规则的追问。Sprint 5.6 把这套换成"先评估、再决策、必要时
 追问"的三段式，但全程保留启发式 fallback 防 LLM 异常卡死面试。
 
-- [ ] **AnswerAssessment schema + Assessor agent**：
+- [x] **AnswerAssessment schema + Assessor agent**：
       新 schema `AnswerAssessment`（sufficiency / confidence / missing_signals[] /
       strengths[] / concerns[] / followup_goal / stop_reason）；
       新 agent `src/agents/assessor/`（**独立模块, 不**挂在 Evaluator 上 —— Evaluator
       只在结束时跑、是同步重调用, Assessor 是每 turn 的实时轻调用, 并发模型不同）；
       `assessor.assess(question, answer, session, plan)` 入口
+      实际落地: sufficiency / confidence 都是 float ∈ [0,1] (用 pydantic ge/le 校验);
+      stop_reason 是字符串 (sufficient_signals / low_value / diminishing_returns 之一,
+      未做硬 enum 留 v1 灵活); LLM 输出 JSON parse 失败 / stub / timeout 一律 fallback,
+      _LLMStubFallback 单独类区分"期望中的 stub"和"真异常"防日志噪声。
 
-- [ ] **FollowUpPolicy + stage-aware 配额**：
+- [x] **FollowUpPolicy + stage-aware 配额**：
       新 schema `FollowUpPolicy`（max_followups_per_question / min_sufficiency_to_stop /
       min_confidence_to_stop）；
       stage 默认值：self_intro=0 / knowledge=1 / project=2 / scenario=2；
       允许 `JobContext.followup_policy` 覆盖 stage 默认（HR UI 留到 5.7）；
       Interviewer.next_turn 改为三步：`assess_answer` → `decide_followup` → `generate_followup`
+      实际落地: FollowUpPolicy.for_stage(stage) classmethod 返回硬编码 stage 默认表;
+      JobContext.followup_policy 字段未加 (留 5.7 一起做 HR 配置 UI); assess 步由
+      orchestrator 在 next_turn 之前调 (维持 "agents 之间不互调" 约定), assessment
+      流转走 session.assessments[-1], Interviewer 从 session 反向找。
 
-- [ ] **校准 eval（先做, 过不了不上生产路径）**：
+- [x] **校准 eval（先做, 过不了不上生产路径）**：
       手工标 20-30 个固定样本（明显足够 / 明显不足 / 模糊）, 覆盖 4 个 category；
       跑 assessor 比对标注, 验证"足够"的平均 sufficiency > "不足"的平均（看排序,
       不要求绝对值对得上）；
       标注集进 `evals/data/assessment_calibration.json`；
       eval 不过 → Assessor 不上线, 路径仍走原 `_needs_followup`
+      实际落地: 24 条样本 (knowledge 7 / project 7 / self_intro 4 / scenario 6),
+      启发式 fallback 路径 sufficient 均值 0.933 vs insufficient 均值 0.093,
+      gap 0.840 = strong pass; ambiguous 5 条只 record 不参与 pass/fail;
+      真 LLM 路径校准必须人工 PR review 才翻 ASSESSOR_ENABLED=true。
 
-- [ ] **延迟 + 降级控制**：
+- [x] **延迟 + 降级控制**：
       Assessor 用 `gpt-4o-mini`（不要 gpt-4o）；
       所有 LLM 调用 try/except + 10s 超时；任意异常 fallback 到原 `_needs_followup`
       （**保留不删, 作为兜底**）；
       LLM cache 自然 cover 重复 prompt；
       前端 session 页加"分析中..." 状态（submit 后到下一 prompt 前显示, 避免
       用户以为卡死）
+      实际落地: src/llm/complete() 加 timeout 参数透传 openai SDK; Assessor 写死
+      gpt-4o-mini + 10s + 600 max_tokens (不读 OPENAI_CHAT_MODEL env 防被切到贵慢的);
+      _decide_followup 在 assessment is None 时退到 _needs_followup, _needs_followup
+      Sprint 0 函数保留不删; 前端按钮文案双档 "分析中... (评估回答)" / "分析中...
+      (评估 + 准备项目题, 约 5-8 秒)"。
 
-- [ ] **followup 生成更聚焦**：
+- [x] **followup 生成更聚焦**：
       用 `assessment.followup_goal` 喂给 `_followup_text`, 生成的追问明确指向
       missing_signals（如"补一个量化数据" / "讲清你做了什么决策"）, 不再泛泛
       "展开一个具体例子"
+      实际落地: _followup_text 加 assessment 入参, prompt 拼 missing_signals +
+      followup_goal; LLM 不可用时模板也拼 followup_goal ("能聚焦讲一下: {goal}"),
+      即使没 LLM 也比泛泛模板聚焦。
 
 **完成标准**：assessor 在校准 eval 上能区分"足够 vs 不足"；面试链路任何 LLM 失败
-都降级到启发式不卡死；前端提交答案到看到下一题的体感延迟可接受（<5s 含降级）。
+都降级到启发式不卡死；前端提交答案到看到下一题的体感延迟可接受（<5s 含降级）。 ✅
+
+附加:
+- evals 数: Sprint 5.5 收尾 212 → Sprint 5.6 收尾 233 (+21 单元+校准+集成), 全绿
+- ASSESSOR_ENABLED env flag 默认 false: Assessor 代码进 repo 但不参与追问决策,
+  与 Sprint 5.5 行为一致; calibration eval + 人工 review 真 LLM 路径后翻 true 上线
+- InterviewSession.assessments Redis 写入 OK; PG 列 + HR UI 留 Sprint 5.7
+- 1 个 commit 串完成: 4ce85e0
 
 ---
 
