@@ -1,34 +1,17 @@
 /**
- * HR JWT token 的 localStorage 存取 + 单一来源。
+ * HR 端鉴权前端工具 —— Sprint 5.8 改成 httpOnly cookie。
  *
- * 为什么 localStorage 而不是 httpOnly cookie:
- * - MVP 阶段够用, 前后端在不同 origin (localhost:3000 vs :8000),
- *   cookie 跨 origin 要 SameSite=None + Secure + 跨域 cookie 协议, 配置成本高
- * - 缺点: XSS 拿得到 token (但本应用是后台, 用户控制内容少)
- * - Sprint 5+ 上 prod 时换 httpOnly cookie + SameSite=Strict, 接口不变
+ * 状态:
+ * - JWT token 由后端 Set-Cookie httpOnly + SameSite=Strict, JS 读不到 / 写不到 /
+ *   清不掉。Login 时 server set; logout 时 server clear; 续约 / 过期都由 server 管。
+ * - 前端不再存 token 在 localStorage。
+ * - 只 cache role 在 localStorage, 让顶栏徽章在 mount 时立刻能渲染, 同时由
+ *   /auth/me 二次确认 (response 含 role, 会覆盖 cache).
  *
  * 候选人端 (Sprint 4) 完全不经过本模块, 走 candidate_id 路径 soft-auth。
  */
 
-const TOKEN_KEY = "hr_jwt";
 const ROLE_KEY = "hr_role";
-
-export function readToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function writeToken(token: string, role: string) {
-  try {
-    localStorage.setItem(TOKEN_KEY, token);
-    localStorage.setItem(ROLE_KEY, role);
-  } catch {
-    /* 隐私模式 / 存满 等场景静默, 调用方拿不到 token 自然会跳登录 */
-  }
-}
 
 export function readRole(): string | null {
   try {
@@ -38,9 +21,16 @@ export function readRole(): string | null {
   }
 }
 
-export function clearToken() {
+export function writeRole(role: string) {
   try {
-    localStorage.removeItem(TOKEN_KEY);
+    localStorage.setItem(ROLE_KEY, role);
+  } catch {
+    /* 隐私模式 / 存满: 静默, role 只是 UI 提示, 没了 server 会重新给 */
+  }
+}
+
+export function clearRole() {
+  try {
     localStorage.removeItem(ROLE_KEY);
   } catch {
     /* 静默 */

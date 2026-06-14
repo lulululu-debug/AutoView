@@ -5,11 +5,12 @@
  * - 统一 base URL 走 NEXT_PUBLIC_API_BASE_URL 环境变量, 缺省 dev 用 localhost:8000
  * - 所有调用走 request<T>(), 返回 typed JSON 或抛 ApiError
  * - ApiError 携带 status + detail, 让 UI 层映射 404/409 等成具体语义
- * - { auth: true } 让该次调用带上 HR JWT Bearer 头 (从 lib/auth 取 token)
- * - 401 时自动 clearToken, 让 HrGuard 下一次渲染时把用户踢回登录页
+ * - Sprint 5.8: 鉴权从 Bearer 头改成 httpOnly cookie. 所有请求 credentials:
+ *   "include" 让浏览器自动带 cookie; { auth: true } 标志保留作向后兼容
+ *   (callsite 不动) 但无实际行为; 401 时清 role 缓存让 HrGuard 跳登录。
  */
 
-import { clearToken, readToken } from "@/lib/auth";
+import { clearRole } from "@/lib/auth";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -31,18 +32,15 @@ async function request<T>(
     "Content-Type": "application/json",
     ...(init?.headers as Record<string, string> | undefined),
   };
-  if (init?.auth) {
-    const token = readToken();
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers,
+    credentials: "include",
   });
   if (!res.ok) {
-    if (res.status === 401 && init?.auth) {
-      // token 过期 / 错; 清掉让下一次 HrGuard 跳登录
-      clearToken();
+    if (res.status === 401) {
+      // cookie 过期 / 错; 清 role 让下一次 HrGuard 跳登录
+      clearRole();
     }
     let detail = `HTTP ${res.status}`;
     try {
@@ -65,13 +63,13 @@ async function requestVoid(
     "Content-Type": "application/json",
     ...(init?.headers as Record<string, string> | undefined),
   };
-  if (init?.auth) {
-    const token = readToken();
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-  }
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
   if (!res.ok) {
-    if (res.status === 401 && init?.auth) clearToken();
+    if (res.status === 401) clearRole();
     let detail = `HTTP ${res.status}`;
     try {
       const body = await res.json();
@@ -313,7 +311,7 @@ export const api = {
     fd.append("file", file);
     const res = await fetch(
       `${API_BASE}/jobs/${jobId}/candidates/parse-resume`,
-      { method: "POST", body: fd },
+      { method: "POST", body: fd, credentials: "include" },
     );
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
@@ -350,7 +348,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
-  // HR-end endpoints (走 require_hr_user, 自动注入 Bearer)
+  // Sprint 5.8: 鉴权工具端点
+  getMe: () =>
+    request<{ user_id: string; username: string; role: string }>("/auth/me"),
+  logout: () => requestVoid("/auth/logout", { method: "POST" }),
+  // HR-end endpoints (走 require_hr_user; Sprint 5.8 起 cookie 自动带,
+  // auth: true 标志保留作向后兼容无实际行为)
   listJobs: () => request<JobContext[]>("/hr/jobs", { auth: true }),
   createJob: (body: {
     title: string;

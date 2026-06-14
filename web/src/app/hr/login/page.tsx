@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError, api } from "@/lib/api";
-import { readToken, writeToken } from "@/lib/auth";
+import { writeRole } from "@/lib/auth";
 
 type State =
   | { kind: "idle" }
@@ -18,10 +18,20 @@ export default function HrLoginPage() {
   const [state, setState] = useState<State>({ kind: "idle" });
 
   useEffect(() => {
-    // 已经有 token 就直接进 dashboard (避免 logged-in 用户再访问 login)
-    if (readToken()) {
-      router.replace("/hr");
-    }
+    // Sprint 5.8: cookie httpOnly JS 读不到, 这里调 /auth/me 判已登录;
+    // 401 静默, 仍展示登录表单 (避免 401 ApiError throw 把页面挂掉)
+    let cancelled = false;
+    api
+      .getMe()
+      .then(() => {
+        if (!cancelled) router.replace("/hr");
+      })
+      .catch(() => {
+        /* 未登录是正常态, 留在登录页 */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   async function handleSubmit(ev: React.FormEvent) {
@@ -30,7 +40,8 @@ export default function HrLoginPage() {
     setState({ kind: "submitting" });
     try {
       const tok = await api.login(username, password);
-      writeToken(tok.access_token, tok.role);
+      // Sprint 5.8: cookie 由 server set, 这里只 cache role 作 UI 即时渲染
+      writeRole(tok.role);
       router.replace("/hr");
     } catch (e) {
       let message = "登录失败";

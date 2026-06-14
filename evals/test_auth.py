@@ -187,6 +187,10 @@ class RequireHrUserDependencyTests(unittest.TestCase):
         url = os.environ["POSTGRES_URL"].replace("+psycopg", "")
         with psycopg.connect(url) as conn:
             conn.execute("TRUNCATE users CASCADE")
+        # Sprint 5.8: TestClient 持久化 cookie, 前一个 test login 后 cookie
+        # 留在 client 上, 下一个 test 的 "无 Bearer 应当 401" 会误命中。
+        # 每个 test 入口清掉 cookie jar。
+        self.client.cookies.clear()
 
     def _login(self, username: str, password: str, role: str = "hr") -> str:
         from scripts.seed_users import seed_user
