@@ -114,40 +114,59 @@
 HR 不能配置，校招社招走同一套，没有自我介绍 / 场景题。Sprint 5.5 把出题结构改为
 track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
 
-- [ ] **数据契约扩展 + HR track 选择**：
+- [x] **数据契约扩展 + HR track 选择**：
       `JobContext.track: "campus" | "lateral"`（默认 lateral，DB 增量加列）；
       `QuestionCategory` 加 `SELF_INTRO` / `SCENARIO`；
       `InterviewRound.stage` 字段（self_intro / knowledge / project / scenario）；
       `InterviewSession.intro_text` 字段（存候选人自我介绍全文，供后续题目用）；
       HR 端 POST /jobs 接收 track，新建表单加 campus/lateral 单选
 
-- [ ] **场景题库 + seed 脚本扩展**：
+- [x] **场景题库 + seed 脚本扩展**：
       `seed_questions` 表加 category 列区分 knowledge / scenario；
       `scripts/seed_questions.py --category` 参数；
       种 backend 场景题 ~15 道（如"线上 P99 突然涨 10 倍, 5 分钟内做什么"风格）
+      实际落地: 15 技术深度 + 5 沟通协作 = 20 道, 落 PG; Milvus 由 task 4
+      drop + reseed 时一起做进去, category 过滤召回验证通过
 
-- [ ] **Planner 改造为 track-aware 多阶段（项目题方案 A：懒生成）**：
+- [x] **Planner 改造为 track-aware 多阶段（项目题方案 A：懒生成）**：
       校招 7-8 题：自我介绍 1 + 基础知识 3 + 项目深挖 2（占位）+ 场景 1-2；
       社招 7-9 题：自我介绍 1 + 项目深挖 3-4（占位）+ 场景 2-3 + 基础知识 1；
       旧的「2 dim × 2 cat × 4 题」覆盖式退役（无 fallback，避免双路径）；
       Plan 数据契约支持「占位题」（text 为空、`lazy: True`），等 interviewer 进入 project stage 时再生成
+      实际落地: campus = [1,3,2,1] = 7, lateral = [1,3,2,1] = 7;
+      Question.competency_id 改 Optional (self_intro=None 不进 content_scores);
+      InterviewPlan.competencies 顶层权威 (跨 stage 共享, Evaluator 走顶层)
 
-- [ ] **Interviewer 跨阶段 + 项目题懒生成**：
+- [x] **Interviewer 跨阶段 + 项目题懒生成**：
       自我介绍 turn **不**触发 followup 启发式（30 字也不追问）；
       自我介绍全文落 `InterviewSession.intro_text`；
       进入 project stage 时**实时**生成项目题（用 intro_text + Resume RAG），
       生成期间前端 UI 显示「思考中...」（前端轮询或 SSE 待定，先轮询）；
       至多 1 次追问/题 这条保持；后续如要升级追问启发式，留 Sprint 5.6+
+      实际落地: lazy resolve 移到 orchestrator.submit_answer (检测 next 题
+      lazy+empty 时整 plan 一次性 resolve, 写回 cache, 用 question_id 找回灌后
+      的题); _needs_followup(question, answer) 加 question 入参, SELF_INTRO 硬豁免;
+      前端 isNextTurnLazyProject 启发式预测 + 按钮文案 "思考中... (准备项目题, 约 3-5 秒)"
 
-- [ ] **HR 详情页阶段视图 + 端到端 eval**：
+- [x] **HR 详情页阶段视图 + 端到端 eval**：
       HR 候选人详情页：在报告区上方加「面试阶段」视图，每 stage 显示题数 +
       每题来源（题库 ID / Resume chunk ID / 场景题库 ID）；
       端到端 eval：campus job → 简历 → 自我介绍 → 走完 8 题 → 报告 OK；
       端到端 eval：lateral job → 同上，验证 knowledge 题数远少于 project；
       eval：项目题 prompt 确实包含 intro_text（懒生成路径生效）
+      实际落地: StageView 显示 4 类 stage card (颜色编码) + describeSource 把
+      knowledge/scenario 显示题库 ID, project 显示 Resume 切片数, self_intro 显示
+      "固定模板", lazy 未生成显示"待懒生成"; 端到端 eval campus 7 题 walk + lateral
+      knowledge<project + magic-marker intro_text 流转锁住 lazy gen 路径
 
 **完成标准**：HR 创建 job 时选 track；候选人按 track 对应的多阶段流程完成面试；
-项目深挖题真的反映自我介绍里提到的内容（懒生成路径生效）。
+项目深挖题真的反映自我介绍里提到的内容（懒生成路径生效）。 ✅
+
+附加:
+- evals 数: Sprint 5 收尾时 166 → Sprint 5.5 收尾 212 (+46), 全绿
+- Milvus questions collection drop + reseed (30 knowledge + 20 scenario),
+  category 过滤召回 OK; documents collection 顺带 drop, dev 期不阻塞
+- 5 个 commit 串完成: 6688804 / 8fe7615 / adaf640 / 5d9f283 / 977e5a5
 
 ---
 
