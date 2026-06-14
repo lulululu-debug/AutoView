@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "notes": [
+    "Sprint 5.6 校准 eval 数据集。24 个 (question, answer, label) 样本,",
+    "覆盖 4 个 QuestionCategory: knowledge / project_experience / self_intro / scenario。",
+    "label: sufficient / insufficient / ambiguous。",
+    "ambiguous 样本只 record, 不参与 pass/fail (label 本身有争议)。",
+    "对比的是 sufficient 与 insufficient 的平均 sufficiency, 看排序是否对。",
+    "当前 stub 路径 + 启发式 fallback 驱动: 跑 LLM 真路径需要人工 PR review 校准。"
+  ],
+  "samples": [
+    {
+      "id": "k01-suf",
+      "category": "knowledge",
+      "label": "sufficient",
+      "question": "你怎么设计一个高并发场景下的限流方案?",
+      "answer": "比如订单服务我们在网关层 + 业务层做两级令牌桶, 我们结合 Redis + 本地 Cache, 结果 P99 在大促可控在 80ms, 用了滑动窗口避免突刺, 选择了 lazy refill 减少 Redis 调用。"
+    },
+    {
+      "id": "k02-suf",
+      "category": "knowledge",
+      "label": "sufficient",
+      "question": "缓存与数据库一致性怎么保证?",
+      "answer": "比如订单写入, 我们走 Cache Aside + 双删兜底, 结果一致性窗口在 5ms 内业务感知不到。我们用了 MQ 异步重试, 选择强一致性的关键字段单独走 write-through。"
+    },
+    {
+      "id": "k03-insuf",
+      "category": "knowledge",
+      "label": "insufficient",
+      "question": "你怎么做接口幂等?",
+      "answer": "加唯一键就行。"
+    },
+    {
+      "id": "k04-insuf",
+      "category": "knowledge",
+      "label": "insufficient",
+      "question": "谈谈你对分布式事务的理解。",
+      "answer": "两阶段提交, 然后还有 TCC, 我都了解过。"
+    },
+    {
+      "id": "k05-amb",
+      "category": "knowledge",
+      "label": "ambiguous",
+      "question": "你怎么设计一个支持万级 QPS 的消息消费系统?",
+      "answer": "我们会用 Kafka 加批量消费, 加一些幂等机制, 加监控告警。"
+    },
+    {
+      "id": "k06-amb",
+      "category": "knowledge",
+      "label": "ambiguous",
+      "question": "如何识别并定位性能瓶颈?",
+      "answer": "我会先看监控指标, 比如 CPU 和内存, 再看链路追踪, 找瓶颈在哪个服务。"
+    },
+    {
+      "id": "p01-suf",
+      "category": "project_experience",
+      "label": "sufficient",
+      "question": "讲一个你做过的性能优化, 包括前因后果和数据指标。",
+      "answer": "去年大促前订单 P99 从 800ms 涨到 2s, 比如复合索引被改后失效 + Redis 热点 key 击穿, 我们加回索引并改造成本地缓存 + Redis 二级缓存, 结果 P99 回到 350ms, 用了灰度 5% -> 50% -> 全量分三档发布, 漏对率从 0.4‰ 降到 0.02‰。"
+    },
+    {
+      "id": "p02-suf",
+      "category": "project_experience",
+      "label": "sufficient",
+      "question": "介绍一次你做过的数据库优化。",
+      "answer": "对账中台日处理 2 亿笔, 比如早期延迟 30 分钟+, 我们把单表对账改成分桶并行 + 幂等键 + Kafka 回放, 结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰, 选择分桶哈希用 order_id 避免热点。"
+    },
+    {
+      "id": "p03-insuf",
+      "category": "project_experience",
+      "label": "insufficient",
+      "question": "讲一个你做过的项目。",
+      "answer": "我做过一个支付项目。"
+    },
+    {
+      "id": "p04-insuf",
+      "category": "project_experience",
+      "label": "insufficient",
+      "question": "谈谈你做过最有挑战的事情。",
+      "answer": "搞过一个大项目, 蛮难的。"
+    },
+    {
+      "id": "p05-amb",
+      "category": "project_experience",
+      "label": "ambiguous",
+      "question": "讲一次你做过的接口优化。",
+      "answer": "我之前优化过一个查询接口, 加了索引, 结果快了不少, 用户反馈也好了。"
+    },
+    {
+      "id": "p06-suf",
+      "category": "project_experience",
+      "label": "sufficient",
+      "question": "讲一次你和 SRE / 运维就稳定性方案有分歧的经历。",
+      "answer": "上半年风控那次, 比如产品要求 24 小时内全量, 我担心误杀率太高。我们拉 SRE 一起跑离线回放, 用数据说服产品先灰度 5% 一周, 结果误杀率从 3.1% 降到 0.4% 才放开全量, 选择保守发布让团队认可了。"
+    },
+    {
+      "id": "i01-suf",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请做一个自我介绍。",
+      "answer": "我叫张三, 后端 4 年, 主要在订单和对账中台做高可用 + 性能, 最近把 P99 从 800ms 降到 350ms。"
+    },
+    {
+      "id": "i02-suf",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请做一个自我介绍, 重点讲你最近的关键决策。",
+      "answer": "我是李四, 5 年后端, 比如最近主导了对账中台从 0 到 1, 我们决策的关键是分桶 + 异步, 结果日 2 亿笔延迟降到 3 分钟。"
+    },
+    {
+      "id": "i03-suf-short",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请做一个 2-3 分钟的自我介绍。",
+      "answer": "我叫王五, 后端 3 年, 做过支付和风控。"
+    },
+    {
+      "id": "i04-suf-tiny",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请做一个自我介绍。",
+      "answer": "我叫小明。"
+    },
+    {
+      "id": "s01-suf",
+      "category": "scenario",
+      "label": "sufficient",
+      "question": "你是订单业务的 oncall, 凌晨 3 点收到 P99 告警从 200ms 涨到 4s, 业务量没显著变化。你的前 10 分钟做什么?",
+      "answer": "比如先看链路 RT 分布定位是哪个下游慢, 我们再看错误率分布是不是热点 key, 结果可以 5 分钟内定位到瓶颈; 用了已有 dashboard 不增加新工具, 选择保留可观测性优先, 不立刻扩容也不立刻 rollback。"
+    },
+    {
+      "id": "s02-suf",
+      "category": "scenario",
+      "label": "sufficient",
+      "question": "DB 主库磁盘剩 5%, 业务读写正常, 监控告警刚响。你接下来 1 小时怎么处置?",
+      "answer": "比如先停掉非关键的批处理任务释放空间, 我们同步联系 DBA 扩容磁盘, 结果 30 分钟内空间恢复; 用了 PGA 参数微调减少写盘, 选择不做 vacuum (会更慢), 同时业务侧加紧降级日志级别。"
+    },
+    {
+      "id": "s03-insuf",
+      "category": "scenario",
+      "label": "insufficient",
+      "question": "线上 P99 突然涨 10 倍, 你接下来怎么做?",
+      "answer": "先看监控, 然后查问题。"
+    },
+    {
+      "id": "s04-insuf",
+      "category": "scenario",
+      "label": "insufficient",
+      "question": "消息队列积压了 800 万条, 业务 SLA 要求 30 分钟内消化完, 你怎么办?",
+      "answer": "加机器消费就行。"
+    },
+    {
+      "id": "s05-amb",
+      "category": "scenario",
+      "label": "ambiguous",
+      "question": "灰度发布到 5% 后接口错误率从 0.1% 涨到 8%, 你要决定继续灰度还是回滚, 5 分钟内你怎么定?",
+      "answer": "我会先快速看错误日志样本, 如果是已知问题就 hotfix 继续, 否则回滚保守一点。"
+    },
+    {
+      "id": "s06-suf",
+      "category": "scenario",
+      "label": "sufficient",
+      "question": "线上 incident 进行中, SRE / 业务 PM / 运营三方都在追问 ETA, 你刚定位到根因还没修。接下来 15 分钟你怎么沟通?",
+      "answer": "比如先在群里发一条结构化更新: 根因 + ETA + 影响范围, 我们让业务 PM 对外口径同步, 结果各方拿到一致信息不会反复追问; 用了既定的 incident 模版, 选择只对 SRE 同步技术细节, 业务侧只看影响。"
+    },
+    {
+      "id": "k07-insuf",
+      "category": "knowledge",
+      "label": "insufficient",
+      "question": "你怎么设计一个限流方案?",
+      "answer": "看场景吧。"
+    },
+    {
+      "id": "p07-amb",
+      "category": "project_experience",
+      "label": "ambiguous",
+      "question": "讲一次你做过最复杂的微服务拆分。",
+      "answer": "我们把单体系统拆成了 8 个服务, 用了 gRPC 通信, 上线后性能提升明显, 整个过程花了 3 个月。"
+    }
+  ]
+}

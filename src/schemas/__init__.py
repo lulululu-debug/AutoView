@@ -178,6 +178,71 @@ class FollowUp(BaseModel):
     reason: str                              # 为何追问(便于审计与调试)
 
 
+# ---------- Sprint 5.6: Assessor + FollowUpPolicy ----------
+
+class AnswerAssessment(BaseModel):
+    """单题在线评估结果 —— Sprint 5.6 起 Assessor 在每答一题后产出。
+
+    合规约束 (CLAUDE.md):
+    - sufficiency / confidence 是 LLM-as-judge 的中间产物, 校准前不可见;
+      绝对不向 HR UI 暴露这俩数字, 也不展示给候选人。
+    - missing_signals / strengths / concerns / followup_goal 是自然语言字段,
+      Sprint 5.7 可在 HR 详情页"面试过程"区域展示, 但 sufficiency/confidence 不展示。
+    - AnswerAssessment 既不进 EvaluationReport.content_scores (内容维度) 也不进
+      performance_observations (软信号), 它是"第三类"数据, 仅作追问决策 + 内部诊断。
+
+    字段:
+    - sufficiency: 回答相对题目要求的"信号充分度", 0=完全没说到点, 1=超充分
+    - confidence: Assessor 自己对该判断的把握度, 0=瞎猜, 1=很笃定
+    - missing_signals: 缺哪些信号, 自然语言列表 (如"缺量化数据"/"没讲为什么")
+    - strengths: 回答里的亮点
+    - concerns: 让 Assessor 担心的地方 (与 missing 互补: missing 是没说, concerns
+      是说了但有疑问, 如"对方说从 800ms 降到 350ms 但没说怎么测")
+    - followup_goal: 如果决定追问, 应当追什么. 拼进 _followup_text 的 prompt
+    - stop_reason: 不建议追问时的理由 (如 sufficient_signals / low_value /
+      diminishing_returns). 空串 = 没意见, 由 Policy 决定。
+    """
+    question_id: str
+    sufficiency: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    missing_signals: list[str] = []
+    strengths: list[str] = []
+    concerns: list[str] = []
+    followup_goal: str = ""
+    stop_reason: str = ""
+
+
+class FollowUpPolicy(BaseModel):
+    """追问策略 —— Sprint 5.6 起 Interviewer 用本结构 + AnswerAssessment 决策。
+
+    Sprint 5.6 阶段 stage 默认值在 Interviewer 内硬编码, 不读 JobContext;
+    Sprint 5.7 才让 HR 在 JobContext.followup_policy 配置覆盖。
+
+    决策语义 (per question):
+    - 已有 followups >= max_followups_per_question -> 停 (硬上限)
+    - assessment.sufficiency >= min_sufficiency_to_stop AND
+      assessment.confidence >= min_confidence_to_stop -> 停 (拿到足够信号)
+    - 否则追问
+
+    阈值取值 0.0-1.0 与 AnswerAssessment 字段对齐。"""
+    max_followups_per_question: int = 1
+    min_sufficiency_to_stop: float = 0.7
+    min_confidence_to_stop: float = 0.5
+
+    @classmethod
+    def for_stage(cls, stage: "InterviewStage") -> "FollowUpPolicy":
+        """stage 默认配额表 (Sprint 5.6 硬编码; 5.7 HR 覆盖留口子)。
+        self_intro 0 追问 (Interviewer 已硬豁免, 这里 max=0 是双保险);
+        knowledge 1; project 2 (深挖更重要); scenario 2。"""
+        max_table = {
+            InterviewStage.SELF_INTRO: 0,
+            InterviewStage.KNOWLEDGE: 1,
+            InterviewStage.PROJECT: 2,
+            InterviewStage.SCENARIO: 2,
+        }
+        return cls(max_followups_per_question=max_table.get(stage, 1))
+
+
 class TurnRole(str, Enum):
     INTERVIEWER = "interviewer"
     CANDIDATE = "candidate"
@@ -203,7 +268,11 @@ class InterviewSession(BaseModel):
 
     Sprint 5.5 起加 intro_text: 候选人 self_intro 阶段的回答全文,
     会喂给 project stage 的 lazy 出题 prompt + 回灌 Evaluator 作软信号上下文。
-    老 Session JSON 缺该字段默认空字符串。"""
+    老 Session JSON 缺该字段默认空字符串。
+
+    Sprint 5.6 起加 assessments: 每答一题, Assessor (启用时) 跑一次产出一条
+    AnswerAssessment 追加进来。Redis 热存随 session 走; PG 列 + HR UI 留 5.7。
+    ASSESSOR_ENABLED=false 时本列表恒空。"""
     session_id: str = Field(default_factory=_new_id)
     plan_id: str
     job_id: str
@@ -212,6 +281,7 @@ class InterviewSession(BaseModel):
     history: list[Turn] = []
     answers: list[CandidateAnswer] = []
     intro_text: str = ""
+    assessments: list[AnswerAssessment] = []
 
 
 # ---------- 多模态信号(扩展, 骨架恒空) ----------

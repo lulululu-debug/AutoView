@@ -22,8 +22,13 @@ Agent 之间不直接互相调用 —— planner/interviewer/analyzer/evaluator 
 """
 from __future__ import annotations
 
+import logging
+import os
+
 from src import cache, db
-from src.agents import analyzer, evaluator, interviewer, planner
+
+log = logging.getLogger(__name__)
+from src.agents import analyzer, assessor, evaluator, interviewer, planner
 from src.schemas import (
     CandidateAnswer,
     CandidateProfile,
@@ -47,6 +52,13 @@ class SessionNotFound(LookupError):
 
 class SessionInvalidState(RuntimeError):
     """会话状态不允许当前操作, 比如对已 COMPLETED 的会话再 submit_answer。"""
+
+
+def _assessor_enabled() -> bool:
+    """Sprint 5.6: 由 env flag 控制 Assessor 是否进入 production codepath。
+    默认 false —— 即代码部署进了仓库但不参与追问决策, 走 Sprint 0 启发式。
+    eval / 人工 review calibration 通过后, 才在部署层把 flag 翻 true 上线。"""
+    return os.environ.get("ASSESSOR_ENABLED", "").lower() in ("1", "true", "yes")
 
 
 # ---------- 内部工具 ----------
@@ -153,6 +165,21 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
     answered_q = _find_question(plan, last.ref_id)
     if answered_q is not None and answered_q.category is QuestionCategory.SELF_INTRO:
         session.intro_text = answer_text
+
+    # Sprint 5.6: Assessor 在 next_turn 之前跑, 把 AnswerAssessment 落进
+    # session.assessments. Interviewer 取 session.assessments[-1] 决策追问 +
+    # 用 followup_goal 拼追问 prompt. ASSESSOR_ENABLED=false 时跳过, 走原启发式。
+    if _assessor_enabled() and answered_q is not None:
+        try:
+            assessment = assessor.assess(answered_q, answer, session, plan)
+            session.assessments.append(assessment)
+        except Exception:
+            # Assessor 自己有 LLM->启发式双路径, 理论上 assess() 不会抛;
+            # 真抛了一律静默吞, 让面试链路不受 Assessor 影响。
+            log.exception(
+                "assessor.assess raised unexpectedly (qid=%s); skipping",
+                answered_q.question_id,
+            )
 
     nxt = interviewer.next_turn(session, plan)
     if nxt is None:

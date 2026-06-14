@@ -277,8 +277,8 @@ export default function SessionPage({
                 >
                   {state.kind === "submitting"
                     ? isNextTurnLazyProject(state.plan, state.turn.ref_id)
-                      ? "思考中... (准备项目题, 约 3-5 秒)"
-                      : "提交中..."
+                      ? "分析中... (评估 + 准备项目题, 约 5-8 秒)"
+                      : "分析中... (评估回答)"
                     : "提交回答"}
                 </button>
               </div>
