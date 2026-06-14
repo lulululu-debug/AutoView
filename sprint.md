@@ -327,7 +327,7 @@ track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
 (2) HR JWT 还在 localStorage (XSS 抗性弱于 httpOnly cookie); (3) HR 没法调
 "每题最多追问次数" (只能改后端默认重启)。本 sprint 一并收尾。
 
-- [ ] **PDF/docx Resume 解析端点**：
+- [x] **PDF/docx Resume 解析端点**：
       新 `POST /jobs/{job_id}/candidates/parse-resume` 接 multipart, 返回
       `{parsed_text: str}`; 前端把 parsed_text 填回现有 textarea, 用户可编辑后
       走旧 `POST .../candidates {resume: text}` 提交 (现有 JSON 端点保持纯净)；
@@ -335,8 +335,12 @@ track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
       校验: 文件大小 ≤ 5 MB; mime + extension 双判 (`application/pdf` + `.pdf`
       / `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
       + `.docx`); 解析后文本 <100 字符直接 422 "解析失败, 请贴文本" (兜底扫描件)。
+      实际落地: 新 `src/resume_parser.py` 是纯计算模块 (无副作用), pypdf 6.x
+      逐页 extract_text + python-docx paragraphs+tables; ResumeParseError 统一
+      上抛由 API 路由映射 422; 前端虚线框「选择文件」+ 状态机 (idle/parsing/error),
+      parsed_text 填回 textarea 让用户可编辑, paste 路径保留作 fallback。
 
-- [ ] **Cookie httpOnly + SameSite=Strict 鉴权升级**：
+- [x] **Cookie httpOnly + SameSite=Strict 鉴权升级**：
       `POST /auth/login` 同时 set httpOnly cookie (HttpOnly / SameSite=Strict /
       Path=/ / Max-Age=JWT_EXPIRE_MINUTES*60) **和** 返 access_token JSON
       (转期共存, 让 evals + 脚本继续用 Bearer 头不用全改); Secure 标志由
@@ -348,22 +352,31 @@ track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
       新 `POST /auth/logout` Set-Cookie Max-Age=0 把 token 清掉;
       CORS 从 `allow_origins=["*"]` 改成 explicit `["http://localhost:3000"]`
       (dev) + `allow_credentials=True`, 用 env `CORS_ALLOW_ORIGINS` 配。
+      实际落地: CORS 在 Sprint 4 起已是 explicit origins + allow_credentials=True
+      (env `CORS_ALLOWED_ORIGINS`), 本 sprint 只补 .env.example 注释; UserMe API
+      DTO 新加; `cookie_name()` helper 从 env `JWT_COOKIE_NAME` 取 (默认
+      auth_token); /auth/logout 不挂 auth dep, 即使已过期 token 也能调清 cookie。
 
-- [ ] **前端鉴权切 Cookie**：
+- [x] **前端鉴权切 Cookie**：
       `web/src/lib/auth.ts` 改成 noop: readToken 返 null, writeToken 不写
       localStorage (cookie 由后端 set); fetch 全局加 `credentials: "include"`
       让 cookie 自动带上; HrGuard 改成调 `GET /auth/me` 判 session
       (401 -> 跳登录); 退出按钮调 `POST /auth/logout`; 旧 localStorage
       token 在 Sprint 5.8 deploy 那一刻一次性清掉, evals 仍走 Bearer 头不变。
+      实际落地: auth.ts 删 token 函数只留 role cache (UI 即时渲染用); api.ts
+      `auth: true` 标志保留作 callsite 不动的兼容 (cookie 总会送, 无实际行为);
+      api.getMe/logout 加入; HrGuard 在 /hr/login 跳过 /me 不抖闪。
 
-- [ ] **`max_followups_per_question` HR UI**：
+- [x] **`max_followups_per_question` HR UI**：
       `web/src/app/hr/page.tsx` 高级折叠区加 1 个 NumberField "每题最多追问
       次数 (0-3)", 整 job 一刀切。HR 不动 = 后端 null = stage 默认 (self_intro=0
       / knowledge=1 / project=2 / scenario=2) 仍生效。文档写明: 即使 HR 设
       max=2, Interviewer 的 SELF_INTRO 类别二次保护仍在 (
       `if question.category is SELF_INTRO: return False`), 自我介绍永远 0 次追问。
+      实际落地: 高级折叠区从 4 个 NumberField 扩到 5 个 + 注释提示自我介绍
+      永远不被追问。
 
-- [ ] **eval 护栏**：
+- [x] **eval 护栏**：
       `evals/test_parse_resume.py`: 用 mock PDF/docx bytes 跑端点, 验返回的
       parsed_text 含已知 fixture 字符串; 大小超 5MB → 422; mime 不匹配 → 422;
       解析后 <100 字 → 422。
@@ -371,18 +384,28 @@ track-aware 多阶段，并补齐自我介绍 + 场景题两个缺失环节。
       cookie 单独命中 require_hr_user (无 Bearer); Bearer 单独命中 (无 cookie);
       logout 清空 cookie; GET /auth/me 返 user info; CORS preflight 含
       Access-Control-Allow-Credentials。
+      实际落地: test_parse_resume 11 条 (parser 单元 7 + endpoint 4);
+      test_auth_cookie 9 条; 还修旧 test_auth + test_hr_api 的 setUp 加
+      `self.client.cookies.clear()` 防 TestClient 持久化 cookie 让"无 Bearer
+      应当 401" 测试误命中。
 
 **完成标准**: 候选人能上传 PDF/docx Resume, 解析失败时优雅提示; HR JWT 走
 httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题最多
-追问次数"; evals 双路径 (Bearer + Cookie) 全绿。
+追问次数"; evals 双路径 (Bearer + Cookie) 全绿。 ✅
 
-**显式不在 5.8 scope**:
+附加:
+- evals 数: Sprint 5.7 收尾 245 → Sprint 5.8 收尾 265 (+20)
+- 3 个 feat commit 完成: 72823df (PDF) / fbada1c (Cookie) / 50edd54 (追问 UI)
+
+**显式不在 5.8 scope** (推后):
 - `CompletionPolicy.mandatory_competencies` HR UI: 推后 Sprint 5.9+
   (HR 在新建 job 时不知道 competency_id, 该字段需要"先建 job → plan 生成 →
   回头编辑 mandatory" 编辑流程, 跟 5.8 "运维收尾" 不匹配; 维持默认 "全
   plan.competencies 都 mandatory")
 - per-stage `max_followups_per_question` 配置: schema 改 + UI 改 + eval, 不在
   5.8 范围内
+- Bearer 路径退役: 5.8 阶段 cookie + Bearer 双路径并存 (evals 用 Bearer),
+  待 cookie 路径稳定后可独立小 sprint 收 Bearer; evals 改造比代码量大
 
 ---
 
