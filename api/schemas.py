@@ -77,11 +77,22 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     """POST /auth/login 响应体, 兼容 OAuth2 Bearer 约定。
-    expires_in 单位是秒, 让前端 SDK 直接拿去算续约时机。"""
+    expires_in 单位是秒, 让前端 SDK 直接拿去算续约时机。
+
+    Sprint 5.8: 同时 Set-Cookie httpOnly cookie 在响应里; body 仍含 access_token
+    让 evals + 脚本走 Bearer 不变。浏览器 HR 端从 5.8 起改读 cookie。"""
     access_token: str
     token_type: str = "bearer"
     expires_in: int                                  # 秒
     role: str                                        # 让前端不用再解 JWT 就能切 UI
+
+
+class UserMe(BaseModel):
+    """GET /auth/me 响应 (Sprint 5.8): HrGuard 用来判 session 仍有效 +
+    UI 展示当前登录用户名。"""
+    user_id: str
+    username: str
+    role: str
 
 
 # ---------- HR Dashboard (Sprint 5-2) ----------

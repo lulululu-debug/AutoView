@@ -41,6 +41,10 @@ class _HrApiBase(unittest.TestCase):
         from scripts.seed_users import seed_user
         seed_user(username="hr1", password="pw", role="hr")
         self.hr_token = self._login("hr1", "pw")
+        # Sprint 5.8: login 把 cookie set 进 TestClient.cookies, 后续 tests 用
+        # explicit Authorization: Bearer 头, 不应被这个 cookie 影响 ——
+        # 否则 "无 Bearer 应当 401" 测试会被 cookie 误命中。
+        self.client.cookies.clear()
         # 非 HR role 的 token 直接手签, 不走 PG (seed_users 也只允许 hr/admin)
         from src.auth import create_access_token
         self.cand_token = create_access_token(

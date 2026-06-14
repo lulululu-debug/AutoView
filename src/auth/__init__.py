@@ -13,6 +13,7 @@ from __future__ import annotations
 from src.auth.dependencies import (
     AuthenticationError,
     AuthorizationError,
+    cookie_name,
     get_current_user,
     require_hr_user,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "DEFAULT_EXPIRE_MINUTES",
     "InvalidToken",
     "JwtNotConfigured",
+    "cookie_name",
     "create_access_token",
     "decode_token",
     "get_current_user",
