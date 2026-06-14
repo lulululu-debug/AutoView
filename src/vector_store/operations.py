@@ -23,6 +23,57 @@ log = logging.getLogger(__name__)
 _QUESTIONS_OUTPUT = ("question_id", "role_family", "competency", "category", "text")
 _DOCUMENTS_OUTPUT = ("document_id", "kind", "source_id", "chunk_index", "text")
 
+# 跨进程 drop+reseed 后, 持有 stale client 的进程 search 会抛
+# "Collection 'X' is in state 'released'; call load() before search". 我们
+# catch 这一类瞬态错误, 调 load_collection 再重试一次, 让上游不必 fallback。
+# 不是普适的"自愈"-在更深层错误 (如 schema mismatch) 时 load 不会救, 仍会抛。
+_RELOADABLE_ERROR_MARKERS = (
+    "released",            # state 'released' before load
+    "collection not found",
+    "not loaded",
+)
+
+
+def _search_with_load_retry(
+    *,
+    collection_name: str,
+    embedding: list[float],
+    top_k: int,
+    expr: str,
+    output_fields: list[str],
+) -> Any:
+    """单次 client.search, 失败时若是 reloadable 类错误则 load_collection 重试一次。"""
+    client = get_client()
+    try:
+        return client.search(
+            collection_name=collection_name,
+            data=[embedding],
+            limit=top_k,
+            filter=expr,
+            output_fields=output_fields,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if not any(m in msg for m in _RELOADABLE_ERROR_MARKERS):
+            raise
+        log.warning(
+            "milvus search 触发 reloadable 错误, 调 load_collection(%s) 后重试: %s",
+            collection_name, e,
+        )
+        try:
+            client.load_collection(collection_name)
+        except Exception:
+            log.exception(
+                "load_collection(%s) 失败, 重试也会失败", collection_name,
+            )
+        return client.search(
+            collection_name=collection_name,
+            data=[embedding],
+            limit=top_k,
+            filter=expr,
+            output_fields=output_fields,
+        )
+
 
 def _build_filter(**conditions: Optional[str | int]) -> str:
     """把关键字过滤拼成 Milvus expr; 空字典返回空串。
@@ -88,15 +139,14 @@ def search_questions(
     if is_stub_vector(embedding):
         # stub 向量召回结果无意义, 返回空免得调用方误用
         return []
-    client = get_client()
     expr = _build_filter(
         role_family=role_family, competency=competency, category=category,
     )
-    results = client.search(
+    results = _search_with_load_retry(
         collection_name=COLLECTION_QUESTIONS,
-        data=[embedding],
-        limit=top_k,
-        filter=expr,
+        embedding=embedding,
+        top_k=top_k,
+        expr=expr,
         output_fields=list(_QUESTIONS_OUTPUT),
     )
     return _flatten_hits(results)
@@ -149,13 +199,12 @@ def search_documents(
 ) -> list[dict[str, Any]]:
     if is_stub_vector(embedding):
         return []
-    client = get_client()
     expr = _build_filter(kind=kind, source_id=source_id)
-    results = client.search(
+    results = _search_with_load_retry(
         collection_name=COLLECTION_DOCUMENTS,
-        data=[embedding],
-        limit=top_k,
-        filter=expr,
+        embedding=embedding,
+        top_k=top_k,
+        expr=expr,
         output_fields=list(_DOCUMENTS_OUTPUT),
     )
     return _flatten_hits(results)
