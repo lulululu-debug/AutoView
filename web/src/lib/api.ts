@@ -305,6 +305,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  // Sprint 5.8: multipart 上传, 不能走 request<T>() (它强加 JSON Content-Type),
+  // 手写 fetch + 错误映射跟 request<T>() 对齐 (ApiError + 401 处理无需要 —
+  // 该端点不要 auth)。
+  parseResume: async (jobId: string, file: File): Promise<{ parsed_text: string }> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(
+      `${API_BASE}/jobs/${jobId}/candidates/parse-resume`,
+      { method: "POST", body: fd },
+    );
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.detail) detail = body.detail;
+      } catch {
+        /* 非 JSON body, 用默认 detail */
+      }
+      throw new ApiError(res.status, detail);
+    }
+    return res.json();
+  },
   getCandidatePlan: (jobId: string, candidateId: string) =>
     request<InterviewPlan>(
       `/jobs/${jobId}/candidates/${candidateId}/plan`,

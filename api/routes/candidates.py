@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
-from api.schemas import CandidateCreate, CandidateCreated
-from src import cache, db, ingestion
+from api.schemas import CandidateCreate, CandidateCreated, ParsedResume
+from src import cache, db, ingestion, resume_parser
 from src.agents import planner
 from src.schemas import CandidateProfile, InterviewPlan, JobContext
 
@@ -57,6 +57,34 @@ def _ingest_resume_in_background(candidate_id: str, resume_text: str) -> None:
         log.exception(
             "background ingest_resume failed: candidate=%s", candidate_id,
         )
+
+
+@router.post("/parse-resume", response_model=ParsedResume)
+async def parse_resume_endpoint(
+    job_id: str,
+    file: UploadFile = File(..., description="PDF 或 docx 简历文件"),
+) -> ParsedResume:
+    """Sprint 5.8: 把 PDF / docx 文件解析成纯文本, 让候选人编辑后再走旧
+    POST .../candidates 提交。
+    本端点纯解析 (无 candidate 落库 / 无 Planner 触发), 让"解析" 与 "创建"
+    解耦, 用户能看到解析结果并修正解析错位。
+
+    422: 文件类型 / 大小 / 内容长度不合规 (resume_parser.ResumeParseError);
+    404: job_id 不存在 (防误传, 让前端 UX 不至于在空气里上传)。
+    """
+    if db.load_job(job_id) is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} 不存在")
+
+    blob = await file.read()
+    try:
+        parsed = resume_parser.parse_resume(
+            filename=file.filename or "",
+            mime=file.content_type or "",
+            blob=blob,
+        )
+    except resume_parser.ResumeParseError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return ParsedResume(parsed_text=parsed)
 
 
 @router.post("", response_model=CandidateCreated, status_code=202)

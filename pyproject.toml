@@ -15,6 +15,9 @@ dependencies = [
     "milvus-lite>=2.4.0",
     "python-jose[cryptography]>=3.3.0",
     "bcrypt>=4.1.0",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+    "python-multipart>=0.0.9",
 ]
 
 [build-system]

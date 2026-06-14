@@ -15,8 +15,14 @@ type SubmitState =
   | { kind: "submitting" }
   | { kind: "error"; message: string };
 
+type ParseState =
+  | { kind: "idle" }
+  | { kind: "parsing"; filename: string }
+  | { kind: "error"; message: string };
+
 const MIN_RESUME_CHARS = 20;
 const JD_PREVIEW_MAX = 400;
+const ACCEPT_TYPES = ".pdf,.docx";
 
 export default function InterviewLandingPage({
   params,
@@ -29,6 +35,25 @@ export default function InterviewLandingPage({
   const [jobState, setJobState] = useState<JobState>({ kind: "loading" });
   const [resume, setResume] = useState("");
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: "idle" });
+  const [parseState, setParseState] = useState<ParseState>({ kind: "idle" });
+
+  async function handleFileChange(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    // 重置 file input value, 让相同文件能再次触发 (用户改文本后想重新解析)
+    ev.target.value = "";
+    setParseState({ kind: "parsing", filename: file.name });
+    setSubmitState({ kind: "idle" });
+    try {
+      const { parsed_text } = await api.parseResume(jobId, file);
+      setResume(parsed_text);
+      setParseState({ kind: "idle" });
+    } catch (e: unknown) {
+      const msg =
+        e instanceof ApiError ? `${e.status}: ${e.message}` : errMessage(e);
+      setParseState({ kind: "error", message: msg });
+    }
+  }
 
   useEffect(() => {
     api
@@ -122,12 +147,43 @@ export default function InterviewLandingPage({
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 p-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <span className="text-xs px-2 py-1 rounded bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black font-medium">
+              选择文件
+            </span>
+            <span className="text-zinc-500 text-xs">
+              支持 PDF 或 docx (≤5MB); 解析后可编辑
+            </span>
+            <input
+              type="file"
+              accept={ACCEPT_TYPES}
+              onChange={handleFileChange}
+              disabled={
+                parseState.kind === "parsing" ||
+                submitState.kind === "submitting"
+              }
+              className="hidden"
+            />
+          </label>
+          {parseState.kind === "parsing" && (
+            <p className="text-xs text-zinc-500 mt-2">
+              解析中: {parseState.filename}...
+            </p>
+          )}
+          {parseState.kind === "error" && (
+            <p className="text-xs text-red-600 dark:text-red-400 mt-2">
+              解析失败: {parseState.message} · 你也可以直接粘贴文本到下方
+            </p>
+          )}
+        </div>
+
         <div>
           <label
             htmlFor="resume"
             className="block text-sm font-medium mb-2"
           >
-            请粘贴你的简历
+            简历内容 (可上传文件自动填充, 也可直接粘贴)
           </label>
           <textarea
             id="resume"

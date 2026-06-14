@@ -62,6 +62,13 @@ class CandidateCreated(BaseModel):
     plan_pending: bool = True
 
 
+class ParsedResume(BaseModel):
+    """POST /jobs/{job_id}/candidates/parse-resume 响应 (Sprint 5.8)。
+    parsed_text 是用户后续可编辑的字符串, 由前端填回 textarea, 再走旧
+    POST .../candidates {resume: text} 提交。"""
+    parsed_text: str
+
+
 class LoginRequest(BaseModel):
     """POST /auth/login 请求体。"""
     username: str = Field(..., min_length=1)
