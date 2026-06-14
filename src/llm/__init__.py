@@ -32,8 +32,12 @@ def complete(
     *,
     model: str | None = None,
     max_tokens: int = 1024,
+    timeout: float | None = None,
 ) -> str:
-    """单次同步 LLM 调用, 返回纯文本(已 strip)。透明 Redis 缓存。"""
+    """单次同步 LLM 调用, 返回纯文本(已 strip)。透明 Redis 缓存。
+    timeout: openai SDK 级超时 (秒), Sprint 5.6 Assessor 用 10s 限制延迟突发;
+    None = SDK 默认 (无显式超时)。超时会抛 openai.APITimeoutError, 调用方
+    负责 try/except 把它降级到启发式 fallback。"""
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return _stub(user)
@@ -52,14 +56,17 @@ def complete(
 
     base_url = os.environ.get("OPENAI_BASE_URL") or None
     client = OpenAI(api_key=api_key, base_url=base_url)
-    resp = client.chat.completions.create(
-        model=resolved_model,
-        max_tokens=max_tokens,
-        messages=[
+    create_kwargs: dict = {
+        "model": resolved_model,
+        "max_tokens": max_tokens,
+        "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-    )
+    }
+    if timeout is not None:
+        create_kwargs["timeout"] = timeout
+    resp = client.chat.completions.create(**create_kwargs)
     result = (resp.choices[0].message.content or "").strip()
 
     # stub 与空字符串都不入缓存: stub 应该让下次调用有机会重试到真实 API,
