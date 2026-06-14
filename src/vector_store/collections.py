@@ -73,7 +73,12 @@ def _vector_index_params():
 def init_collections() -> None:
     """按 schema 建立两个 collection。幂等 —— 已存在则跳过。
     Sprint 3-2 不引迁移, schema 改动需要 drop_collections + init_collections,
-    本地 dev 数据丢失可接受。生产期再补迁移工具。"""
+    本地 dev 数据丢失可接受。生产期再补迁移工具。
+
+    Sprint 5.5: 加 load_collection 调用。milvus-lite 每个 python 进程开自己的
+    server, 进程切换后 collection 状态可能是 'released', search/query 会报错。
+    init_collections 显式 load 一次让后续 search 能直接命中。
+    幂等: 已 load 的 collection 再 load 是 noop。"""
     client = get_client()
     if not client.has_collection(COLLECTION_QUESTIONS):
         client.create_collection(
@@ -87,6 +92,13 @@ def init_collections() -> None:
             schema=_build_documents_schema(),
             index_params=_vector_index_params(),
         )
+    # Sprint 5.5: 防"Collection in state released" 报错
+    for name in (COLLECTION_QUESTIONS, COLLECTION_DOCUMENTS):
+        try:
+            client.load_collection(name)
+        except Exception:
+            # 已 load / 空 collection 偶发报警, 不影响 search; 静默吞
+            pass
 
 
 def drop_collections() -> None:

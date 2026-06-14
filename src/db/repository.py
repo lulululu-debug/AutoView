@@ -372,6 +372,25 @@ def load_plan(plan_id: str) -> Optional[InterviewPlan]:
         return InterviewPlan.model_validate(row.plan_data)
 
 
+def load_candidate_for_plan(plan_id: str) -> Optional[CandidateProfile]:
+    """从 plan_id 反查 candidate (Sprint 5.5 task 4: orchestrator 在 submit_answer
+    里 lazy resolve 项目题时需要 candidate.resume 拿 RAG 切片)。
+    InterviewPlanORM.candidate_id 是 FK 列, 直接 join 出来即可。"""
+    with session_scope() as s:
+        plan_row = s.get(InterviewPlanORM, plan_id)
+        if plan_row is None:
+            return None
+        c = s.get(CandidateORM, plan_row.candidate_id)
+        if c is None:
+            return None
+        return CandidateProfile.model_validate({
+            "candidate_id": c.candidate_id,
+            "job_id": c.job_id,
+            "resume": c.resume,
+            "projects": c.projects,
+        })
+
+
 def load_latest_plan_for_candidate(candidate_id: str) -> Optional[InterviewPlan]:
     """同一候选人允许多版 plan (HR 重跑 Planner), 这里返回最新生成的那个。
     用 created_at desc 而非 plan_id 排序: hex uuid 字典序无意义,

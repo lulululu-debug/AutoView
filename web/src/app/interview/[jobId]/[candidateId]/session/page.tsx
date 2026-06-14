@@ -54,7 +54,8 @@ function computeProgress(
   refId: string | null,
   prevIndex: number,
 ): Progress {
-  const questions = plan.rounds[0]?.questions ?? [];
+  // Sprint 5.5: plan 是多 round stage 序列, 跨所有 round flatten 走总进度
+  const questions = plan.rounds.flatMap((r) => r.questions);
   const total = questions.length;
   if (!refId) {
     return { current_q_index: 1, total_q: total, is_followup: false };
@@ -65,6 +66,35 @@ function computeProgress(
   }
   // ref_id 不在 plan.questions 里 -> 是上一道题的 followup
   return { current_q_index: prevIndex, total_q: total, is_followup: true };
+}
+
+/**
+ * Sprint 5.5 task 4: 判"提交完当前答案后, 后端是否会触发 project 题 lazy gen"。
+ * 用来把按钮文案从 "提交中..." 换成 "思考中... (准备项目题, 约需 3-5 秒)"。
+ *
+ * 启发式: 当前 ref_id 是某 round 的"最后一题"且下一个 round 是 PROJECT stage,
+ * 且下一个 round 至少一道题 lazy && text 为空 (尚未 resolve)。
+ * followup 答案我们不当作"最后一题" (refId 不在 question 列表里), 所以不会误判。
+ *
+ * 误差: 当前题的 Interviewer 启发式可能触发追问 -> 实际下一个不是 project 而是
+ * followup. 这种情况按钮先显示"思考中..." 但实际是普通 follow-up 延迟, 用户感受
+ * 上无害 —— 加载状态不会让人困惑, 反而是个温和的高估。
+ */
+function isNextTurnLazyProject(
+  plan: InterviewPlan,
+  refId: string | null,
+): boolean {
+  if (!refId) return false;
+  const roundIdx = plan.rounds.findIndex((r) =>
+    r.questions.some((q) => q.question_id === refId),
+  );
+  if (roundIdx < 0) return false;
+  const currentRound = plan.rounds[roundIdx];
+  const last = currentRound.questions[currentRound.questions.length - 1];
+  if (!last || last.question_id !== refId) return false;
+  const nextRound = plan.rounds[roundIdx + 1];
+  if (!nextRound || nextRound.stage !== "project") return false;
+  return nextRound.questions.some((q) => q.lazy && !q.text);
 }
 
 export default function SessionPage({
@@ -245,7 +275,11 @@ export default function SessionPage({
                   }
                   className="rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black px-5 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 shrink-0"
                 >
-                  {state.kind === "submitting" ? "提交中..." : "提交回答"}
+                  {state.kind === "submitting"
+                    ? isNextTurnLazyProject(state.plan, state.turn.ref_id)
+                      ? "思考中... (准备项目题, 约 3-5 秒)"
+                      : "提交中..."
+                    : "提交回答"}
                 </button>
               </div>
             </form>

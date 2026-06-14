@@ -120,12 +120,22 @@ export type Competency = {
   weight: number;
 };
 
+// Sprint 5.5: category 4 类 + stage 4 类 + lazy 静态信号
+export type QuestionCategory =
+  | "knowledge"
+  | "project_experience"
+  | "self_intro"
+  | "scenario";
+
+export type InterviewStage = "self_intro" | "knowledge" | "project" | "scenario";
+
 export type Question = {
   question_id: string;
-  competency_id: string;
+  competency_id: string | null;       // self_intro 题为 null
   text: string;
   type: string;
-  category: string;
+  category: QuestionCategory;
+  lazy: boolean;                      // 静态信号: plan 阶段是否走 lazy 路径
   source_question_id: string | null;
   source_chunk_ids: string[];
 };
@@ -134,6 +144,7 @@ export type InterviewRound = {
   round_id: string;
   index: number;
   title: string;
+  stage: InterviewStage;
   competencies: Competency[];
   questions: Question[];
 };
@@ -142,6 +153,7 @@ export type InterviewPlan = {
   plan_id: string;
   job_id: string;
   rounds: InterviewRound[];
+  competencies: Competency[];         // 跨 stage 顶层权威 (Sprint 5.5)
 };
 
 // 面试会话推进结果 (与后端 schemas.TurnResult 对齐)

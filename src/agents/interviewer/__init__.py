@@ -4,6 +4,12 @@
 追问触发: 回答过短(<60 字符), 或缺少具体例子线索。
 追问文本由 LLM 生成, 不可用时回退到通用模板。
 
+Sprint 5.5 task 4:
+- self_intro 题永远不触发 followup (在 _needs_followup 里硬豁免);
+  candidate 的自我介绍由 orchestrator 落到 session.intro_text 给 project 题用,
+  不需要在这里反复追问"再多介绍一点"。
+- 其他 stage 的追问启发式与 Sprint 0 一致, 留到 Sprint 5.6 升级为 Assessor。
+
 返回值约定:
 - Question  -> 主问题
 - FollowUp  -> 针对当前问题的追问
@@ -19,6 +25,7 @@ from src.schemas import (
     InterviewPlan,
     InterviewSession,
     Question,
+    QuestionCategory,
     TurnRole,
 )
 
@@ -35,7 +42,11 @@ def _all_questions(plan: InterviewPlan) -> list[Question]:
     return [q for r in plan.rounds for q in r.questions]
 
 
-def _needs_followup(answer: CandidateAnswer) -> bool:
+def _needs_followup(question: Question, answer: CandidateAnswer) -> bool:
+    # Sprint 5.5 task 4: self_intro 永不追问, 不管多短.
+    # 自我介绍只是收集 intro_text 给后续 project 题做语境, 不参与评分.
+    if question.category is QuestionCategory.SELF_INTRO:
+        return False
     text = answer.text.strip()
     if len(text) < _MIN_ANSWER_CHARS:
         return True
@@ -86,7 +97,7 @@ def next_turn(
     # 同题至多追问一次
     if current_q is not None and followups_since == 0:
         latest = session.answers[-1] if session.answers else None
-        if latest is not None and _needs_followup(latest):
+        if latest is not None and _needs_followup(current_q, latest):
             return FollowUp(
                 parent_question_id=current_q.question_id,
                 text=_followup_text(current_q, latest),
