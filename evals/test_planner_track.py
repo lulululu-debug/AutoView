@@ -246,6 +246,28 @@ class CategoryDistributionTests(unittest.TestCase):
         self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 3)
         self.assertEqual(by_cat[QuestionCategory.SCENARIO], 2)
 
+    def test_lateral_knowledge_less_than_project(self):
+        """sprint 5.5 核心设计意图: lateral (社招) project 重于 knowledge,
+        与 campus (校招) knowledge 重于 project 形成对照。
+        knowledge 题数严格少于 project 题数。"""
+        p = planner.plan(_job(Track.LATERAL), _CANDIDATE)
+        by_cat = Counter(q.category for r in p.rounds for q in r.questions)
+        self.assertLess(
+            by_cat[QuestionCategory.KNOWLEDGE],
+            by_cat[QuestionCategory.PROJECT_EXPERIENCE],
+            "lateral: knowledge 应严格少于 project (社招重项目)",
+        )
+
+    def test_campus_knowledge_more_than_project(self):
+        """对照: campus knowledge 重于 project (校招重基础知识)。"""
+        p = planner.plan(_job(Track.CAMPUS), _CANDIDATE)
+        by_cat = Counter(q.category for r in p.rounds for q in r.questions)
+        self.assertGreater(
+            by_cat[QuestionCategory.KNOWLEDGE],
+            by_cat[QuestionCategory.PROJECT_EXPERIENCE],
+            "campus: knowledge 应严格多于 project (校招重知识)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
