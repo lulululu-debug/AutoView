@@ -20,12 +20,15 @@ from __future__ import annotations
 import logging
 
 from src import embeddings, llm, vector_store
+from src.coverage import compute_coverage, insufficient_competencies
 from src.schemas import (
     Competency,
+    CompletionPolicy,
     DimensionScore,
     EvaluationReport,
     InterviewPlan,
     InterviewSession,
+    JobContext,
     PerformanceObservation,
     Question,
     Signal,
@@ -162,12 +165,22 @@ def _summary(
     return text
 
 
+_EVIDENCE_INSUFFICIENT_PREFIX = "证据不充分, 建议人工面谈: "
+
+
 def evaluate(
     session: InterviewSession,
     plan: InterviewPlan,
     signals: list[Signal] | None = None,
+    job: JobContext | None = None,
 ) -> EvaluationReport:
-    """Evaluator 入口: Session + Plan + (可选) Signals -> EvaluationReport。"""
+    """Evaluator 入口: Session + Plan + (可选) Signals + (可选) JobContext
+    -> EvaluationReport。
+
+    Sprint 5.7: 计算 competency_coverage; 任一 mandatory competency 未达
+    CompletionPolicy.min_competency_coverage 时, summary 前缀加
+    "证据不充分, 建议人工面谈: " + needs_human_review=True (不引新字段)。
+    job=None 时用 CompletionPolicy schema 默认值。"""
     signals = signals or []
     # Sprint 5.5: plan.competencies 是顶层权威列表 (跨 stage 共享去重);
     # round.competencies 退化为该 stage 的子集视图, 仅供 HR 阶段视图使用。
@@ -208,6 +221,20 @@ def evaluate(
     rag_chunk_ids = [c["document_id"] for c in rag_chunks]
     summary = _summary(session, content_scores, comps, chunks=rag_chunks or None)
 
+    # Sprint 5.7: 计算 coverage + evidence_insufficient flag
+    coverage = compute_coverage(session, plan)
+    completion = (
+        job.completion_policy if job and job.completion_policy is not None
+        else CompletionPolicy()
+    )
+    insufficient = insufficient_competencies(coverage, completion, plan)
+    if insufficient:
+        names = _competency_names(comps, insufficient)
+        summary = (
+            f"{_EVIDENCE_INSUFFICIENT_PREFIX}"
+            f"{', '.join(names)} 等维度证据不足。\n\n{summary}"
+        )
+
     return EvaluationReport(
         session_id=session.session_id,
         content_scores=content_scores,
@@ -216,4 +243,12 @@ def evaluate(
         summary=summary,
         rag_context_chunk_ids=rag_chunk_ids,
         needs_human_review=True,
+        competency_coverage=coverage,
     )
+
+
+def _competency_names(
+    comps: list[Competency], cids: list[str],
+) -> list[str]:
+    by_id = {c.competency_id: c.name for c in comps}
+    return [by_id.get(cid, cid[:8]) for cid in cids]

@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { ApiError, api, type JobContext, type Track } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  type CompletionPolicy,
+  type FollowUpPolicy,
+  type JobContext,
+  type Track,
+} from "@/lib/api";
 
 /**
  * HR Dashboard 主页:
@@ -158,6 +165,14 @@ function CreateJobForm({
   const [companyMaterials, setCompanyMaterials] = useState("");
   const [track, setTrack] = useState<Track>("lateral");
   const [state, setState] = useState<CreateState>({ kind: "idle" });
+  // Sprint 5.7: 高级折叠区. 默认 collapsed + 字段为 schema 默认值; 提交时
+  // 仅当 advanced 展开过且字段动过, 才把 policy 对象传给后端 (空 -> null);
+  // 大多数 HR 不动这块, 后端用默认。
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [maxTotalQ, setMaxTotalQ] = useState("15");
+  const [minCoverage, setMinCoverage] = useState("0.7");
+  const [minSufficiency, setMinSufficiency] = useState("0.7");
+  const [minConfidence, setMinConfidence] = useState("0.5");
 
   function addRequirement() {
     setRequirements((rs) => [...rs, ""]);
@@ -174,12 +189,31 @@ function CreateJobForm({
     if (!title.trim() || !jd.trim()) return;
     setState({ kind: "submitting" });
     try {
+      // Sprint 5.7: 只有 advanced 展开过才传 policy; 后端 null = 用默认。
+      // 这样避免误传 "覆盖" 让 HR 以为是默认却实际写了死值。
+      let followup_policy: FollowUpPolicy | null = null;
+      let completion_policy: CompletionPolicy | null = null;
+      if (advancedOpen) {
+        const f = parseFloat;
+        completion_policy = {
+          min_competency_coverage: f(minCoverage),
+          max_total_questions: parseInt(maxTotalQ, 10),
+          mandatory_competencies: [],
+        };
+        followup_policy = {
+          max_followups_per_question: 1, // stage-aware default 不在 UI 暴露 (留 5.8)
+          min_sufficiency_to_stop: f(minSufficiency),
+          min_confidence_to_stop: f(minConfidence),
+        };
+      }
       await api.createJob({
         title: title.trim(),
         jd: jd.trim(),
         requirements: requirements.map((r) => r.trim()).filter(Boolean),
         company_materials: companyMaterials.trim(),
         track,
+        followup_policy,
+        completion_policy,
       });
       onSuccess();
     } catch (e) {
@@ -298,6 +332,54 @@ function CreateJobForm({
         />
       </div>
 
+      <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3">
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((v) => !v)}
+          className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 flex items-center gap-1"
+        >
+          <span>{advancedOpen ? "▼" : "▶"}</span> 高级 (面试策略阈值)
+        </button>
+        {advancedOpen && (
+          <div className="mt-3 space-y-3 rounded-md bg-zinc-50 dark:bg-zinc-800/30 p-3">
+            <p className="text-xs text-zinc-500">
+              影响 Interviewer 何时提前结束、Evaluator 何时标"证据不充分"。
+              留默认即可, 大多数 HR 不需要调。
+            </p>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <NumberField
+                label="题数硬上限 (含追问)"
+                value={maxTotalQ}
+                onChange={setMaxTotalQ}
+                step="1"
+                disabled={state.kind === "submitting"}
+              />
+              <NumberField
+                label="每维度证据充分度门槛 (0-1)"
+                value={minCoverage}
+                onChange={setMinCoverage}
+                step="0.05"
+                disabled={state.kind === "submitting"}
+              />
+              <NumberField
+                label="Assessor 充分度停止阈值 (0-1)"
+                value={minSufficiency}
+                onChange={setMinSufficiency}
+                step="0.05"
+                disabled={state.kind === "submitting"}
+              />
+              <NumberField
+                label="Assessor 置信度停止阈值 (0-1)"
+                value={minConfidence}
+                onChange={setMinConfidence}
+                step="0.05"
+                disabled={state.kind === "submitting"}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
       {state.kind === "error" && (
         <div className="rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 p-2 text-sm text-red-700 dark:text-red-300">
           {state.message}
@@ -324,6 +406,34 @@ function CreateJobForm({
         </button>
       </div>
     </form>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  step,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  step: string;
+  disabled: boolean;
+}) {
+  return (
+    <div>
+      <label className="block text-xs text-zinc-500 mb-1">{label}</label>
+      <input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 p-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400 disabled:opacity-60 tabular-nums"
+      />
+    </div>
   );
 }
 

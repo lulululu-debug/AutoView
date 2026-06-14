@@ -105,7 +105,7 @@ def start_session(
         status=SessionStatus.IN_PROGRESS,
     )
 
-    first = interviewer.next_turn(session, plan)
+    first = interviewer.next_turn(session, plan, job=job)
     if first is None:
         # 退化情况: 计划没有任何题目, 直接完结
         session.status = SessionStatus.COMPLETED
@@ -181,7 +181,11 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
                 answered_q.question_id,
             )
 
-    nxt = interviewer.next_turn(session, plan)
+    # Sprint 5.7: 让 Interviewer 看到 job.followup_policy / completion_policy
+    # (HR 在高级折叠区配的覆盖)。job 从 PG 反查, 缺数据时为 None ->
+    # next_turn 退到 stage / schema 默认 policy (5.6 行为)。
+    job_for_decision = db.load_job(session.job_id)
+    nxt = interviewer.next_turn(session, plan, job=job_for_decision)
     if nxt is None:
         session.status = SessionStatus.COMPLETED
         cache.save_session(session)
@@ -289,7 +293,10 @@ def finalize(session_id: str) -> EvaluationReport:
         session.status = SessionStatus.COMPLETED
 
     signals = analyzer.analyze(session)
-    report = evaluator.evaluate(session, plan, signals)
+    # Sprint 5.7: 让 Evaluator 看到 job.completion_policy 决定 evidence_insufficient
+    # 阈值; PG 缺 job (内存路径) 时 None -> 用 schema 默认。
+    job_for_eval = db.load_job(session.job_id)
+    report = evaluator.evaluate(session, plan, signals, job=job_for_eval)
 
     db.save_session(session)
     db.save_report(report)

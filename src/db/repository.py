@@ -90,6 +90,8 @@ def list_jobs() -> list[JobContext]:
                 "requirements": r.requirements,
                 "company_materials": r.company_materials,
                 "track": r.track,
+                "followup_policy": r.followup_policy,
+                "completion_policy": r.completion_policy,
             })
             for r in rows
         ]
@@ -297,6 +299,8 @@ def save_job(job: JobContext) -> None:
             requirements=payload["requirements"],
             company_materials=payload["company_materials"],
             track=payload["track"],
+            followup_policy=payload.get("followup_policy"),
+            completion_policy=payload.get("completion_policy"),
         ))
 
 
@@ -312,6 +316,8 @@ def load_job(job_id: str) -> Optional[JobContext]:
             "requirements": row.requirements,
             "company_materials": row.company_materials,
             "track": row.track,
+            "followup_policy": row.followup_policy,
+            "completion_policy": row.completion_policy,
         })
 
 
@@ -422,6 +428,7 @@ def save_session(session: InterviewSession) -> None:
             history=payload["history"],
             answers=payload["answers"],
             intro_text=payload["intro_text"],
+            assessments=payload["assessments"],
         )
         s.merge(row)
 
@@ -442,6 +449,7 @@ def load_session(session_id: str) -> Optional[InterviewSession]:
                 "history": row.history,
                 "answers": row.answers,
                 "intro_text": row.intro_text,
+                "assessments": row.assessments,
             }
         )
 
@@ -461,6 +469,7 @@ def save_report(report: EvaluationReport) -> None:
             summary=payload["summary"],
             needs_human_review=payload["needs_human_review"],
             rag_context_chunk_ids=payload["rag_context_chunk_ids"],
+            competency_coverage=payload["competency_coverage"],
         )
         s.merge(row)
 
@@ -480,6 +489,7 @@ def load_report(report_id: str) -> Optional[EvaluationReport]:
                 "summary": row.summary,
                 "needs_human_review": row.needs_human_review,
                 "rag_context_chunk_ids": row.rag_context_chunk_ids,
+                "competency_coverage": row.competency_coverage,
             }
         )
 
@@ -504,5 +514,6 @@ def load_report_by_session(session_id: str) -> Optional[EvaluationReport]:
                 "summary": row.summary,
                 "needs_human_review": row.needs_human_review,
                 "rag_context_chunk_ids": row.rag_context_chunk_ids,
+                "competency_coverage": row.competency_coverage,
             }
         )

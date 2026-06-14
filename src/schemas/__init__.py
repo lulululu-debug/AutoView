@@ -54,6 +54,10 @@ class JobContext(BaseModel):
     role_family: str = "backend"             # Sprint 3-5: 题库召回按 role_family + 维度过滤
                                              # 当前题库只 seed 了 backend; 改职位族要先 seed 对应题库
     track: Track = Track.LATERAL             # Sprint 5.5: 校招 / 社招; 老 Job 缺这列默认 lateral
+    # Sprint 5.7: HR 可在新建 job 高级折叠区覆盖默认 policy;
+    # None 表示用 stage 默认 / schema 默认值, 让 HR 不动也能用。
+    followup_policy: "FollowUpPolicy | None" = None
+    completion_policy: "CompletionPolicy | None" = None
 
 
 class CandidateProfile(BaseModel):
@@ -216,7 +220,8 @@ class FollowUpPolicy(BaseModel):
     """追问策略 —— Sprint 5.6 起 Interviewer 用本结构 + AnswerAssessment 决策。
 
     Sprint 5.6 阶段 stage 默认值在 Interviewer 内硬编码, 不读 JobContext;
-    Sprint 5.7 才让 HR 在 JobContext.followup_policy 配置覆盖。
+    Sprint 5.7 起允许 JobContext.followup_policy 覆盖 (HR 在新建 job 高级折叠
+    区配置)。
 
     决策语义 (per question):
     - 已有 followups >= max_followups_per_question -> 停 (硬上限)
@@ -241,6 +246,34 @@ class FollowUpPolicy(BaseModel):
             InterviewStage.SCENARIO: 2,
         }
         return cls(max_followups_per_question=max_table.get(stage, 1))
+
+
+class CompletionPolicy(BaseModel):
+    """面试结束策略 —— Sprint 5.7 起 Interviewer 用本结构 + competency_coverage
+    决策是否提前结束面试。
+
+    决策语义 (next_turn 末尾):
+    - 已答题数 >= max_total_questions -> done (硬上限, 防无限循环兜底)
+    - mandatory competency 全部 coverage >= min_competency_coverage -> done
+      (提前结束, 信号足够不必继续)
+    - 还有未答的 plan 题 -> 返回下一题 (信号不够, 继续走完计划)
+    - 题答完但 coverage 不达标 -> done, Evaluator 标 evidence_insufficient
+
+    **绝不做动态补题**: 题库由 plan + lazy gen 一次确定, coverage 不够也
+    不能让 LLM 现场生成新题 (公平性 + 可复现性双坍方)。
+
+    字段:
+    - min_competency_coverage: 每维度 coverage 的最低门槛, 与
+      FollowUpPolicy.min_sufficiency_to_stop 对齐让 mental model 一致
+    - max_total_questions: 硬上限, 含 followup 在内 (sprint 5.5 默认 plan ~7-8 题,
+      留 buffer 给追问)
+    - mandatory_competencies: 空数组 = plan.competencies 全部 mandatory (默认);
+      非空时只检查列出的 competency_id, 让 HR 可以挑哪些维度必须达标。
+
+    Sprint 5.7 起允许 JobContext.completion_policy 覆盖默认值。"""
+    min_competency_coverage: float = Field(default=0.7, ge=0.0, le=1.0)
+    max_total_questions: int = Field(default=15, gt=0)
+    mandatory_competencies: list[str] = []
 
 
 class TurnRole(str, Enum):
@@ -394,7 +427,13 @@ class TurnResult(BaseModel):
 class EvaluationReport(BaseModel):
     """Evaluator 的输出。
     内容维度(content_scores) 与表现维度(performance_observations) 分区。
-    overall 只基于 content_scores 加权, 不依赖任何软信号。"""
+    overall 只基于 content_scores 加权, 不依赖任何软信号。
+
+    Sprint 5.7 起加 competency_coverage: 每维度证据充分性聚合 ∈ [0, 1],
+    由 max(sufficiency) over session.assessments 同 competency 求得;
+    任一 mandatory 维度 < CompletionPolicy.min_competency_coverage 时,
+    summary 自动加 "证据不充分, 建议人工面谈" 前缀句 + needs_human_review=True。
+    老 Report 缺该字段时默认空 dict, 兼容 5.7 之前归档的报告。"""
     report_id: str = Field(default_factory=_new_id)
     session_id: str
     content_scores: list[DimensionScore]                    # 内容维度: 进总分
@@ -405,3 +444,5 @@ class EvaluationReport(BaseModel):
     # Sprint 3-7 RAG 溯源: 评估时召回的 JD/公司资料 document_id 列表;
     # 空列表表示没用 RAG (Milvus 未配置 / 召回为空 / embed stub)
     rag_context_chunk_ids: list[str] = []
+    # Sprint 5.7: 每维度证据充分性, key=competency_id value ∈ [0, 1]
+    competency_coverage: dict[str, float] = {}

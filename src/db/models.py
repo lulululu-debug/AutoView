@@ -134,6 +134,10 @@ class JobORM(Base):
     track: Mapped[str] = mapped_column(
         String(16), nullable=False, default="lateral", server_default="lateral",
     )
+    # Sprint 5.7: HR 在高级折叠区配置的覆盖策略; NULL = 用默认 (stage 默认 /
+    # CompletionPolicy schema 默认), 老 Job 缺这列也是 NULL 自然兼容。
+    followup_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    completion_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -219,6 +223,11 @@ class InterviewSessionORM(Base):
     intro_text: Mapped[str] = mapped_column(
         String, nullable=False, default="", server_default="",
     )
+    # Sprint 5.7: 每答一题 Assessor 产出一条 AnswerAssessment (ASSESSOR_ENABLED
+    # 启用时), 追加到这里. 老 session 缺这列时 server_default '[]' 兜底。
+    assessments: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -261,6 +270,10 @@ class EvaluationReportORM(Base):
     # Sprint 3-7: Evaluator RAG 溯源, JD/公司资料 chunk id 列表
     rag_context_chunk_ids: Mapped[list] = mapped_column(
         JSONB, nullable=False, default=list,
+    )
+    # Sprint 5.7: 每维度证据充分性 0~1; ALTER 加列 server_default '{}' 兜底老报告
+    competency_coverage: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
     )
 
     created_at: Mapped[datetime] = mapped_column(

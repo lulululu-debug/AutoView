@@ -156,6 +156,59 @@ export type InterviewPlan = {
   competencies: Competency[];         // 跨 stage 顶层权威 (Sprint 5.5)
 };
 
+// Sprint 5.7: HR 高级折叠区可配置的 policy
+export type FollowUpPolicy = {
+  max_followups_per_question: number;
+  min_sufficiency_to_stop: number;
+  min_confidence_to_stop: number;
+};
+
+export type CompletionPolicy = {
+  min_competency_coverage: number;
+  max_total_questions: number;
+  mandatory_competencies: string[];
+};
+
+// Sprint 5.6: AnswerAssessment 自然语言字段(不暴露 sufficiency / confidence 数字)
+export type AnswerAssessment = {
+  question_id: string;
+  sufficiency: number;          // 后端返回但前端 UI 不渲染 (合规)
+  confidence: number;           // 同上
+  missing_signals: string[];
+  strengths: string[];
+  concerns: string[];
+  followup_goal: string;
+  stop_reason: string;
+};
+
+// Sprint 5.7: HR /hr/sessions/{id} 返回的完整 session
+export type TurnRole = "interviewer" | "candidate";
+export type SessionTurn = {
+  role: TurnRole;
+  text: string;
+  ref_id: string | null;
+  at: string;
+};
+export type SessionAnswer = {
+  answer_id: string;
+  question_id: string;
+  text: string;
+  media_ref: string | null;
+  asked_at: string;
+};
+export type SessionStatus = "created" | "in_progress" | "completed";
+export type InterviewSessionDetail = {
+  session_id: string;
+  plan_id: string;
+  job_id: string;
+  status: SessionStatus;
+  current_round: number;
+  history: SessionTurn[];
+  answers: SessionAnswer[];
+  intro_text: string;
+  assessments: AnswerAssessment[];
+};
+
 // 面试会话推进结果 (与后端 schemas.TurnResult 对齐)
 export type TurnResult = {
   session_id: string;
@@ -215,6 +268,8 @@ export type EvaluationReport = {
   summary: string;
   needs_human_review: boolean;
   rag_context_chunk_ids: string[];
+  // Sprint 5.7: 每维度证据充分性 0~1; HR UI 可展示为进度条 / 颜色档
+  competency_coverage: Record<string, number>;
 };
 
 // 复核相关
@@ -281,6 +336,8 @@ export const api = {
     requirements: string[];
     company_materials: string;
     track: Track;
+    followup_policy?: FollowUpPolicy | null;
+    completion_policy?: CompletionPolicy | null;
   }) =>
     request<JobContext>("/jobs", {
       method: "POST",
@@ -299,6 +356,8 @@ export const api = {
       `/hr/jobs/${jobId}/candidates/${candidateId}`,
       { auth: true },
     ),
+  getHrSession: (sessionId: string) =>
+    request<InterviewSessionDetail>(`/hr/sessions/${sessionId}`, { auth: true }),
   getReport: (reportId: string) =>
     request<EvaluationReport>(`/hr/reports/${reportId}`, { auth: true }),
   getReview: (reportId: string) =>
