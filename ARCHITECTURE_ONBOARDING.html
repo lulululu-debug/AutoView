@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>AI Interview Platform · 项目架构速读</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --bg: #fafafa;
+    --card: #fff;
+    --border: #e5e7eb;
+    --code-bg: #f4f4f5;
+    --accent: #0369a1;
+    --warn: #b45309;
+    --good: #047857;
+    --bad: #b91c1c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; padding-top: 12px;
+       border-top: 1px solid var(--border); color: var(--accent); }
+  h3 { font-size: 15px; margin: 18px 0 6px; color: #111; }
+  h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted);
+       text-transform: uppercase; letter-spacing: 0.05em; }
+  p { margin: 6px 0 10px; }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px;
+  }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    overflow-x: auto;
+    line-height: 1.45;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 14px;
+    font-size: 12.5px;
+  }
+  th, td {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { background: #f3f4f6; font-weight: 600; }
+  ul, ol { padding-left: 22px; margin: 6px 0 10px; }
+  li { margin: 3px 0; }
+  .muted { color: var(--muted); }
+  .pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 4px;
+  }
+  .pill.done { background: #d1fae5; color: var(--good); }
+  .pill.wip { background: #fef3c7; color: var(--warn); }
+  .pill.next { background: #e0e7ff; color: #3730a3; }
+  .pill.warn { background: #fee2e2; color: var(--bad); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .toc { columns: 2; column-gap: 32px; font-size: 13px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: #f0f9ff;
+    padding: 10px 14px;
+    margin: 10px 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fffbeb; }
+  .ascii {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.35;
+    white-space: pre;
+    background: var(--code-bg);
+    padding: 14px;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+  .small { font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>AI Interview Platform · 项目架构速读</h1>
+<p class="muted">
+  一份给第一次接触这个项目的 coder 的快速上手文档。
+  覆盖项目目标、技术栈、模块结构、数据流、核心约束 + 常见问题。
+  深度细节去看 <code>CLAUDE.md</code> / <code>ARCHITECTURE.md</code> / <code>sprint.md</code>。
+</p>
+
+<div class="card" style="margin:16px 0;">
+  <h4 style="margin-top:0;">目录</h4>
+  <div class="toc">
+    <p><a href="#what">1. 这是个什么项目</a></p>
+    <p><a href="#stack">2. 技术栈</a></p>
+    <p><a href="#big-picture">3. 系统总览图</a></p>
+    <p><a href="#agents">4. Agent 内核 (5 个 agent)</a></p>
+    <p><a href="#modules">5. 代码模块地图</a></p>
+    <p><a href="#flow">6. 一次面试的完整数据流</a></p>
+    <p><a href="#contracts">7. 数据契约 (pydantic schemas)</a></p>
+    <p><a href="#storage">8. 三层存储 (Redis / PG / Milvus)</a></p>
+    <p><a href="#llm-rag">9. LLM &amp; RAG 调用点全景</a></p>
+    <p><a href="#compliance">10. 合规与硬约束</a></p>
+    <p><a href="#run">11. 怎么跑起来</a></p>
+    <p><a href="#evals">12. Eval 体系</a></p>
+    <p><a href="#sprints">13. Sprint 状态 + 路线图</a></p>
+    <p><a href="#faq">14. 常见问题 FAQ</a></p>
+  </div>
+</div>
+
+<h2 id="what">1. 这是个什么项目</h2>
+
+<p>
+  <b>双边 AI 面试基础设施</b>：HR 上传 JD / 岗位要求 / 公司资料，
+  候选人面试前上传 Resume；系统结合 JD 与 Resume 自动生成面试计划、
+  执行多轮面试与追问、产出结构化评估报告。
+</p>
+
+<div class="grid2">
+  <div class="card">
+    <h3>HR 端职责</h3>
+    <ul>
+      <li>创建职位、上传 JD/公司资料</li>
+      <li>选择 track (校招 <code>campus</code> / 社招 <code>lateral</code>)</li>
+      <li>查看候选人列表 + 状态 (plan_pending / ready / completed / reviewed)</li>
+      <li>查看面试阶段视图 + 评估报告</li>
+      <li>人工复核：留备注 + 维度覆盖 + 三态 decision</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>候选人端职责</h3>
+    <ul>
+      <li>上传 Resume (PDF / docx 自动解析, 或 paste)</li>
+      <li>等待 Planner 生成面试计划</li>
+      <li>按 stage 序列完成 7-9 道题面试</li>
+      <li>面试过程可中断恢复 (Redis 会话热存储)</li>
+    </ul>
+  </div>
+</div>
+
+<h3>面试 stage 序列 (Sprint 5.5 起)</h3>
+<table>
+  <tr><th>Track</th><th>序列</th><th>题数</th></tr>
+  <tr>
+    <td><b>campus</b> (校招)</td>
+    <td>self_intro → knowledge ×3 → project ×2 (lazy) → scenario ×1</td>
+    <td>7</td>
+  </tr>
+  <tr>
+    <td><b>lateral</b> (社招)</td>
+    <td>self_intro → project ×3 (lazy) → scenario ×2 → knowledge ×1</td>
+    <td>7</td>
+  </tr>
+</table>
+<p class="small muted">
+  <b>lazy</b> = plan 阶段只占位 text="", 进 project stage 时用候选人 intro_text
+  + Resume RAG 现场生成。让题目真正反映候选人自我介绍里提到的内容。
+</p>
+
+<h2 id="stack">2. 技术栈</h2>
+
+<div class="grid2">
+  <div class="card">
+    <h4>后端</h4>
+    <table>
+      <tr><td>语言</td><td>Python 3.11+</td></tr>
+      <tr><td>数据契约</td><td>pydantic v2</td></tr>
+      <tr><td>HTTP</td><td>FastAPI + uvicorn</td></tr>
+      <tr><td>ORM</td><td>SQLAlchemy 2.0 + psycopg3</td></tr>
+      <tr><td>关系存储</td><td>PostgreSQL</td></tr>
+      <tr><td>热存储 / 缓存</td><td>Redis</td></tr>
+      <tr><td>向量存储</td><td>Milvus Lite (in-process, 单文件)</td></tr>
+      <tr><td>LLM &amp; Embedding</td><td>OpenAI (单一 provider)</td></tr>
+      <tr><td>鉴权</td><td>JWT HS256 + bcrypt + httpOnly cookie</td></tr>
+      <tr><td>简历解析</td><td>pypdf + python-docx</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>前端</h4>
+    <table>
+      <tr><td>框架</td><td>Next.js 16 (App Router + Turbopack)</td></tr>
+      <tr><td>UI</td><td>React 19 + Tailwind 4</td></tr>
+      <tr><td>语言</td><td>TypeScript</td></tr>
+      <tr><td>路由</td><td>file-based + dynamic <code>[param]</code></td></tr>
+      <tr><td>鉴权</td><td>httpOnly cookie (HR 端) + soft-auth (候选人端)</td></tr>
+      <tr><td>状态</td><td>React hooks (useState/useEffect) + localStorage 草稿</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2 id="big-picture">3. 系统总览图</h2>
+
+<div class="ascii">
+                  ┌─────────────────────────────────────────────────┐
+                  │             Next.js 16 (web, :3000)              │
+                  │  /interview/{job_id}/...   ← 候选人端 (无 auth)   │
+                  │  /hr/*                      ← HR 端 (cookie auth) │
+                  └────────────────────┬────────────────────────────┘
+                                       │ fetch (credentials: include)
+                                       ▼
+                  ┌─────────────────────────────────────────────────┐
+                  │              FastAPI (api, :8000)                │
+                  │  /jobs /candidates /interviews /auth /hr/*       │
+                  │  + CORS + exception map + require_hr_user        │
+                  └────────────────────┬────────────────────────────┘
+                                       │
+              ┌────────────────────────┼────────────────────────┐
+              │                        │                        │
+              ▼                        ▼                        ▼
+     ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+     │  Orchestrator    │    │     Agents       │    │   Persistence    │
+     │  (会话状态机)     │    │  Planner         │    │  Postgres (PG)   │
+     │  start_session   │◄──►│  Interviewer     │    │   ↑ 归档真理      │
+     │  submit_answer   │    │  Assessor (5.6)  │    │  Redis           │
+     │  resume_session  │    │  Analyzer (占位)  │    │   ↑ 热会话状态    │
+     │  finalize        │    │  Evaluator       │    │  Milvus Lite     │
+     └──────────────────┘    └──────────────────┘    │   ↑ 向量检索副本  │
+                                       │              └──────────────────┘
+                                       ▼
+                  ┌─────────────────────────────────────────────────┐
+                  │            外部依赖 (单一 provider)              │
+                  │  OpenAI: chat (gpt-4o-mini) + embedding         │
+                  │           (text-embedding-3-small)              │
+                  └─────────────────────────────────────────────────┘
+</div>
+
+<p class="small muted">
+  关键设计: <b>agent 之间不直接互调</b>，所有路由 (Planner→Interviewer→Assessor→Evaluator)
+  和 Redis/PG/Milvus 交互全部在 Orchestrator 内完成。
+  Agent 模块只 import <code>src.llm</code> + <code>src.schemas</code>。
+</p>
+
+<h2 id="agents">4. Agent 内核 (5 个 agent)</h2>
+
+<table>
+  <tr>
+    <th style="width: 12%;">Agent</th>
+    <th style="width: 20%;">入口函数</th>
+    <th>职责</th>
+    <th style="width: 12%;">调用时机</th>
+  </tr>
+  <tr>
+    <td><b>Planner</b><br><span class="small muted">src/agents/planner</span></td>
+    <td><code>plan(job, candidate)</code><br><code>resolve_lazy_questions(plan, job, candidate, intro_text)</code></td>
+    <td>
+      按 track 生成 stage 序列 + 题目。<br>
+      knowledge / scenario 题: Milvus 召回 + LLM 精修。<br>
+      project 题: plan 阶段 lazy 占位, 进 stage 时用 intro_text + Resume RAG 现场生成。
+    </td>
+    <td>候选人创建 (BG) + project stage 入口</td>
+  </tr>
+  <tr>
+    <td><b>Interviewer</b><br><span class="small muted">src/agents/interviewer</span></td>
+    <td><code>next_turn(session, plan, job)</code></td>
+    <td>
+      决定下一句: 主题 / FollowUp / None。<br>
+      3 步决策: <code>assess</code> (orchestrator 路由进来的 assessment) → <code>decide_followup</code> (Policy + 阈值) → <code>generate_followup</code> (聚焦 missing_signals)。<br>
+      末尾 CompletionPolicy 4 步: 硬上限 → mandatory coverage 达标 → 还有题 → done.
+    </td>
+    <td>每次 submit_answer</td>
+  </tr>
+  <tr>
+    <td><b>Assessor</b><br><span class="small muted">src/agents/assessor</span><br><span class="pill wip">gated</span></td>
+    <td><code>assess(question, answer, session, plan)</code></td>
+    <td>
+      在线评估单题: <code>AnswerAssessment</code> (sufficiency / confidence / missing_signals / strengths / concerns / followup_goal / stop_reason).<br>
+      <code>gpt-4o-mini</code> + 10s timeout, 失败回退启发式 fallback (永远双路径).
+    </td>
+    <td>每次 submit_answer<br>(<code>ASSESSOR_ENABLED=true</code> 才启用)</td>
+  </tr>
+  <tr>
+    <td><b>Analyzer</b><br><span class="small muted">src/agents/analyzer</span></td>
+    <td><code>analyze(session)</code></td>
+    <td>
+      多模态信号分析占位。<br>
+      骨架阶段恒返 <code>[]</code>; Sprint 7 接音视频 → 语言 / 语气 / 视线 软信号.
+    </td>
+    <td>finalize 时</td>
+  </tr>
+  <tr>
+    <td><b>Evaluator</b><br><span class="small muted">src/agents/evaluator</span></td>
+    <td><code>evaluate(session, plan, signals, job)</code></td>
+    <td>
+      结束时跑一次: 算 <code>content_scores</code> (维度) + <code>overall</code> + <code>summary</code> + <code>competency_coverage</code>.<br>
+      召回 JD/公司资料切片做 summary 上下文.<br>
+      任一 mandatory 维度 coverage 不达标 → summary 前缀加"证据不充分".
+    </td>
+    <td>finalize 时</td>
+  </tr>
+</table>
+
+<h3>FollowUpPolicy 默认阈值 (stage-aware)</h3>
+<table>
+  <tr><th>stage</th><th>max_followups</th><th>min_sufficiency</th><th>min_confidence</th></tr>
+  <tr><td>self_intro</td><td>0 (硬豁免)</td><td colspan="2" rowspan="4" style="text-align:center;">0.7 / 0.5 (默认)</td></tr>
+  <tr><td>knowledge</td><td>1</td></tr>
+  <tr><td>project</td><td>2</td></tr>
+  <tr><td>scenario</td><td>2</td></tr>
+</table>
+
+<h2 id="modules">5. 代码模块地图</h2>
+
+<h3>后端 (Python)</h3>
+<table>
+  <tr><th>路径</th><th>行数</th><th>职责</th></tr>
+  <tr><td><code>src/schemas/__init__.py</code></td><td>447</td>
+      <td>所有 pydantic 数据契约 (JobContext / Plan / Session / Question / AnswerAssessment / FollowUpPolicy / CompletionPolicy / EvaluationReport / …)</td></tr>
+  <tr><td><code>src/agents/{planner,interviewer,assessor,analyzer,evaluator}</code></td><td>1295</td>
+      <td>5 个 agent 模块, 每个一个 <code>__init__.py</code> 暴露动词函数</td></tr>
+  <tr><td><code>src/orchestrator/__init__.py</code></td><td>350</td>
+      <td>会话状态机: start/submit/resume/finalize 三段式 + 中断恢复; 唯一允许 agent + DB + cache 互调的层</td></tr>
+  <tr><td><code>src/coverage.py</code></td><td>~120</td>
+      <td>Interviewer + Evaluator 共享: <code>compute_coverage(session, plan)</code> 单一计算源</td></tr>
+  <tr><td><code>src/db/</code></td><td>985</td>
+      <td>SQLAlchemy ORM + repository (save/load 接 pydantic ↔ ORM). 业务层只用 save_*/load_*, 不接触 SA session</td></tr>
+  <tr><td><code>src/cache/</code></td><td>357</td>
+      <td>Redis: 会话热存储 + LLM/embedding 响应缓存. 缺 REDIS_URL 时 graceful degradation</td></tr>
+  <tr><td><code>src/vector_store/</code></td><td>468</td>
+      <td>Milvus Lite: questions 题库 + documents RAG 切片. <code>search_*</code> 自动 load 重试</td></tr>
+  <tr><td><code>src/auth/</code></td><td>259</td>
+      <td>bcrypt + JWT + FastAPI dependency. <code>_extract_token</code> 先 cookie 后 Bearer (双路径)</td></tr>
+  <tr><td><code>src/llm/__init__.py</code></td><td>87</td>
+      <td>OpenAI Chat Completions 唯一调用点 + Redis 透明缓存 + stub fallback</td></tr>
+  <tr><td><code>src/embeddings/__init__.py</code></td><td>81</td>
+      <td>OpenAI Embeddings 唯一调用点 + stub 全零向量 fallback</td></tr>
+  <tr><td><code>src/ingestion/</code></td><td>184</td>
+      <td>切片 (chunk) + embed + 入 Milvus. JD / 公司资料 / Resume 三种 kind</td></tr>
+  <tr><td><code>src/resume_parser.py</code></td><td>~125</td>
+      <td>Sprint 5.8: pypdf + python-docx 解析, 双判 mime+ext + 5MB 上限 + 100 字下限</td></tr>
+  <tr><td><code>api/</code></td><td>905</td>
+      <td>FastAPI 层: routes + DTO + exception map. 业务下沉到 orchestrator, 这里只做 HTTP 边界</td></tr>
+</table>
+
+<h3>前端 (TypeScript)</h3>
+<table>
+  <tr><th>路径</th><th>职责</th></tr>
+  <tr><td><code>web/src/lib/api.ts</code></td>
+      <td>所有后端调用入口. <code>credentials: "include"</code> 让 cookie 自动带; <code>ApiError</code> + 401 清 role cache</td></tr>
+  <tr><td><code>web/src/lib/auth.ts</code></td>
+      <td>Sprint 5.8 起只 cache role (UI 渲染用); token 由 httpOnly cookie 管, JS 看不到</td></tr>
+  <tr><td><code>web/src/app/interview/[jobId]/page.tsx</code></td>
+      <td>候选人 Resume 上传页 (PDF/docx 文件 + paste 文本两路)</td></tr>
+  <tr><td><code>.../interview/[jobId]/[candidateId]/waiting/page.tsx</code></td>
+      <td>轮询 Plan 就绪</td></tr>
+  <tr><td><code>.../interview/[jobId]/[candidateId]/session/page.tsx</code></td>
+      <td>面试主界面 (Q&amp;A + 草稿 + "分析中..." 状态)</td></tr>
+  <tr><td><code>.../interview/[jobId]/[candidateId]/done/page.tsx</code></td>
+      <td>fire-and-forget POST /finalize</td></tr>
+  <tr><td><code>web/src/app/hr/layout.tsx</code></td>
+      <td>顶栏 + auth guard (调 /auth/me 判 session)</td></tr>
+  <tr><td><code>web/src/app/hr/login/page.tsx</code></td>
+      <td>HR 登录 (cookie 由 server set)</td></tr>
+  <tr><td><code>web/src/app/hr/page.tsx</code></td>
+      <td>Dashboard + 新建职位表单 (含高级折叠区 5 个阈值)</td></tr>
+  <tr><td><code>.../hr/jobs/[jobId]/page.tsx</code></td>
+      <td>单 job 详情 + 候选人列表 (四态徽章)</td></tr>
+  <tr><td><code>.../hr/jobs/[jobId]/candidates/[candidateId]/page.tsx</code></td>
+      <td>候选人详情: StageView + AssessmentView + ReportView + ReviewSection</td></tr>
+</table>
+
+<h2 id="flow">6. 一次面试的完整数据流</h2>
+
+<div class="ascii">
+[HR]  POST /jobs                                            (api/routes/jobs.py)
+        ↓ db.save_job
+        ↓ BG: ingestion.ingest_jd + ingest_company_material → Milvus documents
+
+[候选人]  GET /interview/{job_id}            ← 看 JD + 上传 Resume
+[候选人]  POST /jobs/{id}/candidates/parse-resume  ← Sprint 5.8 PDF/docx 解析
+[候选人]  POST /jobs/{id}/candidates {resume: text}
+        ↓ db.save_candidate
+        ↓ BG: ingestion.ingest_resume → Milvus documents
+        ↓ BG: planner.plan(job, candidate)
+              ├─ embed query → Milvus search_questions (knowledge / scenario)
+              ├─ llm.complete (knowledge×N + scenario×N 精修)
+              └─ project 题留 lazy 占位 (text="")
+        ↓ db.save_plan + cache.save_plan
+
+[候选人]  GET /jobs/{id}/candidates/{cid}/plan  (轮询直到 200)
+
+[候选人]  POST /interviews {candidate_id}             ← start_session
+[候选人]  POST /interviews/{sid}/answers {text}        ← submit_answer 多次
+          (1) 落 CandidateAnswer 进 session.answers
+          (2) 若是 self_intro → 落 session.intro_text
+          (3) [ASSESSOR_ENABLED=true 时] assessor.assess → session.assessments
+          (4) interviewer.next_turn → Question / FollowUp / None
+          (5) 若 next 是 lazy 占位 → planner.resolve_lazy_questions
+              ├─ embed query → Milvus search_documents (kind=resume)
+              ├─ llm.complete (project_RAG_SYSTEM, intro_text + chunks)
+              └─ cache.save_plan + db.save_plan ← Sprint 5.8 fix 同步 PG
+
+[候选人]  POST /interviews/{sid}/finalize             ← done 页 fire-and-forget
+          ↓ analyzer.analyze (空占位)
+          ↓ evaluator.evaluate
+            ├─ compute_coverage (从 session.assessments + plan.competencies)
+            ├─ embed candidate_excerpt → Milvus search_documents (kind=jd|cm)
+            ├─ llm.complete (summary 生成)
+            └─ insufficient_competencies → summary 前缀加"证据不充分"
+          ↓ db.save_session + db.save_report
+          ↓ cache.delete_session + delete_plan (从 Redis 清掉)
+
+[HR]  GET /hr/jobs/{j}/candidates/{c}                     ← 看到状态变 completed
+[HR]  GET /hr/sessions/{sid}                              ← 拉 session (含 assessments)
+[HR]  GET /hr/reports/{report_id}                         ← 拉 report
+[HR]  PATCH /hr/reports/{rid}/review                      ← 人工复核
+</div>
+
+<h2 id="contracts">7. 数据契约 (pydantic schemas)</h2>
+
+<p>全部在 <code>src/schemas/__init__.py</code>。一图概览：</p>
+
+<div class="ascii">
+JobContext                       ← HR 上传 (track + followup_policy + completion_policy)
+  ├─ Track ("campus" | "lateral")
+  ├─ FollowUpPolicy?             ← None = stage 默认
+  └─ CompletionPolicy?           ← None = schema 默认 (0.7 / 15)
+
+CandidateProfile                 ← 候选人上传 (resume + projects)
+
+InterviewPlan                    ← Planner 输出
+  ├─ rounds: List[InterviewRound]
+  │   └─ stage: SELF_INTRO | KNOWLEDGE | PROJECT | SCENARIO
+  │       └─ questions: List[Question]
+  │           ├─ category: QuestionCategory
+  │           ├─ competency_id: str | None    ← None for self_intro
+  │           ├─ lazy: bool                   ← 静态信号 plan 设定不变
+  │           └─ source_question_id / source_chunk_ids (溯源)
+  └─ competencies: List[Competency]            ← Sprint 5.5 顶层权威
+
+InterviewSession                 ← Orchestrator 读写 (Redis 热 + PG 归档)
+  ├─ status: created | in_progress | completed
+  ├─ history: List[Turn]
+  ├─ answers: List[CandidateAnswer]
+  ├─ intro_text: str             ← Sprint 5.5
+  └─ assessments: List[AnswerAssessment]  ← Sprint 5.6 (gated)
+
+AnswerAssessment                 ← Assessor 输出 (HR UI 不展示数字)
+  ├─ sufficiency / confidence: float[0,1]
+  ├─ missing_signals / strengths / concerns: List[str]
+  ├─ followup_goal: str
+  └─ stop_reason: str
+
+EvaluationReport                 ← Evaluator 输出
+  ├─ content_scores              ← 进总分
+  ├─ performance_observations    ← 软信号"仅参考"
+  ├─ overall: float              ← 仅由 content_scores 加权
+  ├─ summary: str                ← coverage 不达时加前缀"证据不充分"
+  ├─ needs_human_review: bool
+  ├─ rag_context_chunk_ids       ← Sprint 3.7 RAG 溯源
+  └─ competency_coverage         ← Sprint 5.7 max(sufficiency) per competency
+
+ReviewRecord                     ← HR 复核结论 (维度覆盖 + decision)
+</div>
+
+<h2 id="storage">8. 三层存储 (Redis / PG / Milvus)</h2>
+
+<table>
+  <tr><th>存储</th><th>是什么</th><th>谁写</th><th>谁读</th></tr>
+  <tr>
+    <td><b>Postgres</b><br><span class="small muted">真理之源</span></td>
+    <td>Job / Candidate / Plan / Session / Report / Review / User / SeedQuestion</td>
+    <td>API 创建职位/候选人时; Orchestrator finalize 时归档</td>
+    <td>HR 端所有读; Orchestrator submit_answer 反查 Job/Candidate</td>
+  </tr>
+  <tr>
+    <td><b>Redis</b><br><span class="small muted">热缓存 + 短期状态</span></td>
+    <td>
+      • 进行中的 Session/Plan (TTL <code>SESSION_TTL_SECONDS</code>)<br>
+      • LLM 响应缓存 (TTL <code>LLM_CACHE_TTL_SECONDS</code>)<br>
+      • Embedding 缓存 (TTL <code>EMBEDDING_CACHE_TTL_SECONDS</code>)
+    </td>
+    <td>Orchestrator 每次 submit_answer; llm.complete; embeddings.embed</td>
+    <td>Orchestrator load_session / load_plan</td>
+  </tr>
+  <tr>
+    <td><b>Milvus Lite</b><br><span class="small muted">向量检索副本</span></td>
+    <td>
+      • <code>questions</code> 集合: 30 knowledge + 20 scenario 种子题<br>
+      • <code>documents</code> 集合: JD / 公司资料 / Resume 切片
+    </td>
+    <td>scripts/seed_questions; ingestion.ingest_* (BG)</td>
+    <td>Planner._retrieve_seed_question; Planner._retrieve_resume_chunks; Evaluator._retrieve_job_context_chunks</td>
+  </tr>
+</table>
+
+<div class="callout">
+<b>设计取舍</b>: PG 是真理 (TRUNCATE 后能从其它 source 重建 Milvus / Redis,
+反过来不行)。<br>
+seed_questions 表 → Milvus questions 集合: 重 seed 脚本可重建 Milvus.<br>
+Resume / JD / 公司资料: BG ingest 入 Milvus, 原文还在 PG 的 candidates.resume /
+jobs.jd / jobs.company_materials, 可重 ingest.<br>
+Plan: PG 落 plan_data JSONB, Redis 仅缓存 (TTL 后过期; 用 cache.load_plan
++ db.load_plan fallback).
+</div>
+
+<h2 id="llm-rag">9. LLM &amp; RAG 调用点全景</h2>
+
+<h3>LLM 调用 (<code>src.llm.complete</code>)</h3>
+<table>
+  <tr><th>调用方</th><th>system prompt</th><th>触发时机</th><th>每次面试调用次数 (lateral)</th></tr>
+  <tr><td>Planner._knowledge_question</td><td>KNOWLEDGE_RAG_SYSTEM</td><td>plan 阶段</td><td>1</td></tr>
+  <tr><td>Planner._scenario_question</td><td>SCENARIO_RAG_SYSTEM</td><td>plan 阶段</td><td>2</td></tr>
+  <tr><td>Planner._project_question</td><td>PROJECT_RAG_SYSTEM</td><td>project stage 入口 (lazy resolve)</td><td>3</td></tr>
+  <tr><td>Assessor.assess</td><td>SYSTEM_PROMPT (JSON 输出)</td><td>每答 1 题</td><td>0 (gate off) / 7 (gate on)</td></tr>
+  <tr><td>Interviewer._followup_text</td><td>FOLLOWUP_SYSTEM</td><td>决定追问时</td><td>变 (随追问数)</td></tr>
+  <tr><td>Evaluator._summary</td><td>SUMMARY_RAG_SYSTEM</td><td>finalize</td><td>1</td></tr>
+  <tr>
+    <td colspan="3" style="text-align:right;"><b>典型总数 (无追问, ASSESSOR_ENABLED=false):</b></td>
+    <td><b>~7 次 chat + ~6 次 embedding</b></td>
+  </tr>
+</table>
+
+<h3>RAG 召回 (<code>vector_store.search_*</code>)</h3>
+<table>
+  <tr><th>调用方</th><th>Milvus 集合</th><th>过滤条件</th><th>用途</th></tr>
+  <tr><td>Planner._retrieve_seed_question (knowledge)</td><td>questions</td><td>role_family + competency + category=knowledge</td><td>知识题精修候选</td></tr>
+  <tr><td>Planner._retrieve_seed_question (scenario)</td><td>questions</td><td>role_family + competency + category=scenario</td><td>场景题精修候选</td></tr>
+  <tr><td>Planner._retrieve_resume_chunks</td><td>documents</td><td>kind=resume + source_id=candidate_id</td><td>project 题锚定 Resume 内容</td></tr>
+  <tr><td>Evaluator._retrieve_job_context_chunks</td><td>documents</td><td>kind in (jd, company_material) + source_id=job_id</td><td>summary 上下文</td></tr>
+</table>
+
+<div class="callout warn">
+<b>关键 fallback 设计</b>: 任何 RAG / LLM 调用失败一律静默降级到启发式 / 模板路径,
+绝不让"LLM 挂了整条链路就挂"。<br>
+• <code>llm.complete</code> 缺 key → 返 <code>[stub] ...</code>, 每个 agent 自己判 <code>llm.is_stub()</code> 走 fallback<br>
+• <code>embeddings.embed</code> 缺 key → 返全零向量, upsert/search 自动跳过<br>
+• Milvus 抛 <code>released</code> / <code>not found</code> → 自动 <code>load_collection</code> + 重试 (Sprint 5.8 fix)
+</div>
+
+<h2 id="compliance">10. 合规与硬约束</h2>
+
+<p>这些规则<b>不是建议</b>，破坏任意一条 = 合规事故。详情见 <code>ARCHITECTURE.md</code> §7。</p>
+
+<ol>
+  <li><b>分数与软信号分区</b>: <code>EvaluationReport.content_scores</code> (内容维度，进总分) 与 <code>performance_observations</code> (表现维度，软信号) 严格分开; <code>overall</code> 只由 content_scores 加权得出。任何新增表现/软信号永远走 <code>PerformanceObservation</code>。</li>
+  <li><b>多模态软信号</b> (Sprint 7): 只能作为参考证据，<b>绝不可作为自动淘汰的唯一依据</b>; 必带置信度 + 可关闭 + 偏见审计。</li>
+  <li><b>不展示 LLM-as-judge 数字给 HR</b>: <code>AnswerAssessment.sufficiency</code> / <code>confidence</code> 是中间产物，校准前不可信。HR UI 只展示自然语言字段 (missing_signals / strengths / concerns / followup_goal)。</li>
+  <li><b>候选人不接触自己的报告</b>: 候选人端永不返 <code>EvaluationReport</code> / <code>DimensionScore</code>。</li>
+  <li><b>不做动态补题</b>: 题库由 plan + lazy project gen 一次确定，coverage 不够让 HR 复核兜底，不能 LLM 在线生成新题 (公平性 + 可复现性双坍方)。</li>
+  <li><b>Assessor 准入校准</b>: <code>ASSESSOR_ENABLED</code> 默认 false; 校准 eval (20-30 条手标样本) 过 + 人工 review 真 LLM 路径 → 才在部署层翻 true。</li>
+  <li><b>默认需人工复核</b>: <code>EvaluationReport.needs_human_review = True</code> 是默认; AI 不直接做录用决定。</li>
+  <li><b>Agent 之间不直接互调</b>: 全部走 Orchestrator 路由; 数据 + I/O 通过 schema 类型流转，不通过函数调用。</li>
+  <li><b>启发式 fallback 永远不删</b>: Sprint 0 的 <code>_needs_followup</code> 是 Assessor 的兜底, 启发式 sufficiency 计算是 LLM 失败时的兜底; 双路径永远共存。</li>
+</ol>
+
+<h2 id="run">11. 怎么跑起来</h2>
+
+<h4>1) 起外部依赖</h4>
+<pre><code>brew services start postgresql@16
+brew services start redis
+# Milvus Lite 在进程内, 不用单独起</code></pre>
+
+<h4>2) 装依赖</h4>
+<pre><code>source .venv/bin/activate
+pip install -e .</code></pre>
+
+<h4>3) 配 .env (照 .env.example 抄)</h4>
+<table>
+  <tr><th>env var</th><th>典型值</th><th>说明</th></tr>
+  <tr><td><code>OPENAI_API_KEY</code></td><td>sk-...</td><td>缺则全走 stub</td></tr>
+  <tr><td><code>OPENAI_CHAT_MODEL</code></td><td>gpt-4o-mini</td><td>聊天模型</td></tr>
+  <tr><td><code>POSTGRES_URL</code></td><td>postgresql+psycopg://joy@localhost:5432/interview</td><td>必填</td></tr>
+  <tr><td><code>REDIS_URL</code></td><td>redis://localhost:6379/0</td><td>必填</td></tr>
+  <tr><td><code>MILVUS_LITE_URI</code></td><td>./milvus_lite.db</td><td>本地单文件</td></tr>
+  <tr><td><code>JWT_SECRET</code></td><td>≥ 16 字符 hex</td><td>必填; dev 随便, prod <code>openssl rand -hex 32</code></td></tr>
+  <tr><td><code>JWT_COOKIE_SECURE</code></td><td>false (dev) / true (prod)</td><td>https 上才能 true</td></tr>
+  <tr><td><code>ASSESSOR_ENABLED</code></td><td>false (默认)</td><td>校准 + 人工 review 后才 true</td></tr>
+</table>
+
+<h4>4) 初始化数据</h4>
+<pre><code># 后端起来后端会自动 init_db / init_collections, 但题库要手动 seed:
+python -m scripts.seed_questions --category knowledge --verbose
+python -m scripts.seed_questions --category scenario --verbose
+
+# HR 账号:
+python -m scripts.seed_users --username hr1 --password testpw --role hr</code></pre>
+
+<h4>5) 起服务</h4>
+<pre><code># 后端 (推荐持久日志):
+nohup uvicorn api.main:app --reload > /tmp/uvicorn.log 2>&amp;1 &amp;
+
+# 前端:
+cd web &amp;&amp; nohup npx next dev > /tmp/next-dev.log 2>&amp;1 &amp;</code></pre>
+
+<h4>6) 访问</h4>
+<ul>
+  <li>候选人首页 (示例 job 链接): <code>http://localhost:3000/interview/{job_id}</code></li>
+  <li>HR 登录: <code>http://localhost:3000/hr/login</code></li>
+  <li>Backend API: <code>http://localhost:8000</code></li>
+  <li>OpenAPI Swagger: <code>http://localhost:8000/docs</code></li>
+</ul>
+
+<h2 id="evals">12. Eval 体系</h2>
+
+<p>21 个 eval 文件 / <b>270 个 test</b>, 全 stdlib unittest 无第三方依赖。</p>
+
+<pre><code>python -m unittest discover -s evals                     # 全部
+python -m unittest evals.test_skeleton                   # 骨架 + 合规护栏
+python -m unittest evals.test_planner_track              # track 配比
+python -m unittest evals.test_orchestrator_stage         # stage 跨越 + lazy gen
+python -m unittest evals.test_assessor_calibration       # Assessor 启发式校准
+python -m unittest evals.test_completion_policy          # coverage + 提前 done
+python -m unittest evals.test_milvus_retry               # Sprint 5.8 fix
+python -m unittest evals.test_parse_resume               # PDF/docx 解析
+python -m unittest evals.test_auth_cookie                # cookie 双路径</code></pre>
+
+<table>
+  <tr><th>类型</th><th>例</th><th>跑条件</th></tr>
+  <tr><td>结构性护栏</td><td>test_skeleton, test_schema_extensions</td><td>无依赖, 永远跑</td></tr>
+  <tr><td>合规不变量</td><td>ComplianceInvariantTests</td><td>无依赖, 永远跑</td></tr>
+  <tr><td>组件单元</td><td>test_milvus_retry (mock client)</td><td>无依赖, 永远跑</td></tr>
+  <tr><td>端到端</td><td>test_api, test_orchestrator_stage, test_rag_e2e</td><td>需 PG + Redis, 无则 skip</td></tr>
+  <tr><td>校准</td><td>test_assessor_calibration</td><td>启发式 fallback 路径, 不烧 token</td></tr>
+</table>
+
+<div class="callout">
+<b>强制 stub</b>: evals 模块顶 <code>os.environ.pop("OPENAI_API_KEY", None)</code>,
+保证结构性护栏快、稳、不烧 token. 需要真 LLM 校准的部分 (Assessor calibration) 明确写在 PR review 流程里。
+</div>
+
+<h2 id="sprints">13. Sprint 状态 + 路线图</h2>
+
+<table>
+  <tr><th>Sprint</th><th>主题</th><th>状态</th><th>commit</th></tr>
+  <tr><td>0</td><td>Walking skeleton (纯文本主链路)</td><td><span class="pill done">✅</span></td><td>—</td></tr>
+  <tr><td>1</td><td>持久化 (PG + Redis)</td><td><span class="pill done">✅</span></td><td>—</td></tr>
+  <tr><td>2</td><td>FastAPI 层 + 真实 JD 解析</td><td><span class="pill done">✅</span></td><td>—</td></tr>
+  <tr><td>3</td><td>题库 + RAG (Milvus)</td><td><span class="pill done">✅</span></td><td>—</td></tr>
+  <tr><td>4</td><td>候选人端 Web (Next.js)</td><td><span class="pill done">✅</span></td><td>—</td></tr>
+  <tr><td>5</td><td>HR 招聘端 Dashboard + JWT</td><td><span class="pill done">✅</span></td><td>c26e64a</td></tr>
+  <tr><td>5.5</td><td>校招/社招双 track + stage 化面试 + lazy gen</td><td><span class="pill done">✅</span></td><td>6688804..977e5a5</td></tr>
+  <tr><td>5.6</td><td>Assessor agent + FollowUpPolicy (gated)</td><td><span class="pill done">✅</span></td><td>4ce85e0</td></tr>
+  <tr><td>5.7</td><td>CompletionPolicy + competency_coverage + HR AssessmentView</td><td><span class="pill done">✅</span></td><td>f333beb</td></tr>
+  <tr><td>5.8</td><td>运维收尾 (PDF Resume + Cookie 鉴权 + 追问 UI)</td><td><span class="pill done">✅</span></td><td>72823df / fbada1c / 50edd54</td></tr>
+  <tr><td>—</td><td>fix patches (Milvus retry + PG plan_data sync)</td><td><span class="pill done">✅</span></td><td>bc42ca8 / b58eef6</td></tr>
+  <tr><td>6</td><td>实时媒体 (视频面试)</td><td><span class="pill next">未开始</span></td><td>—</td></tr>
+  <tr><td>7</td><td>多模态评价 (语言 / 语气 / 视线)</td><td><span class="pill next">未开始</span></td><td>—</td></tr>
+  <tr><td>5.9+</td><td>遗留: mandatory_competencies UI / per-stage policy / Bearer 退役 / done 页 finalize 改 await</td><td><span class="pill next">backlog</span></td><td>—</td></tr>
+</table>
+
+<h2 id="faq">14. 常见问题 FAQ</h2>
+
+<h3>怎么看日志？</h3>
+<ul>
+  <li><b>后端 uvicorn</b>: <code>tail -f /tmp/uvicorn.log</code> (HTTP + log.info + log.exception)</li>
+  <li><b>前端 next dev</b>: <code>tail -f /tmp/next-dev.log</code></li>
+  <li><b>Postgres</b>: <code>tail -f /opt/homebrew/var/log/postgresql@16.log</code></li>
+  <li><b>Redis</b>: <code>tail -f /opt/homebrew/var/log/redis.log</code></li>
+  <li><b>找异常</b>: <code>grep -A 20 "Traceback\|ERROR" /tmp/uvicorn.log</code></li>
+</ul>
+
+<h3>怎么看一次面试做了什么？</h3>
+<pre><code>python -c "
+from dotenv import load_dotenv; load_dotenv()
+from src.db.base import session_scope
+from src.db.models import InterviewSessionORM, EvaluationReportORM
+SID = '...'  # 看 GET /hr/jobs/.../candidates/... 的 session_id
+with session_scope() as s:
+    sess = s.query(InterviewSessionORM).get(SID)
+    rep = s.query(EvaluationReportORM).filter_by(session_id=SID).first()
+    print(f'intro: {sess.intro_text}')
+    for i, a in enumerate(sess.answers, 1):
+        print(f'A{i}: {a[\"text\"][:100]}')
+    print(f'overall: {rep.overall}, coverage: {rep.competency_coverage}')
+"</code></pre>
+
+<h3>followup 怎么知道有没有触发？</h3>
+<p>
+  数 <code>session.history</code> 里 interviewer turn 的 <code>ref_id</code>:
+  在 <code>plan.questions</code> 里 = 主问题, 不在里面 = 追问。
+  或看 evals/test_assessor_integration 里的 <code>_decide_followup</code> 单元测试就明白决策逻辑。
+</p>
+
+<h3>怎么改一个 prompt？</h3>
+<ol>
+  <li>找到对应文件 (<code>src/agents/{planner,assessor,evaluator,interviewer}/__init__.py</code> 顶部的 SYSTEM 常量)</li>
+  <li><b>必须先有 eval</b>: 改 prompt 前确认结构性 eval / 校准 eval 存在; 校准 eval 不存在的改 = 5.6 起就违反约定</li>
+  <li>改完跑 <code>python -m unittest discover -s evals</code> 全绿</li>
+</ol>
+
+<h3>怎么加一个 agent / 新 LLM 调用？</h3>
+<ol>
+  <li>建 <code>src/agents/{name}/__init__.py</code> 暴露一个动词函数</li>
+  <li>只 import <code>src.llm</code> + <code>src.schemas</code> (不互调 agent, 不接触 DB/Cache)</li>
+  <li>必带 <code>llm.is_stub()</code> 判断 + 启发式 fallback (双路径硬约束)</li>
+  <li>必带 timeout, 不允许"LLM 挂了整条链路就挂"</li>
+  <li>orchestrator 里加路由 (不让 agent 自己调 cache/db)</li>
+</ol>
+
+<h3>怎么加一个新字段到 schema？</h3>
+<ol>
+  <li>改 <code>src/schemas/__init__.py</code>, 字段加默认值 (兼容老 JSON)</li>
+  <li>若要落 PG: 改对应 ORM 列加 <code>server_default</code>, 然后 <code>ALTER TABLE ADD COLUMN IF NOT EXISTS</code> (dev 期手动, Sprint 1 不引 Alembic)</li>
+  <li>改对应 repository save/load</li>
+  <li>结构性 eval 验"老 JSON 缺这字段能解析" + "默认值正确"</li>
+</ol>
+
+<h3>ASSESSOR_ENABLED 怎么翻 true？</h3>
+<ol>
+  <li><code>evals/test_assessor_calibration</code> 全绿 (启发式排序 sufficient > insufficient, gap ≥ 0.2)</li>
+  <li>用真 OPENAI_API_KEY 跑 calibration 数据集, 人工 review 每条 prediction 合理</li>
+  <li>PR review 通过 → <code>.env</code> 翻 <code>ASSESSOR_ENABLED=true</code></li>
+  <li>即使 true, Assessor 自己 LLM 失败仍走启发式 fallback (双路径永远共存)</li>
+</ol>
+
+<h3>Bearer / Cookie 鉴权选哪个？</h3>
+<p>
+  Sprint 5.8 起双路径并存：
+</p>
+<ul>
+  <li><b>浏览器 (HR 端 Web)</b>: 走 httpOnly cookie + SameSite=Strict, JS 看不到 token</li>
+  <li><b>evals / 脚本 / curl</b>: 仍可走 <code>Authorization: Bearer</code></li>
+  <li><b>require_hr_user</b> 先看 cookie 后看 Bearer (任一命中即可)</li>
+  <li>5.9+ 待 cookie 稳定后可考虑退役 Bearer 路径</li>
+</ul>
+
+<hr>
+
+<p class="muted small">
+  本文档基于 commit <code>b58eef6</code> 之后的代码生成。<br>
+  详细历史看 <code>git log --oneline</code>, sprint 设计看 <code>sprint.md</code>,
+  agent 架构深度看 <code>ARCHITECTURE.md</code>, claude 协作纪律看 <code>CLAUDE.md</code>。
+</p>
+
+</body>
+</html>
