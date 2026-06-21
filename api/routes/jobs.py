@@ -13,7 +13,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from api.schemas import JobCreate
 from src import db, ingestion
-from src.schemas import JobContext
+from src.agents import planner
+from src.schemas import JobContext, ProfileAspect
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -36,18 +37,35 @@ def _ingest_job_docs_in_background(
         log.exception("background ingest_job_docs failed: job=%s", job_id)
 
 
+@router.get(
+    "/aspects-template/{role_family}",
+    response_model=list[ProfileAspect],
+)
+def get_aspects_template(role_family: str) -> list[ProfileAspect]:
+    """Sprint 5.9: HR UI 新建 job 选 role_family 后拉默认 aspect 模板;
+    HR 可在此模板上增删改. role_family 不在 5 个已知值时回 backend 默认
+    (与 Planner _is_tech_role 兜底口径一致)."""
+    return planner.default_aspects_for_role(role_family)
+
+
 @router.post("", response_model=JobContext, status_code=201)
 def create_job(body: JobCreate, background_tasks: BackgroundTasks) -> JobContext:
     """创建职位: server 生成 job_id, 持久化到 PG, 回 JobContext。
-    JD + 公司资料的向量化在后台跑, 不阻塞响应。"""
+    JD + 公司资料的向量化在后台跑, 不阻塞响应。
+    Sprint 5.9: role_family + aspects 也透传; aspects 空时 Planner 用
+    default_aspects_for(role_family) 兜底."""
+    # body.aspects 是 list[dict] (来自 JobCreate), 让 pydantic 校验成 ProfileAspect
+    aspects_in = body.aspects or []
     job = JobContext(
         title=body.title,
         jd=body.jd,
         requirements=body.requirements,
         company_materials=body.company_materials,
         track=body.track,
+        role_family=body.role_family,
         followup_policy=body.followup_policy,
         completion_policy=body.completion_policy,
+        aspects=[ProfileAspect.model_validate(a) for a in aspects_in],
     )
     db.save_job(job)
     background_tasks.add_task(

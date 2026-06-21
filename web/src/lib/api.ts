@@ -89,6 +89,23 @@ export type Health = {
 
 export type Track = "campus" | "lateral";
 
+// Sprint 5.9: HR 选 role_family 决定 Planner 配比 + aspect 默认模板
+export type RoleFamily =
+  | "backend"
+  | "frontend"
+  | "data_science"
+  | "product"
+  | "hr";
+
+// Sprint 5.9: ProfileAspect = 画像子维度, HR 发布岗位时增删改;
+// 候选人答题被 Assessor 标 covered_aspects, 用并集算 richness 决定是否终止面试。
+export type ProfileAspect = {
+  aspect_id: string;
+  competency_id: string;     // "comp:tech" / "comp:comm" (Planner 稳定 ID)
+  name: string;
+  description: string;
+};
+
 export type JobContext = {
   job_id: string;
   title: string;
@@ -97,6 +114,7 @@ export type JobContext = {
   company_materials: string;
   role_family: string;
   track: Track;
+  aspects: ProfileAspect[];  // Sprint 5.9
 };
 
 export type CandidateCreate = {
@@ -361,6 +379,8 @@ export const api = {
     requirements: string[];
     company_materials: string;
     track: Track;
+    role_family: RoleFamily;            // Sprint 5.9
+    aspects: ProfileAspect[];           // Sprint 5.9; HR 在表单上增删改后的最终列表
     followup_policy?: FollowUpPolicy | null;
     completion_policy?: CompletionPolicy | null;
   }) =>
@@ -371,6 +391,9 @@ export const api = {
       // 这里加 auth:true 也不会被后端拒绝, 是给未来收紧权限留口子。
       auth: true,
     }),
+  // Sprint 5.9: HR 切 role_family 时拉默认 aspect 模板; 不要 auth (公开)。
+  getAspectsTemplate: (roleFamily: RoleFamily) =>
+    request<ProfileAspect[]>(`/jobs/aspects-template/${roleFamily}`),
   listCandidates: (jobId: string) =>
     request<CandidateWithStatus[]>(
       `/hr/jobs/${jobId}/candidates`,

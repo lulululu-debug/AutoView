@@ -32,6 +32,13 @@ class JobCreate(BaseModel):
         default="lateral",
         description="招聘类型: campus 校招 / lateral 社招",
     )
+    # Sprint 5.9: HR 选 role_family 决定 Planner 配比 + aspect 默认模板
+    role_family: Literal[
+        "backend", "frontend", "data_science", "product", "hr",
+    ] = Field(
+        default="backend",
+        description="岗位族; 决定 (track, role_family) 配比 + aspect 模板",
+    )
     # Sprint 5.7 高级折叠区配置; 用 dict 接, src.schemas.FollowUpPolicy /
     # CompletionPolicy 在 JobContext 构造时校验, 让 api/schemas 不重复声明字段。
     followup_policy: dict | None = Field(
@@ -41,6 +48,12 @@ class JobCreate(BaseModel):
     completion_policy: dict | None = Field(
         default=None,
         description="覆盖 CompletionPolicy 默认 (None=用 schema 默认)",
+    )
+    # Sprint 5.9: HR 在 UI 上 (基于 aspects-template 默认) 增删改的 aspect 列表;
+    # 空时 Planner 走 default_aspects_for(role_family) 兜底。
+    aspects: list[dict] | None = Field(
+        default=None,
+        description="本岗位画像 aspect 列表; 空时用 role_family 默认模板",
     )
 
 
