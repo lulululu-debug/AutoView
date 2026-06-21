@@ -24,6 +24,10 @@ try:
 except ImportError:
     pass
 os.environ.pop("OPENAI_API_KEY", None)
+# Sprint 5.9 patch: .env 里 HR 翻了 ASSESSOR_ENABLED=true 后 e2e walk 会走 Assessor
+# fallback 启发式 (confidence=0.3) → 每题触发 followup → walk 超 7 题. 本模块测的是
+# Sprint 5.5 行为 (无 Assessor), 显式 pop 让走纯启发式 _needs_followup 路径。
+os.environ.pop("ASSESSOR_ENABLED", None)
 
 
 def _short_intro() -> str:
@@ -80,6 +84,9 @@ class StageTransitionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # pymilvus.settings.load_dotenv() 在 import 时再把 ASSESSOR_ENABLED 加回,
+        # 模块顶 pop 已被覆盖, 在 setUpClass 再 pop 一次保证 e2e 走启发式路径.
+        os.environ.pop("ASSESSOR_ENABLED", None)
         from src import cache, db
         from src.agents import planner
         from src.schemas import CandidateProfile, JobContext, Track
@@ -194,6 +201,9 @@ class LazyResolveSyncsPgPlanTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # 同 StageTransitionTests: 在 setUpClass 显式 pop ASSESSOR_ENABLED 防
+        # pymilvus.settings.load_dotenv() 把 .env 里的 true 加回, 让 e2e 走启发式.
+        os.environ.pop("ASSESSOR_ENABLED", None)
         from src import db
         from src.agents import planner
         from src.schemas import CandidateProfile, JobContext, Track
@@ -254,6 +264,9 @@ class IntroTextFlowsIntoProjectPromptTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # 同 StageTransitionTests: 在 setUpClass 显式 pop ASSESSOR_ENABLED 防
+        # pymilvus.settings.load_dotenv() 把 .env 里的 true 加回, 让 e2e 走启发式.
+        os.environ.pop("ASSESSOR_ENABLED", None)
         from src import db
         from src.agents import planner
         from src.schemas import CandidateProfile, JobContext, Track
@@ -334,6 +347,9 @@ class CampusEndToEndTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # 同 StageTransitionTests: 在 setUpClass 显式 pop ASSESSOR_ENABLED 防
+        # pymilvus.settings.load_dotenv() 把 .env 里的 true 加回, 让 e2e 走启发式.
+        os.environ.pop("ASSESSOR_ENABLED", None)
         from src import db
         from src.agents import planner
         from src.schemas import CandidateProfile, JobContext, Track
