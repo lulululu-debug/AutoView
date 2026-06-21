@@ -56,9 +56,14 @@ class SessionInvalidState(RuntimeError):
 
 def _assessor_enabled() -> bool:
     """Sprint 5.6: 由 env flag 控制 Assessor 是否进入 production codepath。
-    默认 false —— 即代码部署进了仓库但不参与追问决策, 走 Sprint 0 启发式。
-    eval / 人工 review calibration 通过后, 才在部署层把 flag 翻 true 上线。"""
-    return os.environ.get("ASSESSOR_ENABLED", "").lower() in ("1", "true", "yes")
+
+    Sprint 5.9: 默认翻成 true —— 启发式 calibration eval (sufficient vs
+    insufficient gap +0.830; covered_aspects mean recall 1.0; distractor
+    precision 1.0) 通过, Assessor 走启发式 fallback 已被锁死成回归护栏;
+    LLM 路径仍在 try/except 里随时回落, 双路径不变。要关掉就显式
+    ASSESSOR_ENABLED=false (eval 自己仍这样关, 因为 e2e walk 期望走 Sprint 0
+    启发式的 _needs_followup, 不走 Assessor)."""
+    return os.environ.get("ASSESSOR_ENABLED", "true").lower() in ("1", "true", "yes")
 
 
 # ---------- 内部工具 ----------

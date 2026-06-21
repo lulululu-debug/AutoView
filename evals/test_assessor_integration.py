@@ -189,10 +189,10 @@ class AssessorGateTests(unittest.TestCase):
         return sid
 
     def test_gate_off_assessments_stay_empty(self):
-        """ASSESSOR_ENABLED 未设置 (默认) 时, session.assessments 始终空。"""
+        """ASSESSOR_ENABLED=false 显式关时, session.assessments 始终空。
+        Sprint 5.9 默认 true, 显式关掉是 escape hatch (eval e2e walk 也走这条)。"""
         from src import cache
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ASSESSOR_ENABLED", None)
+        with patch.dict(os.environ, {"ASSESSOR_ENABLED": "false"}):
             sid = self._make_session_and_answer(
                 "我叫张三, 比如最近做订单优化, 我们结果 P99 从 800ms 降到 350ms。",
             )
@@ -200,6 +200,22 @@ class AssessorGateTests(unittest.TestCase):
             self.assertEqual(
                 session.assessments, [],
                 "gate off 时 session.assessments 应保持空",
+            )
+
+    def test_gate_default_unset_enabled(self):
+        """Sprint 5.9: ASSESSOR_ENABLED 不设值 == enabled。
+        protects 默认翻 true 之后的回退检查。"""
+        from src import cache
+        # 显式 pop, 走 _assessor_enabled() 的 default 路径
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ASSESSOR_ENABLED", None)
+            sid = self._make_session_and_answer(
+                "我叫张三, 比如最近做订单优化, 我们结果 P99 从 800ms 降到 350ms。",
+            )
+            session = cache.load_session(sid)
+            self.assertEqual(
+                len(session.assessments), 1,
+                f"默认 enabled 时答 1 题应有 1 条 assessment, 实际: {len(session.assessments)}",
             )
 
     def test_gate_on_assessments_appended(self):

@@ -262,16 +262,33 @@ def _heuristic_assessment(
         concerns=concerns,
         followup_goal=followup_goal,
         stop_reason=stop_reason,
-        covered_aspects=_heuristic_covered_aspects(text, aspects),
+        covered_aspects=_heuristic_covered_aspects(question.text, text, aspects),
     )
 
 
+# 答案需要 >= 这个字符数, 启发式才会把问题文本一并纳入 aspect 匹配源。
+# 防止"看场景吧" / "改了就行" 这种敷衍回答被问题里的关键词带偏。
+_HEURISTIC_ENGAGED_LEN = 30
+
+
 def _heuristic_covered_aspects(
-    answer_text: str, aspects: list[ProfileAspect],
+    question_text: str, answer_text: str, aspects: list[ProfileAspect],
 ) -> list[str]:
-    """启发式 aspect 覆盖: aspect.name 切 2-gram 子串, 任一子串出现在答案
-    文本中 → 视为 covered. 兜底信号, 比"全空"强但远不如 LLM 精准。
-    与 calibration eval 一起被锁定, 防它静默漂移。"""
+    """启发式 aspect 覆盖: aspect.name 切 2-gram 子串, 任一子串出现在
+    (question + answer) 文本即视为 covered. 兜底信号, 比"全空"强但远不如 LLM 精准。
+
+    设计:
+    - answer 太短 (< _HEURISTIC_ENGAGED_LEN) 视为未engaged: 只看 answer, 不沾 question.
+      不然"加机器消费就行"会因为题面里有"消息队列"而被乱标。
+    - answer 足够长: 把 question + answer 拼起来扫. "答案engaged 了题目" 这个语义
+      是合理的弱信号; LLM 路径会再精修。
+
+    与 calibration eval 一起被锁定, 防它静默漂移。
+    """
+    if len(answer_text.strip()) >= _HEURISTIC_ENGAGED_LEN:
+        haystack = question_text + "\n" + answer_text
+    else:
+        haystack = answer_text
     covered: list[str] = []
     for asp in aspects:
         name = asp.name
@@ -280,6 +297,6 @@ def _heuristic_covered_aspects(
             substrings = [name]
         else:
             substrings = [name[i:i + 2] for i in range(len(name) - 1)]
-        if any(sub and sub in answer_text for sub in substrings):
+        if any(sub and sub in haystack for sub in substrings):
             covered.append(asp.aspect_id)
     return covered

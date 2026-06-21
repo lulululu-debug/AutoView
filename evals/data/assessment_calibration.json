@@ -1,11 +1,18 @@
 {
-  "version": 1,
+  "version": 2,
   "notes": [
-    "Sprint 5.6 校准 eval 数据集。24 个 (question, answer, label) 样本,",
+    "Sprint 5.6 / 5.9 校准 eval 数据集。50+ 个 (question, answer, label) 样本,",
     "覆盖 4 个 QuestionCategory: knowledge / project_experience / self_intro / scenario。",
     "label: sufficient / insufficient / ambiguous。",
     "ambiguous 样本只 record, 不参与 pass/fail (label 本身有争议)。",
     "对比的是 sufficient 与 insufficient 的平均 sufficiency, 看排序是否对。",
+    "Sprint 5.9: 部分样本带 expected_aspect_names 字段, 给 covered_aspects 启发式校准用。",
+    "expected_aspect_names 是 HR 标的 'HR 认为这条回答应当覆盖到的 aspect 名'; 由 2-gram",
+    "子串匹配启发式判, 不需要候选人原文逐字提到全名。",
+    "aspect 名取自 Planner 默认模板 backend 族 (评估 _DEFAULT_ASPECTS['backend']);",
+    "labels 选取保证 aspect 名 2-gram 至少有一段出现在 (question + answer) 文本里。",
+    "Assessor 启发式 (Sprint 5.9) 在 answer 字数 >= 30 时把 question 一起扫,",
+    "字数低则只扫 answer (防敷衍回答因题面关键词被乱标)。",
     "当前 stub 路径 + 启发式 fallback 驱动: 跑 LLM 真路径需要人工 PR review 校准。"
   ],
   "samples": [
@@ -14,14 +21,16 @@
       "category": "knowledge",
       "label": "sufficient",
       "question": "你怎么设计一个高并发场景下的限流方案?",
-      "answer": "比如订单服务我们在网关层 + 业务层做两级令牌桶, 我们结合 Redis + 本地 Cache, 结果 P99 在大促可控在 80ms, 用了滑动窗口避免突刺, 选择了 lazy refill 减少 Redis 调用。"
+      "answer": "比如订单服务我们在网关层 + 业务层做两级令牌桶, 我们结合 Redis + 本地 Cache, 结果 P99 在大促可控在 80ms, 用了滑动窗口避免突刺, 选择了 lazy refill 减少 Redis 调用。",
+      "expected_aspect_names": ["高并发与限流"]
     },
     {
       "id": "k02-suf",
       "category": "knowledge",
       "label": "sufficient",
       "question": "缓存与数据库一致性怎么保证?",
-      "answer": "比如订单写入, 我们走 Cache Aside + 双删兜底, 结果一致性窗口在 5ms 内业务感知不到。我们用了 MQ 异步重试, 选择强一致性的关键字段单独走 write-through。"
+      "answer": "比如订单写入, 我们走 Cache Aside + 双删兜底, 结果一致性窗口在 5ms 内业务感知不到。我们用了 MQ 异步重试, 选择强一致性的关键字段单独走 write-through。",
+      "expected_aspect_names": ["数据库与缓存"]
     },
     {
       "id": "k03-insuf",
@@ -52,18 +61,79 @@
       "answer": "我会先看监控指标, 比如 CPU 和内存, 再看链路追踪, 找瓶颈在哪个服务。"
     },
     {
+      "id": "k07-insuf",
+      "category": "knowledge",
+      "label": "insufficient",
+      "question": "你怎么设计一个限流方案?",
+      "answer": "看场景吧。"
+    },
+    {
+      "id": "k08-suf",
+      "category": "knowledge",
+      "label": "sufficient",
+      "question": "讲讲你对分布式系统设计中 CAP 取舍的理解。",
+      "answer": "比如交易场景我们走 CP, 评论这种走 AP; 我们用了 ZK 做 leader 选举保证强一致, 结果故障切换在 5s 内, 选择了 quorum write + read-your-write 保证读到最新写入。",
+      "expected_aspect_names": ["分布式系统设计", "故障定位 oncall"]
+    },
+    {
+      "id": "k09-suf",
+      "category": "knowledge",
+      "label": "sufficient",
+      "question": "数据库索引设计你的踩坑经验?",
+      "answer": "我们订单表早期用了 status 单列索引但区分度低, 我们改成 (user_id, created_at) 联合索引并强制走 hint, 结果慢查询从 200ms 降到 8ms, 选择了覆盖索引避免回表。",
+      "expected_aspect_names": ["数据库与缓存"]
+    },
+    {
+      "id": "k10-suf",
+      "category": "knowledge",
+      "label": "sufficient",
+      "question": "讲讲 MySQL 主从复制延迟你怎么处理?",
+      "answer": "比如对账场景延迟有时到 30s, 我们改成关键字段强制读主, 结合 GTID 心跳检测延迟阈值, 结果对账漏报率从 0.3% 降到 0.01%, 用了并行复制减少单线程瓶颈。"
+    },
+    {
+      "id": "k11-insuf",
+      "category": "knowledge",
+      "label": "insufficient",
+      "question": "怎么理解微服务的服务治理?",
+      "answer": "就是注册中心 + 配置中心。"
+    },
+    {
+      "id": "k12-insuf",
+      "category": "knowledge",
+      "label": "insufficient",
+      "question": "你了解 K8s 吗, 讲讲调度策略。",
+      "answer": "了解一点, 跑过 pod, 没深入。"
+    },
+    {
+      "id": "k13-suf",
+      "category": "knowledge",
+      "label": "sufficient",
+      "question": "如何排查 JVM 内存泄漏?",
+      "answer": "比如生产 Full GC 频率上升, 我们 jmap dump + MAT 分析 dominator tree, 定位到 ThreadLocal 没 remove, 结果 GC 间隔从 5min 拉到 2h, 选择了在线程池 finally 块统一清理。",
+      "expected_aspect_names": ["故障定位 oncall"]
+    },
+    {
+      "id": "k14-amb",
+      "category": "knowledge",
+      "label": "ambiguous",
+      "question": "讲讲 TCP 三次握手和四次挥手。",
+      "answer": "SYN, SYN-ACK, ACK 建立连接; 关闭时一方发 FIN 对方 ACK, 然后反向, 一共四次。"
+    },
+    {
       "id": "p01-suf",
       "category": "project_experience",
       "label": "sufficient",
       "question": "讲一个你做过的性能优化, 包括前因后果和数据指标。",
-      "answer": "去年大促前订单 P99 从 800ms 涨到 2s, 比如复合索引被改后失效 + Redis 热点 key 击穿, 我们加回索引并改造成本地缓存 + Redis 二级缓存, 结果 P99 回到 350ms, 用了灰度 5% -> 50% -> 全量分三档发布, 漏对率从 0.4‰ 降到 0.02‰。"
+      "answer": "去年大促前订单 P99 从 800ms 涨到 2s, 比如复合索引被改后失效 + Redis 热点 key 击穿, 我们加回索引并改造成本地缓存 + Redis 二级缓存, 结果 P99 回到 350ms, 用了灰度 5% -> 50% -> 全量分三档发布, 漏对率从 0.4‰ 降到 0.02‰。",
+      "expected_aspect_names": ["性能优化", "数据库与缓存"]
     },
     {
       "id": "p02-suf",
       "category": "project_experience",
       "label": "sufficient",
       "question": "介绍一次你做过的数据库优化。",
-      "answer": "对账中台日处理 2 亿笔, 比如早期延迟 30 分钟+, 我们把单表对账改成分桶并行 + 幂等键 + Kafka 回放, 结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰, 选择分桶哈希用 order_id 避免热点。"
+      "answer": "对账中台日处理 2 亿笔, 比如早期延迟 30 分钟+, 我们把单表对账改成分桶并行 + 幂等键 + Kafka 回放, 结果延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰, 选择分桶哈希用 order_id 避免热点。",
+      "expected_aspect_names": ["数据库与缓存", "性能优化"]
     },
     {
       "id": "p03-insuf",
@@ -94,6 +164,66 @@
       "answer": "上半年风控那次, 比如产品要求 24 小时内全量, 我担心误杀率太高。我们拉 SRE 一起跑离线回放, 用数据说服产品先灰度 5% 一周, 结果误杀率从 3.1% 降到 0.4% 才放开全量, 选择保守发布让团队认可了。"
     },
     {
+      "id": "p07-amb",
+      "category": "project_experience",
+      "label": "ambiguous",
+      "question": "讲一次你做过最复杂的微服务拆分。",
+      "answer": "我们把单体系统拆成了 8 个服务, 用了 gRPC 通信, 上线后性能提升明显, 整个过程花了 3 个月。"
+    },
+    {
+      "id": "p08-suf",
+      "category": "project_experience",
+      "label": "sufficient",
+      "question": "讲一个你主动推动落地的技术改造。",
+      "answer": "比如订单老 RPC 框架 SDK 不维护, 我们主动写了迁移到新 SDK 的方案 + 自动化兼容层, 拉了周会推动 12 个下游, 结果 6 周内全部迁完, 选择了灰度 + 双写过渡减少回归。",
+      "expected_aspect_names": ["推动落地", "技术选型权衡"]
+    },
+    {
+      "id": "p09-suf",
+      "category": "project_experience",
+      "label": "sufficient",
+      "question": "聊聊一次你做的分布式系统设计决策。",
+      "answer": "比如订单中心从单机加锁改成分布式 Redlock, 我们考虑了时钟漂移和租约自动续期, 结果在 5 台冗余下没出现过双写问题, 选择了主动放弃部分可用性换强一致, 节点故障时业务降级到只读。",
+      "expected_aspect_names": ["分布式系统设计", "故障定位 oncall"]
+    },
+    {
+      "id": "p10-insuf",
+      "category": "project_experience",
+      "label": "insufficient",
+      "question": "讲讲你独立负责的最大模块。",
+      "answer": "做过一个用户中心, 学到很多。"
+    },
+    {
+      "id": "p11-suf",
+      "category": "project_experience",
+      "label": "sufficient",
+      "question": "你在团队里怎么帮助新人成长?",
+      "answer": "比如带过两个校招, 我们设计了月度 code review checklist + 配对编程, 结果新人 3 个月就能独立认领需求, 选择 mentor 角色而不是直接代写, 让他们沉淀技术沟通能力。",
+      "expected_aspect_names": ["跨职能沟通"]
+    },
+    {
+      "id": "p12-amb",
+      "category": "project_experience",
+      "label": "ambiguous",
+      "question": "讲一次你做过的数据架构改造。",
+      "answer": "我们之前数据散落在多个库, 后来做了统一, 报表查询快了很多。"
+    },
+    {
+      "id": "p13-insuf",
+      "category": "project_experience",
+      "label": "insufficient",
+      "question": "讲一次你的项目延期经历。",
+      "answer": "有过, 不算大事, 后来赶上了。"
+    },
+    {
+      "id": "p14-suf",
+      "category": "project_experience",
+      "label": "sufficient",
+      "question": "讲一次你为了上线一个特性主动学习了新技术栈。",
+      "answer": "比如风控特性要 Flink 实时计算, 我们之前没用过, 我两周内啃完官方文档 + 写了 3 个 demo, 然后主导落地, 结果特性按期上线, 选择直接用 SQL API 降低团队学习成本。",
+      "expected_aspect_names": ["技术选型权衡", "推动落地"]
+    },
+    {
       "id": "i01-suf",
       "category": "self_intro",
       "label": "sufficient",
@@ -122,11 +252,47 @@
       "answer": "我叫小明。"
     },
     {
+      "id": "i05-suf",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请做一个自我介绍, 也讲讲你为什么投这个岗位。",
+      "answer": "我叫赵六, 后端 6 年, 一直在交易领域。看这个岗位是因为我想深入做分布式架构, 之前的项目主要是单机优化, 这边业务规模更大, 是我职业发展的下一步。"
+    },
+    {
+      "id": "i06-suf",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请简单介绍下你自己和最有代表性的项目。",
+      "answer": "我是孙七, 后端 2 年, 校招进的现公司, 最有代表性的项目是消息推送系统从 0 到 1 设计, 现在每天发 5000 万条, P99 50ms 内。"
+    },
+    {
+      "id": "i07-suf",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请自我介绍。",
+      "answer": "周八, 大三在校, 主修计算机, 做过几个个人项目, 比如博客系统和短链服务, 想找实习。"
+    },
+    {
+      "id": "i08-suf-medium",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请做个 2 分钟自我介绍。",
+      "answer": "我是吴九, 数据后端 3 年, 主要做实时数仓和 BI 报表底层。最近一个项目是把 T+1 报表改成实时, Flink + ClickHouse, 上线后业务每天有数百次实时查询。"
+    },
+    {
+      "id": "i09-suf",
+      "category": "self_intro",
+      "label": "sufficient",
+      "question": "请你做个自我介绍。",
+      "answer": "我叫郑十, 后端 7 年, 做过 3 家公司, 主要在金融科技。最近在反洗钱平台做规则引擎, 把 200 多条规则的执行延迟从 800ms 压到 80ms。"
+    },
+    {
       "id": "s01-suf",
       "category": "scenario",
       "label": "sufficient",
       "question": "你是订单业务的 oncall, 凌晨 3 点收到 P99 告警从 200ms 涨到 4s, 业务量没显著变化。你的前 10 分钟做什么?",
-      "answer": "比如先看链路 RT 分布定位是哪个下游慢, 我们再看错误率分布是不是热点 key, 结果可以 5 分钟内定位到瓶颈; 用了已有 dashboard 不增加新工具, 选择保留可观测性优先, 不立刻扩容也不立刻 rollback。"
+      "answer": "比如先看链路 RT 分布定位是哪个下游慢, 我们再看错误率分布是不是热点 key, 结果可以 5 分钟内定位到瓶颈; 用了已有 dashboard 不增加新工具, 选择保留可观测性优先, 不立刻扩容也不立刻 rollback。",
+      "expected_aspect_names": ["故障定位 oncall", "可观测性"]
     },
     {
       "id": "s02-suf",
@@ -161,21 +327,60 @@
       "category": "scenario",
       "label": "sufficient",
       "question": "线上 incident 进行中, SRE / 业务 PM / 运营三方都在追问 ETA, 你刚定位到根因还没修。接下来 15 分钟你怎么沟通?",
-      "answer": "比如先在群里发一条结构化更新: 根因 + ETA + 影响范围, 我们让业务 PM 对外口径同步, 结果各方拿到一致信息不会反复追问; 用了既定的 incident 模版, 选择只对 SRE 同步技术细节, 业务侧只看影响。"
+      "answer": "比如先在群里发一条结构化更新: 根因 + ETA + 影响范围, 我们让业务 PM 对外口径同步, 结果各方拿到一致信息不会反复追问; 用了既定的 incident 模版, 选择只对 SRE 同步技术细节, 业务侧只看影响。",
+      "expected_aspect_names": ["故障定位 oncall"]
     },
     {
-      "id": "k07-insuf",
-      "category": "knowledge",
+      "id": "s07-suf",
+      "category": "scenario",
+      "label": "sufficient",
+      "question": "新需求和老需求资源冲突, 老板让你两个都要按时上, 但你判断不可能。你接下来怎么做?",
+      "answer": "比如我先列两边的 must / nice-to-have 切片, 我们和产品对齐砍掉老需求 30% 的低价值功能, 结果两边都按时上但范围有调, 选择主动暴露风险给老板, 让他知道我们的取舍。",
+      "expected_aspect_names": ["冲突解决"]
+    },
+    {
+      "id": "s08-insuf",
+      "category": "scenario",
       "label": "insufficient",
-      "question": "你怎么设计一个限流方案?",
-      "answer": "看场景吧。"
+      "question": "你的代码上线后被同事发现一个低级 bug, 你怎么处理?",
+      "answer": "改了就行。"
     },
     {
-      "id": "p07-amb",
-      "category": "project_experience",
+      "id": "s09-suf",
+      "category": "scenario",
+      "label": "sufficient",
+      "question": "新人入职第一周不熟悉技术栈, 让他独立做需求会延期。你怎么安排?",
+      "answer": "比如我会和他一起拆需求, 我们前两天做认知对齐 + 配对编程, 结果第二周他能独立做小特性, 选择了 mentor 模式而不是直接代写, 让他建立技术沟通的习惯。",
+      "expected_aspect_names": ["跨职能沟通", "技术选型权衡"]
+    },
+    {
+      "id": "s10-amb",
+      "category": "scenario",
       "label": "ambiguous",
-      "question": "讲一次你做过最复杂的微服务拆分。",
-      "answer": "我们把单体系统拆成了 8 个服务, 用了 gRPC 通信, 上线后性能提升明显, 整个过程花了 3 个月。"
+      "question": "线上服务突然 CPU 飙到 95%, 你只有 15 分钟决定要不要扩容。",
+      "answer": "我会先看流量是否激增, 看 GC 日志和热点方法, 没问题就扩容, 有问题就先 hotfix。"
+    },
+    {
+      "id": "s11-suf",
+      "category": "scenario",
+      "label": "sufficient",
+      "question": "团队有一个老服务没人懂, 但马上要支持新业务, 你被指派负责。你怎么开始?",
+      "answer": "比如先看运行时数据画依赖图, 我们再补 README + 关键链路压测脚本, 结果一周内能给新需求评估准, 选择主动学习老服务的历史决策而不是推倒重写, 节省了 2 个月工期。"
+    },
+    {
+      "id": "s12-insuf",
+      "category": "scenario",
+      "label": "insufficient",
+      "question": "运营方要求你 1 周内支持一个营销活动, 但技术上至少要 2 周。",
+      "answer": "和他说做不到, 拒了。"
+    },
+    {
+      "id": "s13-suf",
+      "category": "scenario",
+      "label": "sufficient",
+      "question": "你接手了一个老仓库, 测试覆盖率只有 20%, 但要快速加新特性。",
+      "answer": "比如新特性走 TDD 直接拉到 80% 覆盖, 我们对老代码只补 happy path + 关键 bug 修复处, 结果 3 个迭代后整体覆盖率到 55% 又没拖延特性, 选择渐进式补测而不是停下来全量补。",
+      "expected_aspect_names": ["代码质量与测试"]
     }
   ]
 }
