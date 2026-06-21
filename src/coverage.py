@@ -25,6 +25,8 @@ from src.schemas import (
     CompletionPolicy,
     InterviewPlan,
     InterviewSession,
+    JobContext,
+    ProfileAspect,
     Question,
 )
 
@@ -112,3 +114,61 @@ def total_questions_asked(session: InterviewSession) -> int:
     """已答题数 (按 session.answers 计数; followup 也计入, 与 next_turn 的
     总数判定口径一致)。CompletionPolicy.max_total_questions 用这个对比。"""
     return len(session.answers)
+
+
+# ---------- Sprint 5.9: 候选人画像丰富度 (richness) ----------
+
+def compute_richness(
+    session: InterviewSession,
+    job: JobContext | None,
+    default_aspects: list[ProfileAspect] | None = None,
+) -> float:
+    """候选人画像丰富度 = (已被 covered 的 aspect 数) / (总 aspect 数)。
+    每答一道题 Assessor 标 AnswerAssessment.covered_aspects (list of aspect_id);
+    并集除以总数就是 richness ∈ [0, 1]。
+
+    aspect 列表来源优先级:
+    1. job.aspects (HR 在新建 job 时配的; 真理之源)
+    2. default_aspects (planner.default_aspects_for 给出的模板; 当 HR 未配置时)
+    3. 都空 → 返 0.0 (老 plan / 没配 aspect 的 job, Interviewer 应退到
+       mandatory_coverage 判停, 不被本函数 0.0 误判为"没信号")。
+    """
+    aspects: list[ProfileAspect] = []
+    if job is not None and job.aspects:
+        aspects = job.aspects
+    elif default_aspects:
+        aspects = default_aspects
+    if not aspects:
+        return 0.0
+
+    aspect_ids = {a.aspect_id for a in aspects}
+    covered_ids: set[str] = set()
+    for a in session.assessments:
+        for aid in a.covered_aspects:
+            if aid in aspect_ids:
+                covered_ids.add(aid)
+    return len(covered_ids) / len(aspect_ids)
+
+
+def insufficient_aspects(
+    session: InterviewSession,
+    job: JobContext | None,
+    default_aspects: list[ProfileAspect] | None = None,
+) -> list[str]:
+    """返回还没被任何回答 covered 到的 aspect_id 列表;
+    用于 Evaluator 在 summary 里点出"画像还缺这些方面信号"。"""
+    aspects: list[ProfileAspect] = []
+    if job is not None and job.aspects:
+        aspects = job.aspects
+    elif default_aspects:
+        aspects = default_aspects
+    if not aspects:
+        return []
+
+    aspect_ids = {a.aspect_id for a in aspects}
+    covered_ids: set[str] = set()
+    for a in session.assessments:
+        for aid in a.covered_aspects:
+            if aid in aspect_ids:
+                covered_ids.add(aid)
+    return sorted(aspect_ids - covered_ids)
