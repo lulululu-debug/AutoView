@@ -17,6 +17,11 @@ from fastapi.testclient import TestClient
 
 from api.main import API_TITLE, API_VERSION, create_app
 
+# Sprint 5.9 patch: 防 .env 里 ASSESSOR_ENABLED=true + pymilvus.settings.load_dotenv()
+# 让 e2e walk 因 Assessor fallback (confidence=0.3 < 0.5 阈值) 触发追问失控。
+# set, not pop, 防 dotenv 把 .env 值加回。
+os.environ["ASSESSOR_ENABLED"] = "false"
+
 
 # Sprint 5.5: lateral plan 默认 7 题 (self_intro+project*3+scenario*2+knowledge*1)。
 # 每条答案 >60 字 + 含 _SPECIFICITY_HINTS 至少一个 ("比如"/"我们"/"结果"/"%"),
@@ -186,7 +191,8 @@ class CreateCandidateTests(unittest.TestCase):
         # Sprint 5.5: 默认 lateral track 4 stage 7 题
         total = sum(len(r.questions) for r in plan_pg.rounds)
         self.assertEqual(len(plan_pg.rounds), 4, "lateral 4 stage 序列")
-        self.assertEqual(total, 7, "lateral 配比 1+3+2+1")
+        # Sprint 5.9: tech-lateral 配比 1+11+6+4=22
+        self.assertEqual(total, 22, "lateral 配比 1+11+6+4")
         # Redis
         plan_redis = cache.load_plan(plan_pg.plan_id)
         self.assertIsNotNone(plan_redis, "Planner 应当已写 Redis")
@@ -227,7 +233,8 @@ class CreateCandidateTests(unittest.TestCase):
         # Sprint 5.5: 默认 lateral track 4 stage 7 题
         self.assertEqual(len(plan["rounds"]), 4)
         total = sum(len(r["questions"]) for r in plan["rounds"])
-        self.assertEqual(total, 7)
+        # Sprint 5.9: tech-lateral 22 主问题
+        self.assertEqual(total, 22)
 
     def test_get_plan_404_when_candidate_not_in_job(self):
         """安全: candidate_id 不在该 job 下的, 不能跨 job 偷看 plan。"""
@@ -266,11 +273,17 @@ class InterviewSessionTests(unittest.TestCase):
     def setUpClass(cls):
         from src.db import init_db, save_candidate, save_job, save_plan
         from src.agents.planner import plan as run_planner
-        from src.schemas import CandidateProfile, JobContext
+        from src.schemas import CandidateProfile, CompletionPolicy, JobContext
         init_db()
         cls.client = TestClient(create_app())
         # 准备: 1 个 job + 1 个 candidate + 1 个 plan
-        cls.job = JobContext(title="后端工程师", jd="负责交易系统")
+        # Sprint 5.9: tech-lateral plan 现在 22 主问题, _PROVEN_ANSWERS 10 条
+        # 答案池. completion_policy.max_total=10 让 walk 命中 hard cap done.
+        # 本类测的是 session 状态机 + finalize 链路, 不是 Planner 配比。
+        cls.job = JobContext(
+            title="后端工程师", jd="负责交易系统",
+            completion_policy=CompletionPolicy(max_total_questions=10),
+        )
         save_job(cls.job)
         cls.cand = CandidateProfile(
             job_id=cls.job.job_id,

@@ -191,6 +191,12 @@ def next_turn(
     if last.role != TurnRole.CANDIDATE:
         return None
 
+    # Sprint 5.9: 硬上限提前到 followup 决策之前. 否则 max=10 + 第 10 题答完触发
+    # 追问 → 返 FollowUp → 候选人答完 11 turn 才停, 比 cap 多 1。
+    completion = _completion_policy(job)
+    if total_questions_asked(session) >= completion.max_total_questions:
+        return None
+
     # 找到"当前问题"以及其后已经发过的追问数
     question_ids = {q.question_id for q in questions}
     current_q: Question | None = None
@@ -219,11 +225,6 @@ def next_turn(
             )
 
     # Sprint 5.7: CompletionPolicy 决策 done 与否
-    completion = _completion_policy(job)
-
-    # 1) 硬上限封顶 (防 followup 失控 / 误算无限循环)
-    if total_questions_asked(session) >= completion.max_total_questions:
-        return None
 
     # 2) mandatory coverage 达标 -> 提前 done
     #    (老 plan plan.competencies 空时 mandatory_coverage_met 返 False, 不早停)

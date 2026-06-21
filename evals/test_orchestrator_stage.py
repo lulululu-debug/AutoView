@@ -27,7 +27,7 @@ os.environ.pop("OPENAI_API_KEY", None)
 # Sprint 5.9 patch: .env 里 HR 翻了 ASSESSOR_ENABLED=true 后 e2e walk 会走 Assessor
 # fallback 启发式 (confidence=0.3) → 每题触发 followup → walk 超 7 题. 本模块测的是
 # Sprint 5.5 行为 (无 Assessor), 显式 pop 让走纯启发式 _needs_followup 路径。
-os.environ.pop("ASSESSOR_ENABLED", None)
+os.environ["ASSESSOR_ENABLED"] = "false"  # set, not pop, 防 pymilvus load_dotenv 再加回
 
 
 def _short_intro() -> str:
@@ -86,17 +86,23 @@ class StageTransitionTests(unittest.TestCase):
     def setUpClass(cls):
         # pymilvus.settings.load_dotenv() 在 import 时再把 ASSESSOR_ENABLED 加回,
         # 模块顶 pop 已被覆盖, 在 setUpClass 再 pop 一次保证 e2e 走启发式路径.
-        os.environ.pop("ASSESSOR_ENABLED", None)
+        os.environ["ASSESSOR_ENABLED"] = "false"  # set, not pop, 防 pymilvus load_dotenv 再加回
         from src import cache, db
         from src.agents import planner
-        from src.schemas import CandidateProfile, JobContext, Track
+        from src.schemas import (
+            CandidateProfile, CompletionPolicy, JobContext, Track,
+        )
         # 关键: 显式把 job/candidate/plan 落 PG, 让 submit_answer 里
         # db.load_candidate_for_plan 能找到 (否则走 fallback 路径文本是空 job 模板)。
         db.init_db()
+        # Sprint 5.9: tech-lateral plan 现在 22 主问题, 但本 fixture 仍用 7
+        # answer 答案池. completion_policy.max_total_questions=7 让 walk 走完
+        # 7 answer 后命中 hard cap done. 测的是状态机, 不是 Planner 配比。
         job = JobContext(
             title="后端工程师", jd="负责核心交易系统的稳定性与性能。",
             requirements=["分布式", "数据库优化"],
             track=Track.LATERAL,
+            completion_policy=CompletionPolicy(max_total_questions=7),
         )
         candidate = CandidateProfile(
             job_id=job.job_id,
@@ -203,7 +209,7 @@ class LazyResolveSyncsPgPlanTests(unittest.TestCase):
     def setUpClass(cls):
         # 同 StageTransitionTests: 在 setUpClass 显式 pop ASSESSOR_ENABLED 防
         # pymilvus.settings.load_dotenv() 把 .env 里的 true 加回, 让 e2e 走启发式.
-        os.environ.pop("ASSESSOR_ENABLED", None)
+        os.environ["ASSESSOR_ENABLED"] = "false"  # set, not pop, 防 pymilvus load_dotenv 再加回
         from src import db
         from src.agents import planner
         from src.schemas import CandidateProfile, JobContext, Track
@@ -266,7 +272,7 @@ class IntroTextFlowsIntoProjectPromptTests(unittest.TestCase):
     def setUpClass(cls):
         # 同 StageTransitionTests: 在 setUpClass 显式 pop ASSESSOR_ENABLED 防
         # pymilvus.settings.load_dotenv() 把 .env 里的 true 加回, 让 e2e 走启发式.
-        os.environ.pop("ASSESSOR_ENABLED", None)
+        os.environ["ASSESSOR_ENABLED"] = "false"  # set, not pop, 防 pymilvus load_dotenv 再加回
         from src import db
         from src.agents import planner
         from src.schemas import CandidateProfile, JobContext, Track
@@ -349,15 +355,21 @@ class CampusEndToEndTests(unittest.TestCase):
     def setUpClass(cls):
         # 同 StageTransitionTests: 在 setUpClass 显式 pop ASSESSOR_ENABLED 防
         # pymilvus.settings.load_dotenv() 把 .env 里的 true 加回, 让 e2e 走启发式.
-        os.environ.pop("ASSESSOR_ENABLED", None)
+        os.environ["ASSESSOR_ENABLED"] = "false"  # set, not pop, 防 pymilvus load_dotenv 再加回
         from src import db
         from src.agents import planner
-        from src.schemas import CandidateProfile, JobContext, Track
+        from src.schemas import (
+            CandidateProfile, CompletionPolicy, JobContext, Track,
+        )
         db.init_db()
+        # Sprint 5.9: tech-campus plan 21 主问题, fixture 答案池 7. policy
+        # max_total=7 让 walk 命中 hard cap done. test_plan_shape_matches_campus_config
+        # 仍用 self.plan (有 21 题) 看结构, 不冲突。
         job = JobContext(
             title="校招后端工程师", jd="负责核心交易系统的稳定性与性能。",
             requirements=["分布式", "数据库优化"],
             track=Track.CAMPUS,
+            completion_policy=CompletionPolicy(max_total_questions=7),
         )
         candidate = CandidateProfile(
             job_id=job.job_id,
@@ -373,12 +385,12 @@ class CampusEndToEndTests(unittest.TestCase):
         cls.plan = plan
 
     def test_plan_shape_matches_campus_config(self):
-        """sprint 5.5 spec: campus 7-8 题; 当前硬编码 1+3+2+1=7。
-        断言 stage 序列正确 + 题数在 7-8 范围。"""
+        """Sprint 5.9: tech-campus 21 主问题 (1 + 12 + 5 + 3)。
+        断言 stage 序列正确 + 总题数符合配比。"""
         stages = [r.stage.value for r in self.plan.rounds]
         self.assertEqual(stages, ["self_intro", "knowledge", "project", "scenario"])
         total = sum(len(r.questions) for r in self.plan.rounds)
-        self.assertIn(total, (7, 8), f"campus 应当 7-8 题, 实际 {total}")
+        self.assertEqual(total, 21, f"tech-campus 应当 21 题, 实际 {total}")
 
     def test_full_campus_walk_to_done(self):
         """campus 走完 7 题 (1 self_intro + 6 其他), finalize 拿报告。"""

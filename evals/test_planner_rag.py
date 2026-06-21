@@ -118,7 +118,7 @@ class RagHitTests(_PlannerRagBase):
         # Sprint 5.5: lateral track 1 knowledge (tech), 3 project (lazy 占位)
         questions = [q for r in p.rounds for q in r.questions]
         knowledge_q = [q for q in questions if q.category == QuestionCategory.KNOWLEDGE]
-        self.assertEqual(len(knowledge_q), 1, "lateral 1 道 knowledge")
+        self.assertEqual(len(knowledge_q), 4, "Sprint 5.9: tech-lateral 4 道 knowledge")
         # tech 维度的种子题应当被命中
         self.assertEqual(knowledge_q[0].source_question_id, "seed-tech-001")
 
@@ -126,7 +126,7 @@ class RagHitTests(_PlannerRagBase):
         project_q = [
             q for q in questions if q.category == QuestionCategory.PROJECT_EXPERIENCE
         ]
-        self.assertEqual(len(project_q), 3, "lateral 3 道 project")
+        self.assertEqual(len(project_q), 11, "Sprint 5.9: tech-lateral 11 道 project")
         self.assertTrue(all(q.source_question_id is None for q in project_q))
         self.assertTrue(all(q.lazy for q in project_q), "project 题在 plan 阶段都是 lazy")
 
@@ -198,7 +198,7 @@ class ProjectRagHitTests(_PlannerRagBase):
             q for r in p.rounds for q in r.questions
             if q.category == QuestionCategory.PROJECT_EXPERIENCE
         ]
-        self.assertEqual(len(project_q), 3, "lateral 3 道 project")
+        self.assertEqual(len(project_q), 11, "Sprint 5.9: tech-lateral 11 道 project")
         for q in project_q:
             self.assertTrue(q.lazy, "lazy 静态信号生成后仍 True 作审计")
             self.assertGreater(
