@@ -237,5 +237,97 @@ class AssessorGateTests(unittest.TestCase):
         )
 
 
+class CoveredAspectsHeuristicTests(unittest.TestCase):
+    """Sprint 5.9: 启发式 fallback 给 covered_aspects 填值的护栏。
+    LLM 路径要靠 calibration eval 人工验; 启发式路径要靠这里锁死, 防静默漂移。
+    匹配规则: aspect.name 切 2-gram 子串, 任一子串出现在答案文本即视为 covered。"""
+
+    def setUp(self):
+        from src.schemas import (
+            Competency, ProfileAspect, JobContext, Question, QuestionCategory,
+            CandidateAnswer, InterviewSession, InterviewPlan, InterviewRound,
+        )
+        self.comp = Competency(name="技术深度", description="x")
+        self.other = Competency(name="沟通协作", description="x")
+        self.tech_aspects = [
+            ProfileAspect(competency_id=self.comp.competency_id, name="分布式系统", description="d"),
+            ProfileAspect(competency_id=self.comp.competency_id, name="性能优化", description="d"),
+            ProfileAspect(competency_id=self.comp.competency_id, name="故障定位", description="d"),
+        ]
+        self.comm_aspects = [
+            ProfileAspect(competency_id=self.other.competency_id, name="跨职能沟通", description="d"),
+        ]
+        all_asp = self.tech_aspects + self.comm_aspects
+        self.job = JobContext(title="t", jd="x", aspects=all_asp)
+        self.q_k = Question(
+            competency_id=self.comp.competency_id, text="聊聊分布式",
+            category=QuestionCategory.KNOWLEDGE,
+        )
+        self.q_intro = Question(
+            text="请自我介绍", category=QuestionCategory.SELF_INTRO,
+        )
+        r = InterviewRound(
+            index=0, title="t", competencies=[self.comp, self.other],
+            questions=[self.q_k, self.q_intro],
+        )
+        self.plan = InterviewPlan(
+            job_id="j", rounds=[r],
+            competencies=[self.comp, self.other],
+        )
+        self.session = InterviewSession(plan_id=self.plan.plan_id, job_id="j")
+
+    def test_covered_aspects_filtered_by_question_competency(self):
+        """tech 题的 covered_aspects 只包含 tech aspect, 不会跨 competency 串"""
+        from src.agents import assessor
+        from src.schemas import CandidateAnswer
+        # 答案含所有 tech + comm 关键词
+        a = CandidateAnswer(
+            question_id=self.q_k.question_id,
+            text="分布式 性能优化 故障定位 跨职能 一锅端",
+        )
+        result = assessor.assess(self.q_k, a, self.session, self.plan, job=self.job)
+        # 3 个 tech aspect 命中, comm aspect (跨职能沟通) 因为 question 是 tech 题
+        # 不在候选列表, 即使答案含"跨职能"也不会出现在 covered_aspects
+        tech_ids = {a.aspect_id for a in self.tech_aspects}
+        comm_ids = {a.aspect_id for a in self.comm_aspects}
+        self.assertEqual(set(result.covered_aspects), tech_ids)
+        self.assertEqual(set(result.covered_aspects) & comm_ids, set())
+
+    def test_self_intro_question_returns_empty_covered_aspects(self):
+        """self_intro 题 competency_id=None, 不参与 aspect 匹配。"""
+        from src.agents import assessor
+        from src.schemas import CandidateAnswer
+        a = CandidateAnswer(
+            question_id=self.q_intro.question_id,
+            text="分布式 性能优化 故障定位 跨职能 我都做过",
+        )
+        result = assessor.assess(self.q_intro, a, self.session, self.plan, job=self.job)
+        self.assertEqual(result.covered_aspects, [])
+
+    def test_job_with_no_aspects_returns_empty(self):
+        """job 无 aspects 时启发式不能凭空生 aspect_id。"""
+        from src.agents import assessor
+        from src.schemas import CandidateAnswer, JobContext
+        job_empty = JobContext(title="t", jd="x")
+        a = CandidateAnswer(
+            question_id=self.q_k.question_id, text="分布式 性能优化",
+        )
+        result = assessor.assess(self.q_k, a, self.session, self.plan, job=job_empty)
+        self.assertEqual(result.covered_aspects, [])
+
+    def test_partial_keyword_match_counts(self):
+        """2-gram 子串扫: 答案只含 aspect.name 的一部分也算 covered。
+        '分布' 是 '分布式系统' 的 2-gram, 应当命中。"""
+        from src.agents import assessor
+        from src.schemas import CandidateAnswer
+        a = CandidateAnswer(
+            question_id=self.q_k.question_id,
+            text="我做过分布相关的工作 (没说完整名字, 但 2-gram '分布' 命中)",
+        )
+        result = assessor.assess(self.q_k, a, self.session, self.plan, job=self.job)
+        # '分布' 是 '分布式系统' 的 2-gram, 应命中 asp[0]
+        self.assertIn(self.tech_aspects[0].aspect_id, result.covered_aspects)
+
+
 if __name__ == "__main__":
     unittest.main()
