@@ -30,7 +30,7 @@ except ImportError:
 os.environ.pop("OPENAI_API_KEY", None)
 # Sprint 5.9 patch: 同 test_orchestrator_stage, 防 .env 里 ASSESSOR_ENABLED=true
 # 让 e2e walk 因 Assessor fallback 启发式 (confidence=0.3) 触发追问失控。
-os.environ.pop("ASSESSOR_ENABLED", None)
+os.environ["ASSESSOR_ENABLED"] = "false"  # set, not pop, 防 pymilvus load_dotenv 再加回
 
 
 def _fixed_vector(dim: int = 1536) -> list[float]:
@@ -79,7 +79,7 @@ class _RagE2EBase(unittest.TestCase):
     def setUpClass(cls):
         # 同 test_orchestrator_stage: 防 pymilvus.settings.load_dotenv() 加回
         # ASSESSOR_ENABLED, 让 e2e walk 走启发式 _needs_followup 而不是 Assessor fallback.
-        os.environ.pop("ASSESSOR_ENABLED", None)
+        os.environ["ASSESSOR_ENABLED"] = "false"  # set, not pop, 防 pymilvus load_dotenv 再加回
         cls._db = tempfile.mktemp(suffix=".db")
         os.environ.pop("MILVUS_URI", None)
         os.environ["MILVUS_LITE_URI"] = cls._db
@@ -181,11 +181,15 @@ class RagE2EProvenanceTests(_RagE2EBase):
         )
 
         # 2) POST /jobs (含 JD + 公司资料, BG ingest 走 monkey-patched embed)
+        # Sprint 5.9: tech-lateral plan 22 主问题; 答案池 10 条让 walk 命中
+        # completion_policy.max_total=10 hard cap done. 本 eval 测的是 provenance
+        # 链路 (source 字段透传), 不是 Planner 配比。
         job_body = {
             "title": "后端工程师",
             "jd": "负责交易系统的稳定性与性能, 熟悉分布式与数据库优化。" * 15,
             "requirements": ["分布式", "数据库优化"],
             "company_materials": "公司以交易系统为核心, 强调稳定性与数据驱动。" * 15,
+            "completion_policy": {"max_total_questions": 10},
         }
         r = self.client.post("/jobs", json=job_body)
         self.assertEqual(r.status_code, 201)
@@ -215,7 +219,7 @@ class RagE2EProvenanceTests(_RagE2EBase):
         project_q = [q for q in questions if q["category"] == "project_experience"]
 
         # 4a) knowledge 题 (lateral 1 道): source_question_id 必须指向真实 SeedQuestion
-        self.assertEqual(len(knowledge_q), 1)
+        self.assertEqual(len(knowledge_q), 4)
         for q in knowledge_q:
             src_id = q.get("source_question_id")
             self.assertIsNotNone(src_id, f"knowledge 题缺 source_question_id: {q}")
@@ -230,7 +234,7 @@ class RagE2EProvenanceTests(_RagE2EBase):
         #     source_chunk_ids 非空, 且全部指向本 candidate 的 resume 切片。
         #     注: plan API 返回的是 cache.load_plan, start_session 之前未 resolve,
         #     所以这里 plan 阶段 project 题 chunk_ids 应当还是空 (lazy 占位)。
-        self.assertEqual(len(project_q), 3)
+        self.assertEqual(len(project_q), 11)
         for q in project_q:
             self.assertTrue(q.get("lazy"), "plan 阶段 project 题应当还是 lazy 占位")
             self.assertEqual(
@@ -314,10 +318,11 @@ class RagE2EIsolationTests(_RagE2EBase):
         })
         job_a = r.json()["job_id"]
 
-        # job B + 候选人 + 走完流程
+        # job B + 候选人 + 走完流程 (Sprint 5.9: max=10 让 walk 命中 cap done)
         r = self.client.post("/jobs", json={
             "title": "job B", "jd": "B 公司的 JD 内容。" * 30,
             "company_materials": "B 公司的资料。" * 30,
+            "completion_policy": {"max_total_questions": 10},
         })
         job_b = r.json()["job_id"]
         r = self.client.post(f"/jobs/{job_b}/candidates", json={

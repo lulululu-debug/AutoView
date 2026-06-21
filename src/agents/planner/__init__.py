@@ -33,6 +33,7 @@ from src.schemas import (
     InterviewRound,
     InterviewStage,
     JobContext,
+    ProfileAspect,
     Question,
     QuestionCategory,
     QuestionType,
@@ -94,7 +95,7 @@ _SELF_INTRO_TEXT = (
 )
 
 
-# ---------- stage 配比 (硬编码; Sprint 5.7 再开放 HR 配置) ----------
+# ---------- stage 配比 (硬编码 by (track, role_family); 5.9 起从 7 题升到 ~20-22 主问题) ----------
 
 @dataclass(frozen=True)
 class _StageSlot:
@@ -103,45 +104,75 @@ class _StageSlot:
     category: QuestionCategory
 
 
-# campus (校招): self_intro 1 + knowledge 3 + project 2 lazy + scenario 1
-#   knowledge 2 tech + 1 comm; project 1 tech + 1 comm; scenario 1 tech
-_CAMPUS_STAGES: list[tuple[InterviewStage, list[_StageSlot]]] = [
-    (InterviewStage.SELF_INTRO, [
-        _StageSlot(None, QuestionCategory.SELF_INTRO),
-    ]),
-    (InterviewStage.KNOWLEDGE, [
-        _StageSlot("tech", QuestionCategory.KNOWLEDGE),
-        _StageSlot("tech", QuestionCategory.KNOWLEDGE),
-        _StageSlot("comm", QuestionCategory.KNOWLEDGE),
-    ]),
-    (InterviewStage.PROJECT, [
-        _StageSlot("tech", QuestionCategory.PROJECT_EXPERIENCE),
-        _StageSlot("comm", QuestionCategory.PROJECT_EXPERIENCE),
-    ]),
-    (InterviewStage.SCENARIO, [
-        _StageSlot("tech", QuestionCategory.SCENARIO),
-    ]),
-]
+@dataclass(frozen=True)
+class _StageQuota:
+    """一个 stage 的题数配比 (Sprint 5.9 起): tech/comm 分别要几题。
+    SELF_INTRO stage 只用 self_intro_count=1, 其他 stage 全 0。"""
+    stage: InterviewStage
+    category: QuestionCategory
+    tech_count: int = 0
+    comm_count: int = 0
+    self_intro_count: int = 0
 
-# lateral (社招): self_intro 1 + project 3 lazy + scenario 2 + knowledge 1
-#   project 2 tech + 1 comm; scenario 1 tech + 1 comm; knowledge 1 tech
-_LATERAL_STAGES: list[tuple[InterviewStage, list[_StageSlot]]] = [
-    (InterviewStage.SELF_INTRO, [
-        _StageSlot(None, QuestionCategory.SELF_INTRO),
-    ]),
-    (InterviewStage.PROJECT, [
-        _StageSlot("tech", QuestionCategory.PROJECT_EXPERIENCE),
-        _StageSlot("tech", QuestionCategory.PROJECT_EXPERIENCE),
-        _StageSlot("comm", QuestionCategory.PROJECT_EXPERIENCE),
-    ]),
-    (InterviewStage.SCENARIO, [
-        _StageSlot("tech", QuestionCategory.SCENARIO),
-        _StageSlot("comm", QuestionCategory.SCENARIO),
-    ]),
-    (InterviewStage.KNOWLEDGE, [
-        _StageSlot("tech", QuestionCategory.KNOWLEDGE),
-    ]),
-]
+    def to_slots(self) -> list[_StageSlot]:
+        slots: list[_StageSlot] = []
+        for _ in range(self.self_intro_count):
+            slots.append(_StageSlot(None, self.category))
+        for _ in range(self.tech_count):
+            slots.append(_StageSlot("tech", self.category))
+        for _ in range(self.comm_count):
+            slots.append(_StageSlot("comm", self.category))
+        return slots
+
+
+# ----- 4 个 stage 配比 (track × tech-or-not) -----
+# 设计意图:
+# - 总主问题 ~20-22 道, 含追问 max 25-30 由 CompletionPolicy 控制
+# - 校招: knowledge 重 (考基本功), project 轻 (实习经历少)
+# - 社招: project + scenario 重 (考实战), knowledge 轻 (基本功默认有)
+# - 技术岗 comm: 校招 1 题, 社招 2 题 (用户原话)
+# - 非技术岗 comm: 占主体 (产品/HR 沟通能力是核心考察)
+
+_TECH_CAMPUS: list[_StageQuota] = [
+    _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=11, comm_count=1),
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=5),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, tech_count=3),
+]  # 1 + 12 + 5 + 3 = 21
+
+_TECH_LATERAL: list[_StageQuota] = [
+    _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=10, comm_count=1),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, tech_count=5, comm_count=1),
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=4),
+]  # 1 + 11 + 6 + 4 = 22 (lateral 顺序与 Sprint 5.5 一致: project 先, knowledge 最后)
+
+_NON_TECH_CAMPUS: list[_StageQuota] = [
+    _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=3, comm_count=5),
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=2, comm_count=6),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, comm_count=4),
+]  # 1 + 8 + 8 + 4 = 21
+
+_NON_TECH_LATERAL: list[_StageQuota] = [
+    _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=3, comm_count=8),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, comm_count=6),
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=1, comm_count=3),
+]  # 1 + 11 + 6 + 4 = 22
+
+
+_TECH_ROLE_FAMILIES = frozenset({"backend", "frontend", "data_science"})
+_NON_TECH_ROLE_FAMILIES = frozenset({"product", "hr"})
+
+
+def _is_tech_role(role_family: str) -> bool:
+    """role_family 不在已知列表时默认按"技术岗"处理 (沿用 backend 配比),
+    避免 HR 写错字段名时整轮挂掉。"""
+    if role_family in _NON_TECH_ROLE_FAMILIES:
+        return False
+    return True
+
 
 _STAGE_TITLES: dict[InterviewStage, str] = {
     InterviewStage.SELF_INTRO: "自我介绍",
@@ -151,10 +182,134 @@ _STAGE_TITLES: dict[InterviewStage, str] = {
 }
 
 
-def _stages_for_track(track: Track) -> list[tuple[InterviewStage, list[_StageSlot]]]:
+def _stage_config_for(track: Track, role_family: str) -> list[_StageQuota]:
+    """按 (track, role_family) 取 stage 配比 4 组之一。"""
+    is_tech = _is_tech_role(role_family)
     if track is Track.CAMPUS:
-        return _CAMPUS_STAGES
-    return _LATERAL_STAGES
+        return _TECH_CAMPUS if is_tech else _NON_TECH_CAMPUS
+    return _TECH_LATERAL if is_tech else _NON_TECH_LATERAL
+
+
+def _stages_for(
+    track: Track, role_family: str,
+) -> list[tuple[InterviewStage, list[_StageSlot]]]:
+    """Sprint 5.9: stage 序列从 _stage_config_for 派生, slot 列表由 quota 展开。"""
+    return [
+        (q.stage, q.to_slots()) for q in _stage_config_for(track, role_family)
+    ]
+
+
+# ---------- 默认 aspect 模板 (per role_family, HR 不配 aspects 时用) ----------
+#
+# aspect = (name, description). description 给 Assessor LLM 看, 帮 prompt
+# 判断"这条回答是否覆盖了此 aspect"。
+# HR 可以在 UI 上以 default 为底, 增删改名.
+
+_DEFAULT_ASPECTS: dict[str, dict[str, list[tuple[str, str]]]] = {
+    "backend": {
+        "tech": [
+            ("分布式系统设计", "对 CAP / 一致性 / 分区容错的权衡和实践"),
+            ("性能优化", "P99 优化、慢查询、缓存命中率、热点 key 等具体案例"),
+            ("数据库与缓存", "MySQL 索引、事务隔离、Redis 数据结构与使用模式"),
+            ("故障定位 oncall", "incident 应对、链路追踪、复盘机制"),
+            ("高并发与限流", "QPS 设计、限流方案、削峰填谷"),
+            ("技术选型权衡", "成本 / 性能 / 可维护性 三角的取舍"),
+            ("代码质量与测试", "单测、集成测试、CI/CD"),
+            ("可观测性", "指标、日志、tracing、告警"),
+        ],
+        "comm": [
+            ("跨职能沟通", "跟 PM/SRE/DBA/前端 推方案"),
+            ("推动落地", "克服阻力把方案推到上线"),
+            ("冲突解决", "技术争议怎么收"),
+            ("知识传递", "复盘文档、code review、培训新人"),
+        ],
+    },
+    "frontend": {
+        "tech": [
+            ("浏览器渲染原理", "DOM / 重排重绘 / 合成层"),
+            ("框架原理", "React/Vue 响应式、虚拟 DOM diff"),
+            ("状态管理", "Redux/MobX/Context 取舍"),
+            ("打包与工程化", "Webpack/Vite、tree-shaking、lazy load"),
+            ("移动端兼容与响应式", "多端适配、不同屏宽断点"),
+            ("可访问性 a11y", "WCAG、语义化标签"),
+            ("前端性能", "FCP/LCP/CLS、首屏优化"),
+            ("前端安全", "XSS、CSRF、CSP"),
+        ],
+        "comm": [
+            ("跨职能沟通", "跟 后端 / 设计 / 产品 推方案"),
+            ("推动落地", "克服阻力把方案推到上线"),
+            ("冲突解决", "技术争议怎么收"),
+            ("知识传递", "复盘文档、code review、培训新人"),
+        ],
+    },
+    "data_science": {
+        "tech": [
+            ("机器学习基础", "监督 / 非监督、损失函数、评估指标"),
+            ("特征工程", "缺失值、编码、标准化、特征筛选"),
+            ("模型选型与调优", "网格搜索、交叉验证、过拟合处理"),
+            ("大规模数据处理", "Spark/Flink、分布式 ETL"),
+            ("AB 测试与统计推断", "假设检验、显著性、功效"),
+            ("可重现实验", "MLflow、数据版本管理、参数追溯"),
+            ("业务指标转化", "把业务问题翻成 ML 目标"),
+            ("线上模型监控", "drift 检测、retrain、降级策略"),
+        ],
+        "comm": [
+            ("跨职能沟通", "跟 业务 / 后端 / 产品 推方案"),
+            ("推动落地", "克服阻力把模型推到上线"),
+            ("结论说服力", "用数据 + 故事说服 stakeholder"),
+            ("知识传递", "实验文档、code review、培训新人"),
+        ],
+    },
+    "product": {
+        "tech": [
+            ("数据驱动决策", "指标设计、A/B 测试解读"),
+            ("用户体验思维", "用户旅程、痛点拆解"),
+            ("竞品分析与差异化", "市场切入点、定位"),
+        ],
+        "comm": [
+            ("跨部门协作", "跟 研发 / 设计 / 运营 推方案"),
+            ("需求拆解与表达", "PRD、优先级排序"),
+            ("用户研究与反馈", "访谈、问卷、行为分析"),
+            ("决策权衡与说服", "数据 + 故事说服 stakeholder"),
+            ("快速学习与适应", "新领域上手能力"),
+            ("冲突处理与平衡", "需求争议、资源博弈"),
+        ],
+    },
+    "hr": {
+        "tech": [
+            ("人才战略与规划", "团队规划、headcount、人才地图"),
+            ("绩效与激励", "OKR、360、调薪、晋升体系"),
+            ("招聘流程设计", "JD、面试官培训、offer 决策"),
+        ],
+        "comm": [
+            ("候选人体验", "面试官培训、沟通话术、offer 沟通"),
+            ("内部宣贯", "文化、政策、变革管理"),
+            ("冲突调解", "员工纠纷、离职面谈"),
+            ("信任建立", "薪酬保密、敏感信息处理"),
+            ("跨职能影响力", "推动业务部门接受 HR 决策"),
+        ],
+    },
+}
+
+
+def default_aspects_for(
+    role_family: str, competencies: list[Competency],
+) -> list[ProfileAspect]:
+    """Sprint 5.9: HR 不在新建 job 时配 aspect 时, 用 role_family 默认模板。
+    把 (name, description) 模板挂到具体 competency_id 上。
+    role_family 不在已知列表时默认用 backend 模板。
+    competencies 期待至少有 1 个 name 含"技术"的 + 1 个 name 含"沟通"的。"""
+    template = _DEFAULT_ASPECTS.get(role_family) or _DEFAULT_ASPECTS["backend"]
+    aspects: list[ProfileAspect] = []
+    for comp in competencies:
+        key = "tech" if ("技术" in comp.name or "深度" in comp.name) else "comm"
+        for (name, desc) in template.get(key, []):
+            aspects.append(ProfileAspect(
+                competency_id=comp.competency_id,
+                name=name,
+                description=desc,
+            ))
+    return aspects
 
 
 # ---------- knowledge: 召回 + 精修 (复用 Sprint 3 路径) ----------
@@ -399,7 +554,7 @@ def plan(job: JobContext, candidate: CandidateProfile) -> InterviewPlan:
     comp_by_key = {"tech": tech, "comm": comm}
 
     rounds: list[InterviewRound] = []
-    for idx, (stage, slots) in enumerate(_stages_for_track(job.track)):
+    for idx, (stage, slots) in enumerate(_stages_for(job.track, job.role_family)):
         questions: list[Question] = []
         round_comps: list[Competency] = []
         for slot in slots:

@@ -58,28 +58,53 @@ _CANDIDATE = CandidateProfile(
     projects=["订单 P99 优化", "对账中台从 0 到 1"],
 )
 # 按 stage 顺序固定答案: self_intro -> project*3 -> scenario*2 -> knowledge*1
+_HINTED_ANS = (
+    "比如这块我们当时的方案是 {topic}, 结果指标从 {a} 优化到 {b}, "
+    "用了 {tool} 配合, 上线后 P99 / 漏对率 / 失败率都按预期下来了。"
+)
+
+
+def _ans(topic: str, a: str, b: str, tool: str) -> str:
+    """组装一个 >60 字 + 含 hint (比如/我们/结果/%) 的 fixture 答案。"""
+    return _HINTED_ANS.format(topic=topic, a=a, b=b, tool=tool)
+
+
+# Sprint 5.9: tech-lateral 升到 22 主问题, 答案池: 1 self_intro + 11 project +
+# 6 scenario + 4 knowledge。每条 >60 字 + 含 specificity hint 防误触发追问。
 _ANSWERS_BY_STAGE: dict[InterviewStage, list[str]] = {
     InterviewStage.SELF_INTRO: [
         "我是张三, 后端 4 年, 最近在订单和对账中台上做高可用 + 性能, "
         "最大挑战是 P99 抖动定位, 结果把 P99 从 800ms 降到 350ms。",
     ],
     InterviewStage.PROJECT: [
-        "去年大促前订单 P99 从 800ms 到 2s, 排查是索引失效 + 热点 key 击穿, "
-        "我加回索引并改造为本地缓存 + Redis 二级缓存, P99 回到 350ms。",
-        "对账中台日处理 2 亿笔, 早期延迟 30 分钟+。我们改成分桶并行 + 幂等键 + Kafka 回放, "
-        "延迟降到 3 分钟, 漏对率从 0.4‰ 降到 0.02‰。",
-        "我先用数据让对方理解我担心的点, 比如拉线上回放或 case, 再定义可灰度的中间方案,"
-        "结果是同事接受了我的设计, 上线后没有出现回滚。",
+        _ans("订单 P99 优化",      "800ms",   "350ms",  "本地缓存 + Redis 二级缓存"),
+        _ans("对账中台从 0 到 1",  "30 分钟",  "3 分钟",  "分桶并行 + 幂等键 + Kafka 回放"),
+        _ans("跨职能推方案",      "争议反复",  "灰度通过", "数据回放 + 5% 灰度"),
+        _ans("订单写入热点",      "QPS 800",  "QPS 12k", "本地 token 桶 + Redis 滑动窗口"),
+        _ans("支付链路降级",      "可用 92%", "可用 99.9%", "熔断 + fallback to 同步对账"),
+        _ans("数据库扩容",        "单实例 80%","集群 30%", "分库分表 + 在线迁移"),
+        _ans("索引优化",          "scan 200ms","seek 5ms", "复合索引 + EXPLAIN 复盘"),
+        _ans("消息积压回放",      "积压 800万","清空 30 分钟", "横扩 + 幂等键"),
+        _ans("配置推送",          "回滚 5 分钟","回滚 30s", "灰度发布 + 立刻可回滚"),
+        _ans("oncall 流程优化",   "MTTR 60 分钟", "MTTR 15 分钟", "runbook + alert 收敛"),
+        _ans("跨团队复盘协调",    "推动 2 周",  "1 天闭环",  "结构化文档 + 行动项 owner"),
     ],
     InterviewStage.SCENARIO: [
         "前 5 分钟先看链路 RT 和错误率分布, 比如哪个下游慢, 是不是热点 key,"
         "再决定是先扩容还是先限流, 我会优先选不破坏可观测性的动作。",
         "我会先在群里说我已经定位到根因 + ETA 15 分钟,"
         "再 1on1 跟业务 PM 同步具体影响范围, 让他对外口径统一。",
+        _ans("oncall 半夜告警",   "凌晨 3 点",  "30 分钟止血", "降级 + 限流 + 回滚"),
+        _ans("DB 磁盘满 5%",       "5% 剩余",   "30% 释放",  "停批 + 在线扩容"),
+        _ans("灰度发布失败",      "5% 错误飙升","回滚",       "立刻 rollback + 复盘"),
+        _ans("incident 沟通",     "三方追问",  "口径一致",   "结构化更新 + ETA"),
     ],
     InterviewStage.KNOWLEDGE: [
         "我对 CAP 的理解是: 实际工程里 P 是默认前提,"
         "所以选 C 还是 A 是业务取舍, 比如订单状态我们选 C (用强一致性的状态机)。",
+        _ans("Redis 持久化",      "RDB",      "AOF + RDB", "混合持久化保证 RPO"),
+        _ans("MySQL 事务隔离",    "RR 默认",  "RC + 业务幂等","按业务取舍"),
+        _ans("分布式锁",          "DB 锁 100ms","Redis 锁 1ms", "Redis Redlock + 续期"),
     ],
 }
 
@@ -135,7 +160,7 @@ class SkeletonPlanTests(unittest.TestCase):
         self.assertEqual(self.plan.job_id, _JOB.job_id)
 
     def test_plan_shape_stage_sequence(self):
-        """Sprint 5.5: lateral track 出 4 stage 序列 + 7 题。
+        """Sprint 5.9: tech-lateral 出 4 stage 序列 + 22 主问题。
         顺序: self_intro -> project -> scenario -> knowledge。"""
         self.assertEqual(len(self.plan.rounds), 4, "lateral 4 stages")
         stages = [r.stage for r in self.plan.rounds]
@@ -149,17 +174,17 @@ class SkeletonPlanTests(unittest.TestCase):
         self.assertEqual(len(self.plan.competencies), 2,
                          "顶层 competencies: 技术深度 + 沟通协作")
         total = sum(len(r.questions) for r in self.plan.rounds)
-        self.assertEqual(total, 7, "lateral 配比 1+3+2+1")
+        self.assertEqual(total, 22, "tech-lateral 配比 1+11+6+4")
 
     def test_question_category_distribution(self):
-        """Sprint 5.5: 4 类题都出现, 数量与 lateral 配比一致。"""
+        """Sprint 5.9: 4 类题都出现, 数量与 tech-lateral 配比一致。"""
         questions = [q for r in self.plan.rounds for q in r.questions]
         from collections import Counter
         by_cat = Counter(q.category for q in questions)
         self.assertEqual(by_cat[QuestionCategory.SELF_INTRO], 1)
-        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 3)
-        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 2)
-        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 1)
+        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 11)
+        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 6)
+        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 4)
 
     def test_each_question_links_to_a_competency(self):
         """非 self_intro 题挂某个顶层 competency; self_intro 题 competency_id=None。"""
