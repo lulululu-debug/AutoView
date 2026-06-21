@@ -43,6 +43,7 @@ from src.schemas import (  # noqa: E402
     InterviewSession,
     InterviewStage,
     JobContext,
+    ProfileAspect,
     Question,
     QuestionCategory,
     SessionStatus,
@@ -323,6 +324,161 @@ class EvaluatorEvidenceInsufficientTests(unittest.TestCase):
         self.assertEqual(len(report.competency_coverage), 2)
         tech_id = self.plan.competencies[0].competency_id
         self.assertEqual(report.competency_coverage[tech_id], 0.95)
+
+
+class RichnessUnitTests(unittest.TestCase):
+    """Sprint 5.9: compute_richness 的 4 个 case + Interviewer 用 richness 提前停。"""
+
+    def setUp(self):
+        from src.coverage import compute_richness
+        self._compute = compute_richness
+        self.asps = [
+            ProfileAspect(competency_id="c1", name=f"A{i}", description="d")
+            for i in range(5)
+        ]
+        self.job = JobContext(
+            title="t", jd="x", track=Track.LATERAL, aspects=self.asps,
+        )
+        self.sess = InterviewSession(plan_id="p", job_id=self.job.job_id)
+
+    def test_richness_zero_when_no_assessments(self):
+        self.assertEqual(self._compute(self.sess, self.job), 0.0)
+
+    def test_richness_full_when_all_aspects_covered(self):
+        all_ids = [a.aspect_id for a in self.asps]
+        self.sess.assessments = [
+            AnswerAssessment(
+                question_id="q", sufficiency=0.5, confidence=0.5,
+                covered_aspects=all_ids,
+            )
+        ]
+        self.assertEqual(self._compute(self.sess, self.job), 1.0)
+
+    def test_richness_unioned_across_assessments(self):
+        """多回答覆盖的 aspect 取并集 (同一 aspect 不重复计数)。"""
+        self.sess.assessments = [
+            AnswerAssessment(
+                question_id="q1", sufficiency=0.5, confidence=0.5,
+                covered_aspects=[self.asps[0].aspect_id, self.asps[1].aspect_id],
+            ),
+            AnswerAssessment(
+                question_id="q2", sufficiency=0.5, confidence=0.5,
+                covered_aspects=[self.asps[1].aspect_id, self.asps[2].aspect_id],
+            ),
+        ]
+        # 0,1,2 covered → 3/5 = 0.6
+        self.assertAlmostEqual(self._compute(self.sess, self.job), 0.6)
+
+    def test_richness_falls_back_to_default_aspects(self):
+        """job.aspects 空 + default_aspects 给定 -> 走 default."""
+        job_no_asp = JobContext(title="t", jd="x")
+        self.sess.assessments = [
+            AnswerAssessment(
+                question_id="q", sufficiency=0.5, confidence=0.5,
+                covered_aspects=[self.asps[0].aspect_id],
+            ),
+        ]
+        r = self._compute(self.sess, job_no_asp, default_aspects=self.asps)
+        self.assertAlmostEqual(r, 0.2)  # 1/5
+
+
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
+    "需要 PG + Redis 测 Interviewer 端到端",
+)
+class InterviewerRichnessStopTests(unittest.TestCase):
+    """Sprint 5.9: Interviewer 答足 min_total + richness 达标 -> 提前 done。"""
+
+    def setUp(self):
+        # pymilvus dotenv 把 ASSESSOR 加回, eval 走启发式
+        os.environ["ASSESSOR_ENABLED"] = "false"
+        from src import db
+        db.init_db()
+        from src.agents import planner
+        # 用最小 plan 让计数走 hard cap; 用 aspects 控制 richness 阈值
+        self.asps = [
+            ProfileAspect(competency_id="c1", name=f"A{i}", description="d")
+            for i in range(4)
+        ]
+        self.job = JobContext(
+            title="t", jd="x", track=Track.LATERAL, role_family="backend",
+            aspects=self.asps,
+            completion_policy=CompletionPolicy(
+                min_total_questions=3,
+                max_total_questions=30,
+                min_profile_richness=0.5,
+            ),
+        )
+        from src.schemas import CandidateProfile
+        self.cand = CandidateProfile(
+            job_id=self.job.job_id, resume="r", projects=[],
+        )
+        self.plan = planner.plan(self.job, self.cand)
+        db.save_job(self.job)
+        db.save_candidate(self.cand)
+        db.save_plan(self.plan, self.cand.candidate_id)
+
+    def test_richness_above_threshold_after_min_total_stops_early(self):
+        """3 道回答 + 50% aspect coverage → Interviewer next_turn 返 None。"""
+        from src.agents import interviewer
+        # 手工构造 session.history + answers + assessments 模拟 3 turn 后状态
+        all_qs = [q for r in self.plan.rounds for q in r.questions]
+        # 第 0 题答完, assessment cover asp[0],[1] (50% richness)
+        q = all_qs[0]
+        self.sess = InterviewSession(
+            plan_id=self.plan.plan_id, job_id=self.job.job_id,
+            status=SessionStatus.IN_PROGRESS,
+        )
+        for i in range(3):
+            q = all_qs[i]
+            self.sess.history.append(Turn(
+                role=TurnRole.INTERVIEWER, text=q.text or "x", ref_id=q.question_id,
+            ))
+            ans = CandidateAnswer(question_id=q.question_id, text="比如我们的方案: ...")
+            self.sess.answers.append(ans)
+            self.sess.history.append(Turn(
+                role=TurnRole.CANDIDATE, text=ans.text, ref_id=ans.answer_id,
+            ))
+            # 第 0/1 题 cover asp[0]/asp[1] (50%); 第 2 题不 cover
+            covered = [self.asps[i].aspect_id] if i < 2 else []
+            self.sess.assessments.append(AnswerAssessment(
+                question_id=q.question_id, sufficiency=0.9, confidence=0.9,
+                covered_aspects=covered,
+            ))
+        # next_turn: asked=3 >= min_total=3, richness=0.5 >= min_richness=0.5
+        # → 应 None (提前 done)
+        result = interviewer.next_turn(self.sess, self.plan, job=self.job)
+        self.assertIsNone(result, "richness 达标应当提前 done")
+
+    def test_richness_below_threshold_continues(self):
+        """3 道回答 + 25% aspect coverage (richness < 0.5) → 不提前停。"""
+        from src.agents import interviewer
+        all_qs = [q for r in self.plan.rounds for q in r.questions]
+        self.sess = InterviewSession(
+            plan_id=self.plan.plan_id, job_id=self.job.job_id,
+            status=SessionStatus.IN_PROGRESS,
+        )
+        for i in range(3):
+            q = all_qs[i]
+            self.sess.history.append(Turn(
+                role=TurnRole.INTERVIEWER, text=q.text or "x", ref_id=q.question_id,
+            ))
+            ans = CandidateAnswer(question_id=q.question_id, text="比如我们的方案: ...")
+            self.sess.answers.append(ans)
+            self.sess.history.append(Turn(
+                role=TurnRole.CANDIDATE, text=ans.text, ref_id=ans.answer_id,
+            ))
+            # 只有第 0 题 cover asp[0] (25%)
+            covered = [self.asps[0].aspect_id] if i == 0 else []
+            self.sess.assessments.append(AnswerAssessment(
+                question_id=q.question_id, sufficiency=0.9, confidence=0.9,
+                covered_aspects=covered,
+            ))
+        result = interviewer.next_turn(self.sess, self.plan, job=self.job)
+        # richness=0.25 < 0.5 → 不提前停, 应返下一题 (Question)
+        self.assertIsNotNone(result)
+        from src.schemas import Question as Q
+        self.assertIsInstance(result, Q)
 
 
 if __name__ == "__main__":

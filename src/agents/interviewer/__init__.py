@@ -22,6 +22,7 @@ from __future__ import annotations
 from src import llm
 from src.coverage import (
     compute_coverage,
+    compute_richness,
     mandatory_coverage_met,
     total_questions_asked,
 )
@@ -224,9 +225,19 @@ def next_turn(
                 reason=_followup_reason(assessment),
             )
 
-    # Sprint 5.7: CompletionPolicy 决策 done 与否
+    # Sprint 5.7 / 5.9: CompletionPolicy 决策 done 与否
 
-    # 2) mandatory coverage 达标 -> 提前 done
+    # 2) Sprint 5.9: 答足 min_total + richness 达标 -> 提前 done
+    #    richness 走 covered_aspects 信号 (Assessor 启用 + job.aspects 配置 时);
+    #    job.aspects 空 / Assessor off → richness=0 → 此分支不触发, 退到老
+    #    mandatory_coverage_met 路径。
+    asked_count = total_questions_asked(session)
+    if asked_count >= completion.min_total_questions:
+        richness = compute_richness(session, job)
+        if richness >= completion.min_profile_richness > 0.0:
+            return None
+
+    # 3) mandatory coverage 达标 -> 提前 done
     #    (老 plan plan.competencies 空时 mandatory_coverage_met 返 False, 不早停)
     coverage = compute_coverage(session, plan)
     if mandatory_coverage_met(coverage, completion, plan):
