@@ -28,6 +28,9 @@ try:
 except ImportError:
     pass
 os.environ.pop("OPENAI_API_KEY", None)
+# Sprint 5.9 patch: 同 test_orchestrator_stage, 防 .env 里 ASSESSOR_ENABLED=true
+# 让 e2e walk 因 Assessor fallback 启发式 (confidence=0.3) 触发追问失控。
+os.environ.pop("ASSESSOR_ENABLED", None)
 
 
 def _fixed_vector(dim: int = 1536) -> list[float]:
@@ -74,6 +77,9 @@ class _RagE2EBase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # 同 test_orchestrator_stage: 防 pymilvus.settings.load_dotenv() 加回
+        # ASSESSOR_ENABLED, 让 e2e walk 走启发式 _needs_followup 而不是 Assessor fallback.
+        os.environ.pop("ASSESSOR_ENABLED", None)
         cls._db = tempfile.mktemp(suffix=".db")
         os.environ.pop("MILVUS_URI", None)
         os.environ["MILVUS_LITE_URI"] = cls._db

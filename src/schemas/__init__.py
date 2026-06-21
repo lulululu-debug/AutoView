@@ -52,12 +52,18 @@ class JobContext(BaseModel):
     requirements: list[str] = []             # 岗位要求(可由 jd 解析填充)
     company_materials: str = ""              # 公司资料(后期做 RAG 切片)
     role_family: str = "backend"             # Sprint 3-5: 题库召回按 role_family + 维度过滤
-                                             # 当前题库只 seed 了 backend; 改职位族要先 seed 对应题库
+                                             # Sprint 5.9: 新建 job 时 HR 选取值, 决定 Planner stage 配比
+                                             # 推荐取值: backend / frontend / data_science / product / hr
+                                             # (schema 不限制字符串, 未列出的走 backend fallback 配比)
     track: Track = Track.LATERAL             # Sprint 5.5: 校招 / 社招; 老 Job 缺这列默认 lateral
     # Sprint 5.7: HR 可在新建 job 高级折叠区覆盖默认 policy;
     # None 表示用 stage 默认 / schema 默认值, 让 HR 不动也能用。
     followup_policy: "FollowUpPolicy | None" = None
     completion_policy: "CompletionPolicy | None" = None
+    # Sprint 5.9: HR 定义本岗位考察的 aspect 列表 (per competency 分组);
+    # 空列表时 Planner 用 role_family 默认模板; 非空时 HR 配置生效。
+    # Assessor 在每 turn 看着这个列表标 covered_aspects, 整轮算 richness。
+    aspects: list[ProfileAspect] = []
 
 
 class CandidateProfile(BaseModel):
@@ -81,6 +87,21 @@ class Competency(BaseModel):
     name: str                                # 如 "系统设计能力"
     description: str
     weight: float = 1.0                      # 维度权重(用于内容维度加权)
+
+
+class ProfileAspect(BaseModel):
+    """候选人画像子维度 —— Sprint 5.9 起加。
+    比 Competency 细一档: 一个 competency 下有多个 aspect, 每答一道题
+    Assessor 标"这道题覆盖了哪些 aspect", 整轮面试结束时算 richness =
+    已覆盖 aspect 数 / 总 aspect 数。
+
+    HR 在新建 job 时定义 (代码不写死 role_family 模板, 仅给默认建议);
+    aspect_id 内部用, name 给 HR / Assessor LLM 看, description 帮 LLM
+    判断"这条答案是否覆盖了此 aspect"。"""
+    aspect_id: str = Field(default_factory=_new_id)
+    competency_id: str                       # 归属哪个 competency
+    name: str                                # 如 "分布式系统设计"
+    description: str                         # 给 Assessor 判断用的语义描述
 
 
 class QuestionType(str, Enum):
@@ -214,6 +235,11 @@ class AnswerAssessment(BaseModel):
     concerns: list[str] = []
     followup_goal: str = ""
     stop_reason: str = ""
+    # Sprint 5.9: 该回答覆盖了 JobContext.aspects 里的哪些 aspect_id;
+    # Assessor LLM 在 prompt 里拿到该题归属 competency 下的 aspect 候选列表,
+    # 然后判定回答里实际触达了哪些。整轮所有 covered_aspects 的并集 / 全 aspect
+    # = profile_richness. 老 AnswerAssessment 缺该字段时默认 [] (不影响 richness 计算)。
+    covered_aspects: list[str] = []
 
 
 class FollowUpPolicy(BaseModel):
@@ -270,9 +296,18 @@ class CompletionPolicy(BaseModel):
     - mandatory_competencies: 空数组 = plan.competencies 全部 mandatory (默认);
       非空时只检查列出的 competency_id, 让 HR 可以挑哪些维度必须达标。
 
-    Sprint 5.7 起允许 JobContext.completion_policy 覆盖默认值。"""
+    Sprint 5.7 起允许 JobContext.completion_policy 覆盖默认值。
+
+    Sprint 5.9: 加 min_total_questions + min_profile_richness, 决策升级为
+    "至少答足 min_total 题 + richness >= min_profile_richness → 提前 done";
+    max_total_questions 是含追问的硬上限。默认值在 task 89 Planner 升到
+    25-30 题预算时一起翻 (min_total=25 / max_total=30 / min_richness=0.6);
+    在那之前默认仍是 Sprint 5.7 的 7-题预算 (min_total=0 / max_total=15)
+    以兼容老 e2e eval。"""
     min_competency_coverage: float = Field(default=0.7, ge=0.0, le=1.0)
+    min_total_questions: int = Field(default=0, ge=0)
     max_total_questions: int = Field(default=15, gt=0)
+    min_profile_richness: float = Field(default=0.0, ge=0.0, le=1.0)
     mandatory_competencies: list[str] = []
 
 
