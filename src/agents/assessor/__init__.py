@@ -34,6 +34,8 @@ from src.schemas import (
     CandidateAnswer,
     InterviewPlan,
     InterviewSession,
+    JobContext,
+    ProfileAspect,
     Question,
     QuestionCategory,
 )
@@ -58,11 +60,21 @@ _SYSTEM_PROMPT = (
     "**必须严格输出 JSON**, 不要任何解释、前后缀或代码块标记。"
 )
 
-_USER_TEMPLATE = (
+_USER_TEMPLATE_BASE = (
     "题目类别: {category}\n"
     "题目: {question_text}\n"
-    "候选人回答: {answer_text}\n\n"
-    "请按下方 JSON schema 输出评估结果 (字段全填, 不要省略):\n"
+    "候选人回答: {answer_text}\n"
+)
+
+_USER_TEMPLATE_ASPECTS = (
+    "\n该题归属维度的画像 aspect 候选 (用短标签 A0/A1/... 引用):\n"
+    "{aspects_block}\n"
+    "在 covered_aspects 字段返回上面短标签列表中**本回答确实覆盖到**的标签 "
+    "(精确, 不强行套), 没覆盖的不要列。\n"
+)
+
+_USER_TEMPLATE_JSON = (
+    "\n请按下方 JSON schema 输出评估结果 (字段全填, 不要省略):\n"
     "{{\n"
     '  "sufficiency": <0.0-1.0 之间的浮点数, 1.0 = 信号充分, 0.0 = 完全没说到点>,\n'
     '  "confidence": <0.0-1.0 之间的浮点数, 表示你对该判断的把握度>,\n'
@@ -70,7 +82,8 @@ _USER_TEMPLATE = (
     '  "strengths": [<回答里的亮点, 中文短句>],\n'
     '  "concerns": [<虽然说了但让你担心的点, 中文短句>],\n'
     '  "followup_goal": "<若决定追问, 应当追什么的中文短句, 不追则空串>",\n'
-    '  "stop_reason": "<不建议追问的理由, sufficient_signals/low_value/diminishing_returns 之一; 应追问则空串>"\n'
+    '  "stop_reason": "<不建议追问的理由, sufficient_signals/low_value/diminishing_returns 之一; 应追问则空串>",\n'
+    '  "covered_aspects": [<本回答覆盖到的 aspect 短标签, 如 "A0", "A2"; 没有则空数组>]\n'
     "}}"
 )
 
@@ -84,14 +97,20 @@ def assess(
     answer: CandidateAnswer,
     session: InterviewSession,
     plan: InterviewPlan,
+    job: JobContext | None = None,
 ) -> AnswerAssessment:
     """Assessor 入口: 单 (question, answer) -> AnswerAssessment。
-    session / plan 暂未消费 (留口给未来按"已答几道、competency 已覆盖度"做更精的
-    sufficiency 评估; 5.6 阶段只看本题信号充分度)。"""
+
+    Sprint 5.9: 新加 job 参数, 用来取本题所在 competency 的 aspect 候选列表.
+    返回的 AnswerAssessment.covered_aspects 是这次回答 covered 的 aspect_id 列表
+    (LLM 路径走 prompt 让 LLM 选; 启发式 fallback 用名字关键词匹配兜底).
+    self_intro 题 competency_id=None -> 不参与 aspect 匹配, covered_aspects=[]。
+    """
+    relevant_aspects = _relevant_aspects(question, job)
     # 优先走 LLM; 任何异常 (超时 / API 报错 / JSON 解析失败 / schema 校验失败)
     # 一律 fallback 到启发式, 让 Interviewer 始终能拿到一个有效 AnswerAssessment。
     try:
-        return _assess_via_llm(question, answer)
+        return _assess_via_llm(question, answer, relevant_aspects)
     except _LLMStubFallback:
         # 期望中的 stub 路径 (dev / eval), 不写 log.exception 防噪
         pass
@@ -100,17 +119,45 @@ def assess(
             "Assessor LLM 路径失败, 走启发式 fallback (question_id=%s)",
             question.question_id,
         )
-    return _heuristic_assessment(question, answer)
+    return _heuristic_assessment(question, answer, relevant_aspects)
+
+
+def _relevant_aspects(
+    question: Question, job: JobContext | None,
+) -> list[ProfileAspect]:
+    """筛出本题 competency 下的 aspect 候选。self_intro 题 competency_id=None,
+    所有 aspect 都不匹配, 返 []。job 为 None / job.aspects 空也返 []。"""
+    if job is None or not job.aspects:
+        return []
+    if question.competency_id is None:
+        return []
+    return [a for a in job.aspects if a.competency_id == question.competency_id]
 
 
 # ---------- LLM 路径 ----------
 
-def _assess_via_llm(question: Question, answer: CandidateAnswer) -> AnswerAssessment:
-    user = _USER_TEMPLATE.format(
+def _aspects_block(aspects: list[ProfileAspect]) -> str:
+    """把 aspect 列表渲染成短标签的 markdown 列表给 LLM 看。
+    标签 A0/A1/... 是临时引用, 输出时 LLM 用这些标签, 我们映射回真实 aspect_id."""
+    lines = []
+    for i, a in enumerate(aspects):
+        lines.append(f"- A{i}: {a.name} —— {a.description}")
+    return "\n".join(lines)
+
+
+def _assess_via_llm(
+    question: Question,
+    answer: CandidateAnswer,
+    aspects: list[ProfileAspect],
+) -> AnswerAssessment:
+    user = _USER_TEMPLATE_BASE.format(
         category=question.category.value,
         question_text=question.text,
         answer_text=answer.text,
     )
+    if aspects:
+        user += _USER_TEMPLATE_ASPECTS.format(aspects_block=_aspects_block(aspects))
+    user += _USER_TEMPLATE_JSON
     raw = llm.complete(
         _SYSTEM_PROMPT,
         user,
@@ -133,7 +180,28 @@ def _assess_via_llm(question: Question, answer: CandidateAnswer) -> AnswerAssess
         concerns=list(payload.get("concerns") or []),
         followup_goal=str(payload.get("followup_goal") or ""),
         stop_reason=str(payload.get("stop_reason") or ""),
+        covered_aspects=_map_aspect_tags_back(
+            payload.get("covered_aspects") or [], aspects,
+        ),
     )
+
+
+def _map_aspect_tags_back(
+    tags: list, aspects: list[ProfileAspect],
+) -> list[str]:
+    """LLM 返的是临时短标签 ['A0', 'A2'], 映射回真实 aspect_id 列表。
+    没匹配上的标签 (LLM 编出新的 / 越界) 静默丢弃, 不让 schema 校验挂面试。"""
+    out: list[str] = []
+    for tag in tags:
+        if not isinstance(tag, str):
+            continue
+        m = re.fullmatch(r"A(\d+)", tag.strip())
+        if not m:
+            continue
+        idx = int(m.group(1))
+        if 0 <= idx < len(aspects):
+            out.append(aspects[idx].aspect_id)
+    return out
 
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -151,10 +219,14 @@ def _extract_json(raw: str) -> dict:
 # ---------- 启发式 fallback ----------
 
 def _heuristic_assessment(
-    question: Question, answer: CandidateAnswer,
+    question: Question,
+    answer: CandidateAnswer,
+    aspects: list[ProfileAspect],
 ) -> AnswerAssessment:
     """LLM 不可用时的启发式估算 —— 思路与 Sprint 0 的 _needs_followup 一致:
-    回答越长越具体, sufficiency 越高。"""
+    回答越长越具体, sufficiency 越高。
+    Sprint 5.9: 加 covered_aspects 启发式 —— aspect.name 切 2-gram 子串,
+    任一子串出现在答案文本中 → 视为 covered。粗糙但 LLM 不可用时是唯一可用信号。"""
     text = answer.text.strip()
     n = len(text)
     hit_hint = any(h in text for h in _HINT_TOKENS)
@@ -190,4 +262,24 @@ def _heuristic_assessment(
         concerns=concerns,
         followup_goal=followup_goal,
         stop_reason=stop_reason,
+        covered_aspects=_heuristic_covered_aspects(text, aspects),
     )
+
+
+def _heuristic_covered_aspects(
+    answer_text: str, aspects: list[ProfileAspect],
+) -> list[str]:
+    """启发式 aspect 覆盖: aspect.name 切 2-gram 子串, 任一子串出现在答案
+    文本中 → 视为 covered. 兜底信号, 比"全空"强但远不如 LLM 精准。
+    与 calibration eval 一起被锁定, 防它静默漂移。"""
+    covered: list[str] = []
+    for asp in aspects:
+        name = asp.name
+        # 2-gram 子串扫: name 太短 (<2) 时直接用 name 整体
+        if len(name) < 2:
+            substrings = [name]
+        else:
+            substrings = [name[i:i + 2] for i in range(len(name) - 1)]
+        if any(sub and sub in answer_text for sub in substrings):
+            covered.append(asp.aspect_id)
+    return covered

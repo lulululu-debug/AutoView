@@ -166,12 +166,21 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
     if answered_q is not None and answered_q.category is QuestionCategory.SELF_INTRO:
         session.intro_text = answer_text
 
+    # Sprint 5.7: 让 Interviewer 看到 job.followup_policy / completion_policy
+    # (HR 在高级折叠区配的覆盖)。job 从 PG 反查, 缺数据时为 None ->
+    # next_turn 退到 stage / schema 默认 policy (5.6 行为)。
+    # Sprint 5.9: job 还要给 Assessor 让它能取本题 competency 的 aspect 候选,
+    # 输出 covered_aspects 喂给 richness 计算。
+    job_for_decision = db.load_job(session.job_id)
+
     # Sprint 5.6: Assessor 在 next_turn 之前跑, 把 AnswerAssessment 落进
     # session.assessments. Interviewer 取 session.assessments[-1] 决策追问 +
     # 用 followup_goal 拼追问 prompt. ASSESSOR_ENABLED=false 时跳过, 走原启发式。
     if _assessor_enabled() and answered_q is not None:
         try:
-            assessment = assessor.assess(answered_q, answer, session, plan)
+            assessment = assessor.assess(
+                answered_q, answer, session, plan, job=job_for_decision,
+            )
             session.assessments.append(assessment)
         except Exception:
             # Assessor 自己有 LLM->启发式双路径, 理论上 assess() 不会抛;
@@ -181,10 +190,6 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
                 answered_q.question_id,
             )
 
-    # Sprint 5.7: 让 Interviewer 看到 job.followup_policy / completion_policy
-    # (HR 在高级折叠区配的覆盖)。job 从 PG 反查, 缺数据时为 None ->
-    # next_turn 退到 stage / schema 默认 policy (5.6 行为)。
-    job_for_decision = db.load_job(session.job_id)
     nxt = interviewer.next_turn(session, plan, job=job_for_decision)
     if nxt is None:
         session.status = SessionStatus.COMPLETED
