@@ -138,6 +138,12 @@ class JobORM(Base):
     # CompletionPolicy schema 默认), 老 Job 缺这列也是 NULL 自然兼容。
     followup_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     completion_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Sprint 5.9: HR 在新建 job 时定义的 aspect 列表 (per competency 分组的画像
+    # 子维度); 空列表时 Planner 用 role_family 默认模板。server_default '[]'
+    # 让旧库 ALTER 加列时历史行不违约。
+    aspects: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

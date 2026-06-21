@@ -92,6 +92,7 @@ def list_jobs() -> list[JobContext]:
                 "track": r.track,
                 "followup_policy": r.followup_policy,
                 "completion_policy": r.completion_policy,
+                "aspects": r.aspects,
             })
             for r in rows
         ]
@@ -301,6 +302,7 @@ def save_job(job: JobContext) -> None:
             track=payload["track"],
             followup_policy=payload.get("followup_policy"),
             completion_policy=payload.get("completion_policy"),
+            aspects=payload.get("aspects") or [],
         ))
 
 
@@ -318,6 +320,7 @@ def load_job(job_id: str) -> Optional[JobContext]:
             "track": row.track,
             "followup_policy": row.followup_policy,
             "completion_policy": row.completion_policy,
+            "aspects": row.aspects,
         })
 
 
