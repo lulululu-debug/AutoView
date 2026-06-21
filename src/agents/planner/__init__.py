@@ -292,6 +292,14 @@ _DEFAULT_ASPECTS: dict[str, dict[str, list[tuple[str, str]]]] = {
 }
 
 
+def default_aspects_for_role(role_family: str) -> list[ProfileAspect]:
+    """Sprint 5.9: HR UI 友好的封装 —— 不必传 competencies, 内部用稳定的
+    tech / comm 两个维度 (COMPETENCY_TECH_ID / COMPETENCY_COMM_ID) 调
+    default_aspects_for. 用于 GET /jobs/aspects-template/{role_family}."""
+    tech, comm = _build_competencies()
+    return default_aspects_for(role_family, [tech, comm])
+
+
 def default_aspects_for(
     role_family: str, competencies: list[Competency],
 ) -> list[ProfileAspect]:
@@ -529,15 +537,26 @@ def _project_fallback(comp: Competency) -> str:
 
 # ---------- 主入口: plan + resolve_lazy ----------
 
+# Sprint 5.9: competency_id 改用稳定字符串而非随机 uuid。原因: HR 在新建 job
+# 时配 ProfileAspect 必须知道这两个维度的 id, 否则只能等 Planner 跑完才有 id。
+# 稳定字符串让 HR UI 创建 job 时就能挂 aspects, Planner / Assessor / coverage
+# 一致用这俩 id 不会漂移。改前任何依赖随机 uuid 的代码会挂, 由 eval 锁住。
+COMPETENCY_TECH_ID = "comp:tech"
+COMPETENCY_COMM_ID = "comp:comm"
+
+
 def _build_competencies() -> tuple[Competency, Competency]:
     """plan.competencies 顶层用的两个维度。
-    weight 反映期望 overall 加权: 技术深度 > 沟通协作。"""
+    weight 反映期望 overall 加权: 技术深度 > 沟通协作。
+    Sprint 5.9: competency_id 用稳定字符串, 见上方常量说明。"""
     tech = Competency(
+        competency_id=COMPETENCY_TECH_ID,
         name="技术深度",
         description="对岗位核心技术栈的理解深度与实践经验",
         weight=2.0,
     )
     comm = Competency(
+        competency_id=COMPETENCY_COMM_ID,
         name="沟通协作",
         description="表达清晰度、跨职能协作经验、推动事情落地的能力",
         weight=1.0,

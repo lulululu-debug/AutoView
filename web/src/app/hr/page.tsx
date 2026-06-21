@@ -9,8 +9,29 @@ import {
   type CompletionPolicy,
   type FollowUpPolicy,
   type JobContext,
+  type ProfileAspect,
+  type RoleFamily,
   type Track,
 } from "@/lib/api";
+
+// Sprint 5.9: HR 选 role_family 决定 Planner 配比 + aspect 默认模板。
+// 与后端 api/schemas.JobCreate.role_family Literal 保持一致。
+const ROLE_FAMILIES: { value: RoleFamily; label: string }[] = [
+  { value: "backend", label: "后端" },
+  { value: "frontend", label: "前端" },
+  { value: "data_science", label: "数据/算法" },
+  { value: "product", label: "产品" },
+  { value: "hr", label: "HR/非技术" },
+];
+
+const COMP_TECH = "comp:tech";
+const COMP_COMM = "comp:comm";
+
+function newAspectId(): string {
+  // 浏览器 crypto.randomUUID 在 Next.js 16 / 现代浏览器都支持; 不做兜底,
+  // 真出问题再补 (后端会用自己的 default_factory 覆盖, 但前端要稳定 key)。
+  return crypto.randomUUID();
+}
 
 /**
  * HR Dashboard 主页:
@@ -164,6 +185,12 @@ function CreateJobForm({
   const [requirements, setRequirements] = useState<string[]>([""]);
   const [companyMaterials, setCompanyMaterials] = useState("");
   const [track, setTrack] = useState<Track>("lateral");
+  // Sprint 5.9: role_family + aspects. aspects 在挂载/切换 role_family 时拉
+  // 默认模板, HR 可在此模板上增删改。空数组提交给后端 -> 后端会用
+  // default_aspects_for(role_family) 兜底 (与拉模板等价)。
+  const [roleFamily, setRoleFamily] = useState<RoleFamily>("backend");
+  const [aspects, setAspects] = useState<ProfileAspect[]>([]);
+  const [aspectsLoading, setAspectsLoading] = useState(false);
   const [state, setState] = useState<CreateState>({ kind: "idle" });
   // Sprint 5.7: 高级折叠区. 默认 collapsed + 字段为 schema 默认值; 提交时
   // 仅当 advanced 展开过且字段动过, 才把 policy 对象传给后端 (空 -> null);
@@ -188,6 +215,54 @@ function CreateJobForm({
     setRequirements((rs) => rs.map((r, i) => (i === idx ? val : r)));
   }
 
+  // Sprint 5.9: 切 role_family -> 拉默认 aspect 模板. 拉过程中如果用户又
+  // 切回另一个, 用 stale flag 丢弃旧请求结果, 避免乱序覆盖。
+  useEffect(() => {
+    let stale = false;
+    setAspectsLoading(true);
+    api
+      .getAspectsTemplate(roleFamily)
+      .then((tpl) => {
+        if (stale) return;
+        setAspects(tpl);
+      })
+      .catch(() => {
+        // 拉模板失败不阻塞表单, HR 可以手动加
+        if (stale) return;
+        setAspects([]);
+      })
+      .finally(() => {
+        if (!stale) setAspectsLoading(false);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [roleFamily]);
+
+  function updateAspect(
+    aspectId: string,
+    field: "name" | "description",
+    val: string,
+  ) {
+    setAspects((as) =>
+      as.map((a) => (a.aspect_id === aspectId ? { ...a, [field]: val } : a)),
+    );
+  }
+  function removeAspect(aspectId: string) {
+    setAspects((as) => as.filter((a) => a.aspect_id !== aspectId));
+  }
+  function addAspect(competencyId: string) {
+    setAspects((as) => [
+      ...as,
+      {
+        aspect_id: newAspectId(),
+        competency_id: competencyId,
+        name: "",
+        description: "",
+      },
+    ]);
+  }
+
   async function handleSubmit(ev: React.FormEvent) {
     ev.preventDefault();
     if (!title.trim() || !jd.trim()) return;
@@ -210,12 +285,21 @@ function CreateJobForm({
           min_confidence_to_stop: f(minConfidence),
         };
       }
+      // Sprint 5.9: aspects 提交前丢空 name 的行 (HR 加了一行没填); description
+      // 可空, 后端只用 name 做匹配信号。aspect_id 沿用前端 (含模板默认 id +
+      // 新加行 UUID), 后端如不识别会走 model_validate 重生 default_factory,
+      // 但保留前端 id 不会有 collision (UUID 空间够大)。
+      const aspectsOut: ProfileAspect[] = aspects
+        .map((a) => ({ ...a, name: a.name.trim(), description: a.description.trim() }))
+        .filter((a) => a.name.length > 0);
       await api.createJob({
         title: title.trim(),
         jd: jd.trim(),
         requirements: requirements.map((r) => r.trim()).filter(Boolean),
         company_materials: companyMaterials.trim(),
         track,
+        role_family: roleFamily,
+        aspects: aspectsOut,
         followup_policy,
         completion_policy,
       });
@@ -243,34 +327,57 @@ function CreateJobForm({
         />
       </div>
 
-      <div>
-        <label className="block text-xs text-zinc-500 mb-1">招聘类型 *</label>
-        <div className="flex items-center gap-2">
-          {(["lateral", "campus"] as const).map((opt) => (
-            <label
-              key={opt}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-sm cursor-pointer ${
-                track === opt
-                  ? "border-zinc-900 dark:border-zinc-100 bg-zinc-100 dark:bg-zinc-800"
-                  : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
-              } ${state.kind === "submitting" ? "opacity-60 cursor-not-allowed" : ""}`}
-            >
-              <input
-                type="radio"
-                name="track"
-                value={opt}
-                checked={track === opt}
-                onChange={() => setTrack(opt)}
-                disabled={state.kind === "submitting"}
-                className="accent-zinc-900 dark:accent-zinc-100"
-              />
-              {opt === "campus" ? "校招" : "社招"}
-            </label>
-          ))}
+      <div className="grid sm:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs text-zinc-500 mb-1">招聘类型 *</label>
+          <div className="flex items-center gap-2">
+            {(["lateral", "campus"] as const).map((opt) => (
+              <label
+                key={opt}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-sm cursor-pointer ${
+                  track === opt
+                    ? "border-zinc-900 dark:border-zinc-100 bg-zinc-100 dark:bg-zinc-800"
+                    : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
+                } ${state.kind === "submitting" ? "opacity-60 cursor-not-allowed" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="track"
+                  value={opt}
+                  checked={track === opt}
+                  onChange={() => setTrack(opt)}
+                  disabled={state.kind === "submitting"}
+                  className="accent-zinc-900 dark:accent-zinc-100"
+                />
+                {opt === "campus" ? "校招" : "社招"}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-zinc-400 mt-1">
+            校招重知识 + 项目轻; 社招重项目 + 场景。
+          </p>
         </div>
-        <p className="text-xs text-zinc-400 mt-1">
-          影响面试 stage 序列: 校招重知识 + 项目轻; 社招重项目 + 场景。
-        </p>
+
+        <div>
+          <label className="block text-xs text-zinc-500 mb-1">
+            岗位族 * (role_family)
+          </label>
+          <select
+            value={roleFamily}
+            onChange={(e) => setRoleFamily(e.target.value as RoleFamily)}
+            disabled={state.kind === "submitting"}
+            className="w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 p-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400 disabled:opacity-60"
+          >
+            {ROLE_FAMILIES.map((rf) => (
+              <option key={rf.value} value={rf.value}>
+                {rf.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-zinc-400 mt-1">
+            决定知识/项目/场景/沟通题配比与下方画像维度默认模板。
+          </p>
+        </div>
       </div>
 
       <div>
@@ -333,6 +440,39 @@ function CreateJobForm({
           rows={4}
           placeholder="公司业务、技术栈、文化等; 会被切片入 Milvus 给评估时做 RAG 上下文"
           className="w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 p-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400 disabled:opacity-60"
+        />
+      </div>
+
+      <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3">
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-medium">
+            画像维度 (Profile Aspects)
+          </label>
+          {aspectsLoading && (
+            <span className="text-xs text-zinc-400">加载默认模板...</span>
+          )}
+        </div>
+        <p className="text-xs text-zinc-500 mb-3">
+          候选人答题后, Assessor 标记答案覆盖了哪些维度。所有维度都被覆盖
+          (richness=1) 时可提前结束面试。可在默认模板上增删改, 至少留一项。
+        </p>
+        <AspectGroup
+          title="技术深度 (comp:tech)"
+          aspects={aspects.filter((a) => a.competency_id === COMP_TECH)}
+          competencyId={COMP_TECH}
+          onUpdate={updateAspect}
+          onRemove={removeAspect}
+          onAdd={addAspect}
+          disabled={state.kind === "submitting"}
+        />
+        <AspectGroup
+          title="沟通协作 (comp:comm)"
+          aspects={aspects.filter((a) => a.competency_id === COMP_COMM)}
+          competencyId={COMP_COMM}
+          onUpdate={updateAspect}
+          onRemove={removeAspect}
+          onAdd={addAspect}
+          disabled={state.kind === "submitting"}
         />
       </div>
 
@@ -421,6 +561,83 @@ function CreateJobForm({
         </button>
       </div>
     </form>
+  );
+}
+
+function AspectGroup({
+  title,
+  aspects,
+  competencyId,
+  onUpdate,
+  onRemove,
+  onAdd,
+  disabled,
+}: {
+  title: string;
+  aspects: ProfileAspect[];
+  competencyId: string;
+  onUpdate: (id: string, field: "name" | "description", val: string) => void;
+  onRemove: (id: string) => void;
+  onAdd: (competencyId: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="mb-4 rounded-md bg-zinc-50 dark:bg-zinc-800/30 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+          {title}
+        </span>
+        <button
+          type="button"
+          onClick={() => onAdd(competencyId)}
+          disabled={disabled}
+          className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+        >
+          + 添加维度
+        </button>
+      </div>
+      {aspects.length === 0 ? (
+        <p className="text-xs text-zinc-400 italic">
+          (空; richness 在此 competency 不计分)
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {aspects.map((a) => (
+            <div
+              key={a.aspect_id}
+              className="flex items-start gap-2 rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 p-2"
+            >
+              <div className="flex-1 space-y-1">
+                <input
+                  value={a.name}
+                  onChange={(e) => onUpdate(a.aspect_id, "name", e.target.value)}
+                  disabled={disabled}
+                  placeholder="维度名 (例: 分布式系统设计)"
+                  className="w-full rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-400 disabled:opacity-60"
+                />
+                <input
+                  value={a.description}
+                  onChange={(e) =>
+                    onUpdate(a.aspect_id, "description", e.target.value)
+                  }
+                  disabled={disabled}
+                  placeholder="描述 (可选, 让 Assessor 更准识别)"
+                  className="w-full rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-2 py-1 text-xs text-zinc-600 dark:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 disabled:opacity-60"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => onRemove(a.aspect_id)}
+                disabled={disabled}
+                className="text-zinc-400 hover:text-red-600 text-xs px-2 py-1 shrink-0"
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
