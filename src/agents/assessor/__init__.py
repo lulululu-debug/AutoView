@@ -105,7 +105,28 @@ def assess(
     返回的 AnswerAssessment.covered_aspects 是这次回答 covered 的 aspect_id 列表
     (LLM 路径走 prompt 让 LLM 选; 启发式 fallback 用名字关键词匹配兜底).
     self_intro 题 competency_id=None -> 不参与 aspect 匹配, covered_aspects=[]。
+
+    Sprint 5.9 patch: 抗"复制粘贴同一段答案刷多题"。LLM-as-judge 只看单 turn,
+    无法察觉本回答与前序回答字面完全一致 (实战遇到候选人粘贴同一段答 10 道
+    knowledge 题, 拿到 0.8 sufficiency × 10 的 case). 入口先做硬规则短路:
+    如本答案与 session.answers 中任一前序非空答案完全相同 (strip 后), 不调
+    LLM, 直接返 sufficiency=0 / covered=[] / 触发追问, 让 Interviewer 不再
+    把"粘贴的同一段"算作有效信号。
     """
+    dup_idx = _find_duplicate_prior_answer(answer, session)
+    if dup_idx is not None:
+        return AnswerAssessment(
+            question_id=question.question_id,
+            sufficiency=0.0,
+            confidence=1.0,
+            missing_signals=[f"本回答与第 {dup_idx} 道题答案字面相同, 疑似复制粘贴"],
+            strengths=[],
+            concerns=["复制粘贴前序回答"],
+            followup_goal="请针对本题给出独立的回答, 不要复用前面的答案",
+            stop_reason="",
+            covered_aspects=[],
+        )
+
     relevant_aspects = _relevant_aspects(question, job)
     # 优先走 LLM; 任何异常 (超时 / API 报错 / JSON 解析失败 / schema 校验失败)
     # 一律 fallback 到启发式, 让 Interviewer 始终能拿到一个有效 AnswerAssessment。
@@ -120,6 +141,35 @@ def assess(
             question.question_id,
         )
     return _heuristic_assessment(question, answer, relevant_aspects)
+
+
+# 答案过短时不算复制粘贴 ("不知道" / "好的" 这种天然会重复, 不能误判).
+# 20 字符是观察值: 短于此的回答本来 sufficiency 就低, 没必要再单独标记。
+_DUP_MIN_LEN = 20
+
+
+def _find_duplicate_prior_answer(
+    answer: CandidateAnswer, session: InterviewSession,
+) -> int | None:
+    """如本答案与之前某一道题的答案 strip 后字面相同, 返该前序答案的 1-based
+    序号; 否则返 None。
+
+    设计:
+    - 答案 < _DUP_MIN_LEN 不查: 短回答天然容易重合, 误判成本高。
+    - 调用方 (orchestrator.submit_answer) 已经把 answer 追加进 session.answers,
+      所以 session.answers[-1] 是 answer 自己, 必须排除自身。
+    - 只看字面完全相同 (strip 后), 不做 fuzzy: 误报代价远高于漏报。
+      Fuzzy / embedding 相似度留给后续 sprint。
+    """
+    text = answer.text.strip()
+    if len(text) < _DUP_MIN_LEN:
+        return None
+    for i, prior in enumerate(session.answers):
+        if prior.answer_id == answer.answer_id:
+            continue  # 跳过自身
+        if prior.text.strip() == text:
+            return i + 1
+    return None
 
 
 def _relevant_aspects(

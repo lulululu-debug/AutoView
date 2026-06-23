@@ -345,5 +345,143 @@ class CoveredAspectsHeuristicTests(unittest.TestCase):
         self.assertIn(self.tech_aspects[0].aspect_id, result.covered_aspects)
 
 
+class DuplicateAnswerShortCircuitTests(unittest.TestCase):
+    """Sprint 5.9 patch: 候选人复制粘贴同一段答案刷多题, Assessor 入口必须
+    在 LLM 之前硬规则短路, 标 sufficiency=0 / followup_goal 提示。
+
+    历史背景: 实战遇到 session 里候选人粘贴同一段答了 10 道 knowledge,
+    LLM-as-judge 只看单 turn 每题都给了 0.8 sufficiency, 直到 Evaluator
+    阶段才发现 evidence 整段刷 10 次 (本类锁住的反向场景)。"""
+
+    def setUp(self):
+        from src.schemas import (
+            Competency, Question, QuestionCategory, CandidateAnswer,
+            InterviewSession, InterviewPlan, InterviewRound,
+        )
+        self.comp = Competency(name="技术深度", description="x")
+        self.q1 = Question(
+            competency_id=self.comp.competency_id,
+            text="题 1: 限流方案?", category=QuestionCategory.KNOWLEDGE,
+        )
+        self.q2 = Question(
+            competency_id=self.comp.competency_id,
+            text="题 2: 缓存一致性?", category=QuestionCategory.KNOWLEDGE,
+        )
+        r = InterviewRound(
+            index=0, title="t", competencies=[self.comp],
+            questions=[self.q1, self.q2],
+        )
+        self.plan = InterviewPlan(
+            job_id="j", rounds=[r], competencies=[self.comp],
+        )
+        self.session = InterviewSession(plan_id=self.plan.plan_id, job_id="j")
+
+    def _append(self, q, text):
+        from src.schemas import CandidateAnswer
+        a = CandidateAnswer(question_id=q.question_id, text=text)
+        self.session.answers.append(a)
+        return a
+
+    def test_duplicate_answer_short_circuits_to_zero_sufficiency(self):
+        """第 2 道题答 = 第 1 道题答 -> sufficiency 强制 0, concerns 标重复。"""
+        from src.agents import assessor
+        long_text = (
+            "比如我们做订单服务用了网关层 + 业务层做两级令牌桶, 结果 P99 80ms, "
+            "选择了滑动窗口避免突刺。"
+        )
+        self._append(self.q1, long_text)
+        a2 = self._append(self.q2, long_text)
+        result = assessor.assess(self.q2, a2, self.session, self.plan)
+        self.assertEqual(result.sufficiency, 0.0)
+        self.assertEqual(result.confidence, 1.0)
+        self.assertEqual(result.covered_aspects, [])
+        self.assertIn("复制粘贴前序回答", result.concerns)
+        # missing_signals 应提示具体第几道题字面相同
+        self.assertTrue(
+            any("第 1 道题" in s for s in result.missing_signals),
+            f"missing_signals 应提及'第 1 道题', 实际: {result.missing_signals}",
+        )
+
+    def test_short_answer_does_not_trigger_duplicate_check(self):
+        """< 20 字的答案 (如'好的' / '不知道') 即使重复也不算复制粘贴."""
+        from src.agents import assessor
+        self._append(self.q1, "不知道")
+        a2 = self._append(self.q2, "不知道")
+        result = assessor.assess(self.q2, a2, self.session, self.plan)
+        # 没短路 -> 走启发式; 启发式给短答案低 sufficiency 是正常的, 但绝不会
+        # 给 1.0 confidence + concerns 含 "复制粘贴前序回答"
+        self.assertNotIn("复制粘贴前序回答", result.concerns)
+
+    def test_unique_answer_passes_through_to_llm_or_heuristic(self):
+        """非重复回答正常走 LLM / 启发式, 不被短路."""
+        from src.agents import assessor
+        self._append(self.q1, "比如我们做订单服务用了令牌桶, 80ms P99...")
+        a2 = self._append(self.q2, "比如我们做缓存一致性用了 Cache Aside + 双删兜底...")
+        result = assessor.assess(self.q2, a2, self.session, self.plan)
+        # 启发式 (stub) 路径下 confidence 是 0.3; 真 LLM 路径则别的值,
+        # 但只要不是 dup 路径的 1.0 即可
+        self.assertNotIn("复制粘贴前序回答", result.concerns)
+
+
+class EvaluatorEvidenceDedupTests(unittest.TestCase):
+    """Sprint 5.9 patch: DimensionScore.evidence 必须去重 + capped.
+    历史背景: 候选人粘贴同一段答了 10 道题, evidence 数组重复 10 次刷屏 HR UI."""
+
+    def _make_session_with_answers(self, texts: list[str]):
+        from src.schemas import (
+            Competency, Question, QuestionCategory, CandidateAnswer,
+            InterviewSession, InterviewPlan, InterviewRound,
+        )
+        comp = Competency(name="技术深度", description="x")
+        questions = [
+            Question(
+                competency_id=comp.competency_id,
+                text=f"题 {i}", category=QuestionCategory.KNOWLEDGE,
+            )
+            for i in range(len(texts))
+        ]
+        r = InterviewRound(
+            index=0, title="t", competencies=[comp], questions=questions,
+        )
+        plan = InterviewPlan(job_id="j", rounds=[r], competencies=[comp])
+        session = InterviewSession(plan_id=plan.plan_id, job_id="j")
+        for q, t in zip(questions, texts):
+            session.answers.append(CandidateAnswer(question_id=q.question_id, text=t))
+        return comp, questions, plan, session
+
+    def test_evidence_dedupes_identical_answers(self):
+        from src.agents.evaluator import _score_for_competency
+        comp, qs, plan, session = self._make_session_with_answers([
+            "我们用 Cache Aside + 双删兜底, 一致性窗口 5ms, P99 350ms。",
+        ] * 10)
+        ds = _score_for_competency(comp, qs, session)
+        self.assertEqual(
+            len(ds.evidence), 1,
+            f"10 道一样的回答应 dedupe 成 1 条, 实际 {len(ds.evidence)}",
+        )
+
+    def test_evidence_caps_at_max(self):
+        """超过 _EVIDENCE_MAX 条不同回答时, 取前 N 条; HR UI 不被刷屏。"""
+        from src.agents.evaluator import _score_for_competency, _EVIDENCE_MAX
+        # 10 条都不同
+        texts = [f"我做了第 {i} 个项目, 用了 XXX 技术, 结果 P99 {i*10}ms。" for i in range(10)]
+        comp, qs, plan, session = self._make_session_with_answers(texts)
+        ds = _score_for_competency(comp, qs, session)
+        self.assertEqual(len(ds.evidence), _EVIDENCE_MAX)
+        # 应当保持首次出现的顺序 (前 N 个 = 答题顺序前 N)
+        self.assertTrue(ds.evidence[0].startswith("我做了第 0 个项目"))
+
+    def test_evidence_mixed_dedupe_then_cap(self):
+        """7 条独特 + 3 条与第 1 条相同 -> dedupe 留 7 条, 不命中 cap (5) 时仍截."""
+        from src.agents.evaluator import _score_for_competency, _EVIDENCE_MAX
+        dup_text = "我做了第 0 个项目, 用了 XXX 技术, 结果 P99 0ms。"
+        unique = [f"我做了第 {i} 个项目, 用了 YYY 技术, 结果 P99 {i*10}ms。" for i in range(1, 7)]
+        texts = [dup_text] + unique + [dup_text, dup_text]  # 1 + 6 + 2 = 9
+        comp, qs, plan, session = self._make_session_with_answers(texts)
+        ds = _score_for_competency(comp, qs, session)
+        # 独特条数 = 7, 但 cap = 5
+        self.assertEqual(len(ds.evidence), _EVIDENCE_MAX)
+
+
 if __name__ == "__main__":
     unittest.main()
