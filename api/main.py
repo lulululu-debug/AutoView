@@ -14,10 +14,22 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# 让 src.* 的 log.info(...) 真的进 uvicorn stdout. uvicorn --log-level info
+# 只配置自己的 logger (uvicorn.access / uvicorn.error), 不动 root, 所以
+# 没这条 application 的 INFO 会被默认 WARNING 过滤掉.
+# 关键 use case: LLM_TRACE=1 时 src/llm 把 prompt/result 全文 dump 出来.
+# basicConfig 幂等, uvicorn worker 多次 import 也只配一次.
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s][%(name)s] %(message)s",
+    )
 
 from api.exceptions import register_handlers
 from api.routes import auth as auth_routes

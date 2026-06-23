@@ -18,12 +18,20 @@ Redis 缓存(Sprint 1):
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from src.cache import llm_cache
 
 DEFAULT_MODEL = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
 STUB_PREFIX = "[stub]"
+
+log = logging.getLogger(__name__)
+
+# LLM_TRACE=1 时打 prompt 全文 + 返回结果到 logger, 默认关 (prompt 可能含
+# 候选人 PII, 平时不希望进日志). 想 debug 一次面试就 env LLM_TRACE=1 跑.
+def _trace_enabled() -> bool:
+    return os.environ.get("LLM_TRACE", "").lower() in ("1", "true", "yes")
 
 
 def complete(
@@ -45,8 +53,20 @@ def complete(
     resolved_model = model or DEFAULT_MODEL
     cache_key = llm_cache.make_key(system, user, resolved_model, max_tokens)
 
+    if _trace_enabled():
+        # 全文打 prompt; 跑大面试时 user 体积可能很大 (resume + RAG chunks),
+        # 别 truncate, debug 时就是要看全的.
+        log.info(
+            "LLM call model=%s max_tokens=%d cache_key=%s\n"
+            "=== SYSTEM ===\n%s\n=== USER ===\n%s\n=== END PROMPT ===",
+            resolved_model, max_tokens, cache_key, system, user,
+        )
+
     cached = llm_cache.get(cache_key)
     if cached is not None:
+        if _trace_enabled():
+            log.info("LLM cache HIT key=%s\n=== CACHED RESULT ===\n%s\n=== END ===",
+                     cache_key, cached)
         return cached
 
     try:
@@ -68,6 +88,12 @@ def complete(
         create_kwargs["timeout"] = timeout
     resp = client.chat.completions.create(**create_kwargs)
     result = (resp.choices[0].message.content or "").strip()
+
+    if _trace_enabled():
+        log.info(
+            "LLM cache MISS -> live call: key=%s\n=== RESULT ===\n%s\n=== END ===",
+            cache_key, result,
+        )
 
     # stub 与空字符串都不入缓存: stub 应该让下次调用有机会重试到真实 API,
     # 空字符串没有复用价值且会把后续命中误判为"已无 token"。
