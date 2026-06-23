@@ -13,6 +13,10 @@ from __future__ import annotations
 import os
 import unittest
 
+# Sprint 5.9 patch: swap to TEST_POSTGRES_URL 防 TRUNCATE 抹掉 dev DB.
+from evals._test_db import swap_to_test_url  # noqa: E402
+swap_to_test_url()
+
 # 让 bcrypt 在 eval 里跑得快; 给固定 JWT secret
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-for-cookie-eval")

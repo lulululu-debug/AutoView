@@ -11,6 +11,10 @@ import os
 import tempfile
 import unittest
 
+# Sprint 5.9 patch: swap to TEST_POSTGRES_URL 防 TRUNCATE 抹掉 dev DB.
+from evals._test_db import swap_to_test_url  # noqa: E402
+swap_to_test_url()
+
 # 关键: pymilvus 在 import 时会 load_dotenv() 自动把 .env 加回 os.environ。
 # 所以模块顶 pop 太早 —— pymilvus 后续被 import 时又把 key 加回来了。
 # 必须在每个 test 的 setUp 里 pop, 或在测试逻辑里防御性地处理。

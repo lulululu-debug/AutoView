@@ -15,8 +15,13 @@ from __future__ import annotations
 import os
 import unittest
 
-# 让 .env (POSTGRES_URL / REDIS_URL) 在 skipUnless 评估之前就被读到,
-# 否则 AssessorGateTests 永远跳过。
+# Sprint 5.9 patch: 把 POSTGRES_URL 切到 TEST_POSTGRES_URL, 不再共用 dev DB.
+# 必须在 `from src import ...` 之前调.
+from evals._test_db import swap_to_test_url  # noqa: E402
+swap_to_test_url()
+
+# 让 .env (REDIS_URL 等) 在 skipUnless 评估之前就被读到. POSTGRES_URL 已被
+# swap_to_test_url 处理过, 这里 load_dotenv 不会再覆盖它 (override=False).
 try:
     from dotenv import load_dotenv
     load_dotenv()

@@ -24,6 +24,10 @@ from __future__ import annotations
 import os
 import unittest
 
+# Sprint 5.9 patch: swap to TEST_POSTGRES_URL 防 TRUNCATE 抹掉 dev DB.
+from evals._test_db import swap_to_test_url  # noqa: E402
+swap_to_test_url()
+
 # 强制 stub 模式: 在 import agent 之前清 key, 防止 evaluator/planner 真的打 API。
 os.environ.pop("OPENAI_API_KEY", None)
 

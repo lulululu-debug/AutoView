@@ -12,6 +12,10 @@ import os
 import time
 import unittest
 
+# Sprint 5.9 patch: swap to TEST_POSTGRES_URL 防 TRUNCATE 抹掉 dev DB.
+from evals._test_db import swap_to_test_url  # noqa: E402
+swap_to_test_url()
+
 # 让 bcrypt 在 eval 里跑得快, 不影响 prod
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
 # 给 JWT 一个固定 dev secret, 各 test 之间一致
