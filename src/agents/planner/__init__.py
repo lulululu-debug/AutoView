@@ -328,9 +328,13 @@ def _retrieve_seed_question(
     jd_excerpt: str,
     *,
     category: QuestionCategory,
+    rank: int = 0,
 ) -> dict | None:
-    """从 Milvus 召回 top-1 候选题, 失败 / 空时返 None。
-    Sprint 5.5: category 让 knowledge / scenario 各拉各的题源。"""
+    """从 Milvus 召回 top-K 候选题, 取 rank 槽位 (rank % len(hits)) 让同一
+    (job, comp) 多次调用时轮转命中不同 seed, 避免 11 道题全用同一 seed。
+    失败 / 空时返 None。
+    Sprint 5.5: category 让 knowledge / scenario 各拉各的题源。
+    Sprint 5.9 patch: 新增 rank 让 Planner 在同一 stage 出多题时不重复。"""
     query_text = (
         f"考察维度: {competency.name} - {competency.description}\n"
         f"JD 摘要: {jd_excerpt}"
@@ -355,25 +359,51 @@ def _retrieve_seed_question(
         return None
     if not hits:
         return None
-    return hits[0]
+    return hits[rank % len(hits)]
+
+
+def _format_prior_block(prior_texts: list[str] | None) -> str:
+    """把已生成题文本拼成 prompt 块, 让 LLM 知道"别再出这些"。
+    返回空串当没有 prior. 截顶 120 字防 prompt 爆 + 只拿非空。"""
+    if not prior_texts:
+        return ""
+    bullets: list[str] = []
+    for t in prior_texts:
+        snippet = (t or "").strip()
+        if not snippet:
+            continue
+        bullets.append(f"- {snippet[:120]}")
+    if not bullets:
+        return ""
+    return (
+        "本维度已生成的题目 (请生成一道考察角度/子方向不同的新题, 不要复述):\n"
+        + "\n".join(bullets) + "\n\n"
+    )
 
 
 def _knowledge_question(
     job: JobContext, comp: Competency, fallback: str,
+    *, rank: int = 0, prior_texts: list[str] | None = None,
 ) -> tuple[str, str | None]:
     """生成一道 knowledge 题。
     返回 (题目文本, source_question_id 或 None)。
 
+    Sprint 5.9 patch: rank 让 RAG seed 轮转 top-K; prior_texts 让 LLM prompt
+    告诉模型"避开这些已出过的题", 防 LLM cache 让同 (job, comp) 多次调用全
+    返同一题 (实战 bug: tech+campus 11 道 knowledge 文本 100% 相同).
+
     路径优先级:
-    1. RAG 召回 + LLM 精修: 题库有题 + embed/Milvus/LLM 都正常
+    1. RAG 召回 (按 rank 轮转 top-K) + LLM 精修: 题库有题 + embed/Milvus/LLM 都正常
     2. RAG 召回 + 直接复用: 题库有题, LLM stub 时, 用候选题原文 (仍有 source_question_id)
     3. 纯 LLM 生成: 题库无题, LLM 正常 (无 source_question_id)
     4. fallback 模板: LLM 也 stub (无 source_question_id)
     """
     jd_excerpt = job.jd[:400]
     hit = _retrieve_seed_question(
-        job.role_family, comp, jd_excerpt, category=QuestionCategory.KNOWLEDGE,
+        job.role_family, comp, jd_excerpt,
+        category=QuestionCategory.KNOWLEDGE, rank=rank,
     )
+    prior_block = _format_prior_block(prior_texts)
 
     if hit is not None:
         source_id = hit["question_id"]
@@ -383,6 +413,7 @@ def _knowledge_question(
             f"职位: {job.title}\n"
             f"JD 摘要: {jd_excerpt}\n"
             f"考察维度: {comp.name} - {comp.description}\n"
+            f"{prior_block}"
             "请基于候选题目, 必要时小幅改写让题目更聚焦本职位。"
         )
         adapted = llm.complete(_KNOWLEDGE_RAG_SYSTEM, prompt, max_tokens=240)
@@ -394,6 +425,7 @@ def _knowledge_question(
         f"职位: {job.title}\n"
         f"JD: {jd_excerpt}\n"
         f"考察维度: {comp.name} - {comp.description}\n"
+        f"{prior_block}"
         "请生成一道用于该维度的【基础知识】开放式面试题。"
     )
     text = llm.complete(_KNOWLEDGE_SYSTEM, prompt, max_tokens=200)
@@ -406,15 +438,18 @@ def _knowledge_question(
 
 def _scenario_question(
     job: JobContext, comp: Competency, fallback: str,
+    *, rank: int = 0, prior_texts: list[str] | None = None,
 ) -> tuple[str, str | None]:
     """生成一道 scenario 题。
     与 _knowledge_question 同形, 只是题源走 category=scenario 召回 +
-    场景题专用 LLM prompt。
+    场景题专用 LLM prompt。Sprint 5.9 patch: rank + prior_texts 同 knowledge.
     """
     jd_excerpt = job.jd[:400]
     hit = _retrieve_seed_question(
-        job.role_family, comp, jd_excerpt, category=QuestionCategory.SCENARIO,
+        job.role_family, comp, jd_excerpt,
+        category=QuestionCategory.SCENARIO, rank=rank,
     )
+    prior_block = _format_prior_block(prior_texts)
 
     if hit is not None:
         source_id = hit["question_id"]
@@ -424,6 +459,7 @@ def _scenario_question(
             f"职位: {job.title}\n"
             f"JD 摘要: {jd_excerpt}\n"
             f"考察维度: {comp.name} - {comp.description}\n"
+            f"{prior_block}"
             "请基于候选题目, 必要时小幅改写让情境更贴合本职位。保持场景题结构。"
         )
         adapted = llm.complete(_SCENARIO_RAG_SYSTEM, prompt, max_tokens=240)
@@ -435,6 +471,7 @@ def _scenario_question(
         f"职位: {job.title}\n"
         f"JD: {jd_excerpt}\n"
         f"考察维度: {comp.name} - {comp.description}\n"
+        f"{prior_block}"
         "请生成一道用于该维度的【场景题】(给具体情境, 让候选人现场决策, 不要回顾经历)。"
     )
     text = llm.complete(_SCENARIO_SYSTEM, prompt, max_tokens=240)
@@ -475,10 +512,13 @@ def _project_question(
     fallback: str,
     *,
     intro_text: str = "",
+    prior_texts: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     """生成一道项目深挖题。
     Sprint 5.5: intro_text 是 task 4 才真正传入的候选人自我介绍全文,
-    task 3 阶段默认空串 ——  prompt 加 intro_text 段落给 LLM 看, 但不强依赖。"""
+    task 3 阶段默认空串 ——  prompt 加 intro_text 段落给 LLM 看, 但不强依赖。
+    Sprint 5.9 patch: prior_texts 同 knowledge/scenario, 让 lazy resolve 5 道
+    project 题时 LLM 不要返同一道."""
     chunks = _retrieve_resume_chunks(candidate.candidate_id, comp)
 
     intro_block = (
@@ -486,6 +526,7 @@ def _project_question(
         if intro_text.strip()
         else ""
     )
+    prior_block = _format_prior_block(prior_texts)
 
     if chunks:
         chunk_ids = [c["document_id"] for c in chunks]
@@ -496,6 +537,7 @@ def _project_question(
             f"考察维度: {comp.name} - {comp.description}\n"
             f"{intro_block}"
             f"候选人 Resume 相关片段:\n{chunks_text}\n"
+            f"{prior_block}"
             "请围绕这些具体内容生成一道项目深挖题。"
         )
         text = llm.complete(_PROJECT_RAG_SYSTEM, prompt, max_tokens=260)
@@ -514,6 +556,7 @@ def _project_question(
         f"{intro_block}"
         f"候选人简历摘要:\n{candidate.resume[:800]}\n"
         f"候选人已识别项目要点:\n{projects_hint}\n"
+        f"{prior_block}"
         "请围绕该考察维度, 生成一道针对其具体项目/实习经历的深挖题。"
     )
     text = llm.complete(_PROJECT_SYSTEM, prompt, max_tokens=220)
@@ -568,7 +611,13 @@ def plan(job: JobContext, candidate: CandidateProfile) -> InterviewPlan:
     """Planner 入口: 按 job.track 出 stage 序列。
     knowledge / scenario 题 plan 阶段就生成;
     project 题在 plan 阶段只放 lazy 占位 (text=""), 由 resolve_lazy_questions
-    在进入 project stage 时回灌。"""
+    在进入 project stage 时回灌。
+
+    Sprint 5.9 patch: 同一 (stage, category, competency) 内多题时, 给每次调用
+    传递 rank (轮转 RAG top-K seed) 和 prior_texts (已生成题文本, 喂进 prompt),
+    防 LLM cache 让 11 道 knowledge 全用同一段文字. key 用 (stage, category,
+    competency_id) 而不是只用 competency: 同一 competency 在不同 stage (如
+    knowledge / scenario) 出题角度本来就不同, 不该互相约束。"""
     tech, comm = _build_competencies()
     comp_by_key = {"tech": tech, "comm": comm}
 
@@ -576,10 +625,22 @@ def plan(job: JobContext, candidate: CandidateProfile) -> InterviewPlan:
     for idx, (stage, slots) in enumerate(_stages_for(job.track, job.role_family)):
         questions: list[Question] = []
         round_comps: list[Competency] = []
+        # (category, competency_id) -> (rank_counter, prior_texts_list)
+        bucket: dict[tuple[QuestionCategory, str | None], list[str]] = {}
         for slot in slots:
             comp = comp_by_key.get(slot.competency_key) if slot.competency_key else None
-            q = _build_question_for_slot(job, candidate, slot, comp)
+            key = (slot.category, comp.competency_id if comp else None)
+            priors = bucket.setdefault(key, [])
+            rank = len(priors)
+            q = _build_question_for_slot(
+                job, candidate, slot, comp,
+                rank=rank, prior_texts=list(priors),
+            )
             questions.append(q)
+            # 把生成的非空文本回灌进 bucket, 下一题就能看到 (project 题 text="",
+            # 不喂入避免空白噪声; project 题去重交给 resolve_lazy 回灌时处理)
+            if q.text:
+                priors.append(q.text)
             if comp is not None and comp not in round_comps:
                 round_comps.append(comp)
         rounds.append(InterviewRound(
@@ -602,9 +663,14 @@ def _build_question_for_slot(
     candidate: CandidateProfile,
     slot: _StageSlot,
     comp: Competency | None,
+    *,
+    rank: int = 0,
+    prior_texts: list[str] | None = None,
 ) -> Question:
     """按槽位生成一道题。project 题永远占位, knowledge/scenario 直接生成,
-    self_intro 用固定文本。"""
+    self_intro 用固定文本。
+    Sprint 5.9 patch: rank 让 RAG seed 轮转, prior_texts 让 LLM 不复读已生成
+    的题 (实战 bug: tech+campus 11 道 knowledge 全相同)."""
     cat = slot.category
 
     if cat is QuestionCategory.SELF_INTRO:
@@ -620,6 +686,7 @@ def _build_question_for_slot(
         text, source_id = _knowledge_question(
             job, comp,
             fallback=_knowledge_fallback(comp),
+            rank=rank, prior_texts=prior_texts,
         )
         return Question(
             competency_id=comp.competency_id,
@@ -634,6 +701,7 @@ def _build_question_for_slot(
         text, source_id = _scenario_question(
             job, comp,
             fallback=_scenario_fallback(comp),
+            rank=rank, prior_texts=prior_texts,
         )
         return Question(
             competency_id=comp.competency_id,
@@ -707,11 +775,18 @@ def resolve_lazy_questions(
     new_rounds: list[InterviewRound] = []
     touched = 0
 
+    # Sprint 5.9 patch: 同一 round 内 (project comp) 多个 lazy 题去重 ——
+    # 同 plan() 里一样, 拿 prior_texts 喂 LLM "不要重复".
     for r in plan.rounds:
         new_qs: list[Question] = []
+        # competency_id -> list of already-resolved texts in this round
+        prior_by_comp: dict[str, list[str]] = {}
         for q in r.questions:
             if not q.lazy or q.text:
                 new_qs.append(q)
+                # 已有 text 的 lazy 题也算"出过", 后续题应避开
+                if q.text and q.competency_id:
+                    prior_by_comp.setdefault(q.competency_id, []).append(q.text)
                 continue
             if q.category is not QuestionCategory.PROJECT_EXPERIENCE:
                 # task 3 只 resolve project 题; 别类 lazy 留给未来扩展
@@ -724,11 +799,15 @@ def resolve_lazy_questions(
                 )
                 new_qs.append(q)
                 continue
+            priors = prior_by_comp.setdefault(comp.competency_id, [])
             text, chunk_ids = _project_question(
                 job, candidate, comp,
                 fallback=_project_fallback(comp),
                 intro_text=intro_text,
+                prior_texts=list(priors),
             )
+            if text:
+                priors.append(text)
             new_qs.append(q.model_copy(update={
                 "text": text,
                 "source_chunk_ids": chunk_ids,
