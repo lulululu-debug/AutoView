@@ -13,6 +13,10 @@ import os
 import tempfile
 import unittest
 
+# Sprint 5.9 patch: swap to TEST_POSTGRES_URL 防 TRUNCATE 抹掉 dev DB.
+from evals._test_db import swap_to_test_url  # noqa: E402
+swap_to_test_url()
+
 
 def _synthetic_vector(seed: int, dim: int = 1536) -> list[float]:
     """除 seed 位为 1 全 0; 非 stub, 可入 Milvus, 互相 COSINE 距离 = 1。"""

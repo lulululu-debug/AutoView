@@ -17,6 +17,10 @@ from __future__ import annotations
 import os
 import unittest
 
+# Sprint 5.9 patch: swap to TEST_POSTGRES_URL 防 TRUNCATE 抹掉 dev DB.
+from evals._test_db import swap_to_test_url  # noqa: E402
+swap_to_test_url()
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
