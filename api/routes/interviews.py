@@ -95,6 +95,25 @@ def get_turn_audio(session_id: str, ref_id: str) -> Response:
     )
 
 
+@router.get("/{session_id}/fillers/{idx}/audio")
+def get_filler_audio(session_id: str, idx: int) -> Response:
+    """Sprint 6-3: 过渡语音 ("嗯, 我了解了" 等固定文案)。
+
+    前端进面试后预取全部 filler, 提交回答时播放, 遮蔽 Assessor +
+    lazy project gen 的 3-8s 思考空档。语义与 turn 音频端点一致:
+    200 mp3 / 204 TTS 不可用 / 404 session 或 idx 不存在。
+    文案固定不变, 浏览器缓存给足 7 天。
+    """
+    audio = orchestrator.get_filler_audio(session_id, idx)
+    if audio is None:
+        return Response(status_code=204)
+    return Response(
+        content=audio,
+        media_type=AUDIO_MIME,
+        headers={"Cache-Control": "private, max-age=604800"},
+    )
+
+
 @router.post("/{session_id}/finalize", status_code=204)
 def finalize_interview(session_id: str) -> None:
     """触发归档但不返回 report 数据。
