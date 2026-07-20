@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from src.auth import AuthenticationError, AuthorizationError, JwtNotConfigured
 from src.cache import RedisNotConfigured
 from src.db import DatabaseNotConfigured
-from src.orchestrator import SessionInvalidState, SessionNotFound
+from src.orchestrator import SessionInvalidState, SessionNotFound, TurnNotFound
 
 
 def register_handlers(app: FastAPI) -> None:
@@ -57,6 +57,16 @@ def register_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=409,
             content={"detail": "面试会话当前状态不允许此操作", "error": str(exc)},
+        )
+
+    @app.exception_handler(TurnNotFound)
+    async def _turn_not_found(
+        _req: Request, exc: TurnNotFound,
+    ) -> JSONResponse:
+        # Sprint 6-2: 音频端点的 ref_id 不是本会话的面试官 turn; 404
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "题目引用不存在", "error": str(exc)},
         )
 
     @app.exception_handler(AuthenticationError)

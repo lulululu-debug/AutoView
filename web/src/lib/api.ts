@@ -114,12 +114,23 @@ export type JobContext = {
   company_materials: string;
   role_family: string;
   track: Track;
+  question_source?: "rag" | "llm_direct";  // Sprint H: 出题来源
   aspects: ProfileAspect[];  // Sprint 5.9
+};
+
+// Sprint F Phase 2: 简历语义分段 (parse-resume 返回, 候选人确认后随
+// createCandidate 提交; source 仅展示用, 提交时 server 强制改 user_confirmed)
+export type ResumeSection = {
+  type: string; // personal_info/education/project/internship/work/skills/award/other
+  title: string;
+  text: string;
+  source: string; // llm_anchor / heuristic / whole_text / user_confirmed
 };
 
 export type CandidateCreate = {
   resume: string;
   projects: string[];
+  sections?: { type: string; title: string; text: string }[];
 };
 
 export type CandidateCreated = {
@@ -165,11 +176,42 @@ export type InterviewRound = {
   questions: Question[];
 };
 
+// Sprint E: 出题过程 trace (仅 HR 端接口返回; 候选人端 plan 接口剥掉)
+export type QuestionTrace = {
+  question_id: string;
+  stage: InterviewStage;
+  category: QuestionCategory;
+  path: string;                       // rag_refined / rag_direct / llm_generated / fallback_template / self_intro / lazy_pending / resume_section / resume_rag / resume_llm
+  topic: string | null;
+  difficulty: string | null;
+  source_question_id: string | null;
+  source_chunk_ids: string[];
+  section_title?: string | null;      // Sprint F: resume_section 路径针对的简历段
+};
+
+export type PlanTrace = {
+  aspect_queries: string[];
+  extracted_skills: string[];
+  matches: Record<string, string[]>;  // query → matched topics
+  matched_topics: string[];
+  unmatched_skills: string[];
+  llm_matched_skills: string[];       // embedding 未中、LLM 兜底归类命中的
+  questions: QuestionTrace[];
+};
+
 export type InterviewPlan = {
   plan_id: string;
   job_id: string;
   rounds: InterviewRound[];
   competencies: Competency[];         // 跨 stage 顶层权威 (Sprint 5.5)
+  trace?: PlanTrace | null;           // Sprint E; 老 plan / 候选人端为 null
+};
+
+// Sprint E: HR 端 resume 切片 (project 题 source_chunk_ids 的原文)
+export type ResumeChunk = {
+  document_id: string;
+  chunk_index: number;
+  text: string;
 };
 
 // Sprint 5.7: HR 高级折叠区可配置的 policy
@@ -313,6 +355,102 @@ export type ReviewSubmit = {
   decision: ReviewDecision;
 };
 
+// ---------- Admin: 知识库审核 (Sprint C) ----------
+
+export type DatasetSummary = {
+  dataset_id: string;
+  n_chunks: number;
+  n_pending: number;
+  n_approved: number;
+  n_rejected: number;
+  n_seed: number;
+  // Sprint D-lite: 来自 datasets 元数据表; 老 dataset 缺元数据时为空串
+  topic: string;
+  description: string;
+  source_repo: string;
+  source_commit: string;
+  // Sprint upload: knowledge / scenario
+  category: "knowledge" | "scenario";
+};
+
+export type ChunkWithDraftStats = {
+  chunk_id: string;
+  file_path: string;
+  heading_path: string[];
+  quality_tag: string;
+  is_starred: boolean;
+  char_count: number;
+  n_pending: number;
+  n_approved: number;
+  n_rejected: number;
+};
+
+export type KnowledgeChunk = {
+  chunk_id: string;
+  source_repo: string;
+  source_commit: string;
+  dataset_id: string;
+  file_path: string;
+  doc_title: string;
+  doc_tags: string[];
+  domain: string;
+  topic: string;
+  heading_path: string[];
+  is_starred: boolean;
+  text: string;
+  char_count: number;
+  content_hash: string;
+  quality_tag: string;
+};
+
+export type DraftReviewStatus = "pending" | "approved" | "rejected";
+
+export type QuestionDraft = {
+  draft_id: string;
+  chunk_id: string;
+  dataset_id: string;
+  question_text: string;
+  qtype: string;       // concept / compare / scenario / followup
+  difficulty: string;  // easy / medium / hard
+  key_points: string[];
+  prompt_version: string;
+  llm_model: string;
+  review_status: DraftReviewStatus;
+};
+
+export type ChunkWithDraftsResponse = {
+  chunk: KnowledgeChunk;
+  drafts: QuestionDraft[];
+};
+
+// approve 后端返回的 SeedQuestion (subset, UI 只需 question_id 确认入库)
+export type SeedQuestion = {
+  question_id: string;
+  role_family: string;
+  competency: string;
+  text: string;
+  source: string;
+  category: string;
+  dataset_id: string;
+  source_draft_id: string | null;
+  key_points: string[];
+  difficulty: string;
+  qtype: string;
+};
+
+export type CompetencyId = "comp:tech" | "comp:comm";
+
+export type EditDraftBody = {
+  question_text?: string;
+  key_points?: string[];
+};
+
+export type ApproveBody = {
+  competency_id: CompetencyId;
+  role_family?: string;
+};
+
+
 export const api = {
   health: () => request<Health>("/health"),
   getJob: (jobId: string) => request<JobContext>(`/jobs/${jobId}`),
@@ -324,7 +462,10 @@ export const api = {
   // Sprint 5.8: multipart 上传, 不能走 request<T>() (它强加 JSON Content-Type),
   // 手写 fetch + 错误映射跟 request<T>() 对齐 (ApiError + 401 处理无需要 —
   // 该端点不要 auth)。
-  parseResume: async (jobId: string, file: File): Promise<{ parsed_text: string }> => {
+  parseResume: async (
+    jobId: string,
+    file: File,
+  ): Promise<{ parsed_text: string; sections: ResumeSection[] }> => {
     const fd = new FormData();
     fd.append("file", file);
     const res = await fetch(
@@ -361,6 +502,26 @@ export const api = {
     }),
   finalizeInterview: (sessionId: string) =>
     requestVoid(`/interviews/${sessionId}/finalize`, { method: "POST" }),
+  /**
+   * Sprint 6-2: 拉某个面试官 turn 的 TTS 音频 (mp3 Blob)。
+   * 204 (TTS 未配置/合成失败)、404、网络错误一律返回 null ——
+   * 音频是增强不是依赖, 调用方拿到 null 就静默退纯文字, 不打断面试。
+   */
+  fetchTurnAudio: async (
+    sessionId: string,
+    refId: string,
+  ): Promise<Blob | null> => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/interviews/${sessionId}/turns/${encodeURIComponent(refId)}/audio`,
+        { credentials: "include" },
+      );
+      if (res.status !== 200) return null;
+      return await res.blob();
+    } catch {
+      return null;
+    }
+  },
   login: (username: string, password: string) =>
     request<LoginResponse>("/auth/login", {
       method: "POST",
@@ -380,6 +541,7 @@ export const api = {
     company_materials: string;
     track: Track;
     role_family: RoleFamily;            // Sprint 5.9
+    question_source?: "rag" | "llm_direct";  // Sprint H: 出题来源 (默认 rag)
     aspects: ProfileAspect[];           // Sprint 5.9; HR 在表单上增删改后的最终列表
     followup_policy?: FollowUpPolicy | null;
     completion_policy?: CompletionPolicy | null;
@@ -406,6 +568,25 @@ export const api = {
     ),
   getHrSession: (sessionId: string) =>
     request<InterviewSessionDetail>(`/hr/sessions/${sessionId}`, { auth: true }),
+  // 开发者测试: 不答题预览全部题目 (lazy project 题内存 resolve, 不落库)。
+  // 后端双门控: HR 登录态 + DEV_PLAN_PREVIEW env; 未开启返 403。
+  getPlanPreview: (jobId: string, candidateId: string) =>
+    request<InterviewPlan>(
+      `/hr/jobs/${jobId}/candidates/${candidateId}/plan-preview`,
+      { auth: true },
+    ),
+  // Sprint E: HR 视角 plan (含 trace 出题过程审计; 候选人端接口无 trace)
+  getHrPlan: (jobId: string, candidateId: string) =>
+    request<InterviewPlan>(
+      `/hr/jobs/${jobId}/candidates/${candidateId}/plan`,
+      { auth: true },
+    ),
+  // Sprint E: 候选人 resume 在 Milvus 里的切片原文 (对照 project 题溯源)
+  getResumeChunks: (candidateId: string) =>
+    request<ResumeChunk[]>(
+      `/hr/candidates/${candidateId}/resume-chunks`,
+      { auth: true },
+    ),
   getReport: (reportId: string) =>
     request<EvaluationReport>(`/hr/reports/${reportId}`, { auth: true }),
   getReview: (reportId: string) =>
@@ -419,6 +600,94 @@ export const api = {
       body: JSON.stringify(body),
       auth: true,
     }),
+  // Sprint C: 知识库审核 endpoints (require_hr_user 同 /hr/*)
+  listDatasets: () =>
+    request<DatasetSummary[]>("/admin/datasets", { auth: true }),
+  listDatasetChunks: (datasetId: string) =>
+    request<ChunkWithDraftStats[]>(
+      `/admin/datasets/${encodeURIComponent(datasetId)}/chunks`,
+      { auth: true },
+    ),
+  getChunkDrafts: (chunkId: string) =>
+    request<ChunkWithDraftsResponse>(
+      `/admin/chunks/${chunkId}/drafts`,
+      { auth: true },
+    ),
+  editDraft: (draftId: string, body: EditDraftBody) =>
+    request<QuestionDraft>(`/admin/drafts/${draftId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+      auth: true,
+    }),
+  approveDraft: (draftId: string, body: ApproveBody) =>
+    request<SeedQuestion>(`/admin/drafts/${draftId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      auth: true,
+    }),
+  rejectDraft: (draftId: string) =>
+    request<QuestionDraft>(`/admin/drafts/${draftId}/reject`, {
+      method: "POST",
+      auth: true,
+    }),
+  bulkApproveChunk: (chunkId: string, body: ApproveBody) =>
+    request<SeedQuestion[]>(`/admin/chunks/${chunkId}/bulk-approve`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      auth: true,
+    }),
+  // 一键全审: POST /admin/datasets/{ds}/bulk-approve-all 走后台任务,
+  // 立即返 {scheduled, to_approve_estimate}; 前端可轮询 listDatasets 看进度
+  bulkApproveDatasetAll: (datasetId: string, body: ApproveBody) =>
+    request<{ scheduled: boolean; to_approve_estimate?: number; reason?: string }>(
+      `/admin/datasets/${encodeURIComponent(datasetId)}/bulk-approve-all`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        auth: true,
+      },
+    ),
+  // Sprint upload: HR multipart 上传 md → 后台 ingest+derive+approve.
+  // 立即返 {scheduled, dataset_id, n_files}; 前端轮询 listDatasets 看 chunks/drafts/seed 滚.
+  // 不走 request<T>(): multipart 不能加 Content-Type=application/json header.
+  uploadKnowledge: async (params: {
+    dataset_id: string;
+    topic: string;
+    description?: string;
+    category: "knowledge" | "scenario";
+    role_family: string;
+    competency_id: CompetencyId;
+    auto_approve: boolean;
+    files: File[];
+  }): Promise<{
+    scheduled: boolean;
+    dataset_id: string;
+    n_files: number;
+    auto_approve: boolean;
+  }> => {
+    const fd = new FormData();
+    fd.append("dataset_id", params.dataset_id);
+    fd.append("topic", params.topic);
+    fd.append("description", params.description || "");
+    fd.append("category", params.category);
+    fd.append("role_family", params.role_family);
+    fd.append("competency_id", params.competency_id);
+    fd.append("auto_approve", params.auto_approve ? "true" : "false");
+    for (const f of params.files) fd.append("files", f);
+
+    const res = await fetch(`${API_BASE}/admin/upload-knowledge`, {
+      method: "POST", body: fd, credentials: "include",
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.detail) detail = body.detail;
+      } catch { /* 非 JSON body */ }
+      throw new ApiError(res.status, detail);
+    }
+    return res.json();
+  },
 };
 
 export { API_BASE };

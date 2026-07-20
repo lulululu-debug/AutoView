@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError, api, type InterviewPlan, type TurnResult } from "@/lib/api";
@@ -16,6 +16,8 @@ import {
  * 面试 Q&A 主界面:
  * - Consent 门 (Sprint 6-1): 进面试前先过知情同意, 选择开摄像头或仅文字;
  *   拒绝授权 / getUserMedia 失败 → 降级纯文字面试, 流程不断
+ * - TTS 播报 (Sprint 6-2): AV 模式下每个新 turn 拉 GET .../turns/{ref_id}/audio
+ *   播放面试官语音; 204/失败/自动播放被拦一律静默, 文字永远是主路径
  * - 首次进入: POST /interviews 启动 session, session_id 写 localStorage
  * - 已有 localStorage: GET /interviews/{id} 中断恢复, 拉回当前待答提示
  * - 提交答案: POST /interviews/{id}/answers, 显示下一句; done=true 跳 /done
@@ -122,6 +124,37 @@ export default function SessionPage({
   const media = useCandidateMedia();
   const mediaState = media.state;
 
+  // Sprint 6-2: TTS 播放。avModeRef 在 consent 时定型, 供 init effect 的闭包读
+  // (mediaState 不能进 init deps, 否则媒体状态变化会重跑 init)。
+  const avModeRef = useRef(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+
+  /** 拉当前 turn 的 TTS 音频播放; 任何失败 (204/网络/自动播放拦截) 静默退文字。 */
+  const playPrompt = useCallback(async (sessionId: string, refId: string) => {
+    if (!avModeRef.current) return;
+    const blob = await api.fetchTurnAudio(sessionId, refId);
+    if (!blob) return;
+    // 停上一段 + 释放旧 object URL, 防叠音 / 内存泄漏
+    audioRef.current?.pause();
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    const url = URL.createObjectURL(blob);
+    audioUrlRef.current = url;
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    audio.play().catch(() => {
+      /* 浏览器自动播放策略拦截等: 静默, 文字仍在 */
+    });
+  }, []);
+
+  // 卸载 (含跳 done 页): 停播 + 释放 object URL
+  useEffect(() => {
+    return () => {
+      audioRef.current?.pause();
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     if (!consented) return;
     let cancelled = false;
@@ -170,6 +203,10 @@ export default function SessionPage({
           progress,
           answered_count: 0,
         });
+        // Sprint 6-2: 首题 / 恢复的当前题播报
+        if (turn.ref_id) {
+          playPrompt(turn.session_id, turn.ref_id);
+        }
       } catch (e) {
         if (cancelled) return;
         setState({ kind: "error", message: errMessage(e) });
@@ -180,19 +217,21 @@ export default function SessionPage({
     return () => {
       cancelled = true;
     };
-  }, [consented, jobId, candidateId, router]);
+  }, [consented, jobId, candidateId, router, playPrompt]);
 
-  // 会话终态 (过期/出错) 不再需要摄像头, 立刻释放免得红点常亮
+  // 会话终态 (过期/出错) 不再需要摄像头和播报, 立刻释放免得红点常亮
   const stopMedia = media.stop;
   useEffect(() => {
     if (state.kind === "expired" || state.kind === "error") {
       stopMedia();
+      audioRef.current?.pause();
     }
   }, [state.kind, stopMedia]);
 
   async function handleConsent(withMedia: boolean) {
     if (withMedia) {
       const ok = await media.request();
+      avModeRef.current = ok;
       if (!ok) {
         setMediaNotice("未获得摄像头/麦克风权限, 已切换为纯文字作答");
       }
@@ -250,6 +289,10 @@ export default function SessionPage({
         progress: nextProgress,
         answered_count: prev.answered_count + 1,
       });
+      // Sprint 6-2: 新题 / 追问播报
+      if (next.ref_id) {
+        playPrompt(next.session_id, next.ref_id);
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
         clearSession(candidateId);

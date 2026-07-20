@@ -21,10 +21,12 @@ POST /interviews 只收 candidate_id:
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from api.schemas import AnswerSubmit, InterviewStart
 from src import db, orchestrator
 from src.schemas import EvaluationReport, TurnResult
+from src.tts import AUDIO_MIME
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 
@@ -69,6 +71,28 @@ def resume_interview(session_id: str) -> TurnResult:
     """中断恢复 / 查询: 返当前待答提示, 或 done=True。
     SessionNotFound -> 404。"""
     return orchestrator.resume_session(session_id)
+
+
+@router.get("/{session_id}/turns/{ref_id}/audio")
+def get_turn_audio(session_id: str, ref_id: str) -> Response:
+    """Sprint 6-2: 面试官 turn 的 TTS 音频 (mp3)。
+
+    - 200 audio/mpeg: 合成成功 (tts 层按 text+provider+voice Redis 缓存,
+      同一 ref_id 幂等, 重复请求不重复打厂商 API)
+    - 204: TTS 未配置 / 合成失败 -> 前端静默退纯文字 (双路径保底)
+    - 404: session 不存在 (SessionNotFound) / ref_id 不是本会话的
+      面试官 turn (TurnNotFound)
+
+    Cache-Control 让浏览器本地也缓一天: 中断恢复重进同一题不再回源。
+    """
+    audio = orchestrator.get_turn_audio(session_id, ref_id)
+    if audio is None:
+        return Response(status_code=204)
+    return Response(
+        content=audio,
+        media_type=AUDIO_MIME,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.post("/{session_id}/finalize", status_code=204)
