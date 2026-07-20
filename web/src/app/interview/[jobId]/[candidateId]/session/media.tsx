@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 /**
  * Sprint 6-1: 会话页媒体侧 —— Consent 门 + 摄像头/麦克风生命周期 + 三区布局组件。
@@ -153,15 +153,102 @@ export function AiBadge() {
   );
 }
 
-// ---- 三区布局: 面试官区 + 自拍 PiP ----
+// ---- 三区布局: 面试官区 (三态视频 avatar) + 自拍 PiP ----
 
 /**
- * 面试官区占位。Sprint 6-3 在这里换成三态视频循环 avatar
- * (idle / talking / thinking), 6-2 的 TTS 音频播放也挂这层。
+ * Sprint 6-3: Tier B avatar 状态。
+ * - talking: TTS 音频播放中 (出题/追问播报)
+ * - thinking: 提交回答后, Assessor + lazy project gen 的空档 (+ 过渡语音)
+ * - idle: 其余时间 (聆听候选人)
  */
-export function InterviewerPanel() {
+export type AvatarState = "idle" | "talking" | "thinking";
+
+const AVATAR_STATES: readonly AvatarState[] = ["idle", "talking", "thinking"];
+
+/**
+ * 素材约定 (缺失自动退回占位面板, 不阻塞面试):
+ * web/public/avatar/{idle,talking,thinking}.mp4 —— 同一人物三段可循环短片,
+ * 生成规范见 web/public/avatar/README.md。Tier A (LiveTalking 真口型) 接入时
+ * 本组件整体被替换, 状态语义不变。
+ */
+const AVATAR_SOURCES: Record<AvatarState, string> = {
+  idle: "/avatar/idle.mp4",
+  talking: "/avatar/talking.mp4",
+  thinking: "/avatar/thinking.mp4",
+};
+
+const AVATAR_LABELS: Record<AvatarState, string> = {
+  idle: "聆听中",
+  talking: "提问中",
+  thinking: "思考中...",
+};
+
+export function InterviewerPanel({ state }: { state: AvatarState }) {
+  // 任一段视频加载失败 (素材未放/格式不对) → 整体退回占位面板,
+  // 避免三态只剩两态的"半瘫"观感
+  const [failed, setFailed] = useState(false);
+  const idleRef = useRef<HTMLVideoElement>(null);
+  const talkingRef = useRef<HTMLVideoElement>(null);
+  const thinkingRef = useRef<HTMLVideoElement>(null);
+  const refs: Record<AvatarState, RefObject<HTMLVideoElement | null>> = {
+    idle: idleRef,
+    talking: talkingRef,
+    thinking: thinkingRef,
+  };
+
+  // 只播当前态的视频, 其余暂停 —— 三段常驻解码太费 CPU
+  useEffect(() => {
+    if (failed) return;
+    for (const s of AVATAR_STATES) {
+      const v = refs[s].current;
+      if (!v) continue;
+      if (s === state) {
+        v.play().catch(() => {
+          /* 自动播放被拦截: 视频静止也可接受, 不算 failed */
+        });
+      } else {
+        v.pause();
+      }
+    }
+    // refs 是每次 render 重建的字面量但指向稳定的三个 ref, 不进 deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, failed]);
+
   return (
-    <div className="relative aspect-video rounded-lg overflow-hidden bg-zinc-900 dark:bg-zinc-950 border border-zinc-800 flex flex-col items-center justify-center gap-2">
+    <div className="relative aspect-video rounded-lg overflow-hidden bg-zinc-900 dark:bg-zinc-950 border border-zinc-800">
+      {failed ? (
+        <PlaceholderFigure />
+      ) : (
+        AVATAR_STATES.map((s) => (
+          <video
+            key={s}
+            ref={refs[s]}
+            src={AVATAR_SOURCES[s]}
+            loop
+            muted
+            playsInline
+            preload="auto"
+            onError={() => setFailed(true)}
+            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+              s === state ? "opacity-100" : "opacity-0"
+            }`}
+          />
+        ))
+      )}
+      <div className="absolute top-2.5 left-2.5">
+        <AiBadge />
+      </div>
+      <span className="absolute bottom-2.5 left-2.5 rounded bg-black/50 px-2 py-0.5 text-[11px] text-zinc-200">
+        {AVATAR_LABELS[state]}
+      </span>
+    </div>
+  );
+}
+
+/** 素材缺失时的占位 (Sprint 6-1 原面板), 保住布局与 AI 标识。 */
+function PlaceholderFigure() {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
       <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center">
         <svg
           viewBox="0 0 24 24"
@@ -173,9 +260,6 @@ export function InterviewerPanel() {
         </svg>
       </div>
       <p className="text-xs text-zinc-500">面试官</p>
-      <div className="absolute top-2.5 left-2.5">
-        <AiBadge />
-      </div>
     </div>
   );
 }

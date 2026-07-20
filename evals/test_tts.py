@@ -191,5 +191,51 @@ class OrchestratorTurnAudioTests(_TtsEnvIsolatedCase):
         self.assertIsNone(get_turn_audio(self.session.session_id, "q1"))
 
 
+class FillerTextsTests(unittest.TestCase):
+    """Sprint 6-3: 过渡语音是固定文案 (可复现约束), 不走 LLM 生成。"""
+
+    def test_fixed_and_nonempty(self) -> None:
+        from src.orchestrator import FILLER_TEXTS
+        # 改数量必须同步 web/src/lib/api.ts 的 FILLER_COUNT
+        self.assertEqual(len(FILLER_TEXTS), 3)
+        for t in FILLER_TEXTS:
+            self.assertTrue(t.strip())
+
+
+@unittest.skipUnless(os.environ.get("REDIS_URL"), "需要 REDIS_URL 才能跑")
+class FillerAudioTests(_TtsEnvIsolatedCase):
+    """Sprint 6-3: get_filler_audio 的异常映射 + TTS 未配置直通。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from src import cache
+        from src.schemas import InterviewSession
+
+        self.session = InterviewSession(plan_id="p-filler-eval", job_id="j")
+        cache.save_session(self.session)
+
+    def tearDown(self) -> None:
+        from src import cache
+        cache.delete_session(self.session.session_id)
+        super().tearDown()
+
+    def test_session_not_found(self) -> None:
+        """无会话 -> 404; 不给无会话方当免费 TTS 用。"""
+        from src.orchestrator import SessionNotFound, get_filler_audio
+        with self.assertRaises(SessionNotFound):
+            get_filler_audio("不存在的-session", 0)
+
+    def test_idx_out_of_range(self) -> None:
+        from src.orchestrator import FILLER_TEXTS, TurnNotFound, get_filler_audio
+        with self.assertRaises(TurnNotFound):
+            get_filler_audio(self.session.session_id, -1)
+        with self.assertRaises(TurnNotFound):
+            get_filler_audio(self.session.session_id, len(FILLER_TEXTS))
+
+    def test_tts_unconfigured_returns_none(self) -> None:
+        from src.orchestrator import get_filler_audio
+        self.assertIsNone(get_filler_audio(self.session.session_id, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

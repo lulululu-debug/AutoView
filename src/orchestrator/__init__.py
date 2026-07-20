@@ -319,6 +319,31 @@ def get_turn_audio(session_id: str, ref_id: str) -> bytes | None:
     return tts.synthesize(turn.text)
 
 
+# Sprint 6-3: 思考间隙的过渡语音文案。提交回答后 Assessor + lazy project gen
+# 有 3-8s 空档, 前端播一句过渡语遮蔽沉默。
+# **固定文案, 不走 LLM 生成** —— 与「不做动态补题」同源的可复现约束;
+# tts 层按文本缓存, 每句只真实合成一次。改文案 = 新 cache key, 老条目 TTL 冲刷。
+FILLER_TEXTS: tuple[str, ...] = (
+    "嗯, 我了解了。",
+    "好的, 稍等, 我看一下。",
+    "明白了, 让我想一想。",
+)
+
+
+def get_filler_audio(session_id: str, idx: int) -> bytes | None:
+    """Sprint 6-3: 取第 idx 句过渡语音 (mp3)。
+
+    - session 不在 Redis -> SessionNotFound (不给无会话方当免费 TTS 用)
+    - idx 越界 -> TurnNotFound (API 层同 404)
+    - TTS 未配置 / 合成失败 -> None (API 层 204, 前端静默不播)
+    """
+    if cache.load_session(session_id) is None:
+        raise SessionNotFound(f"session {session_id} 不在 Redis 中")
+    if not 0 <= idx < len(FILLER_TEXTS):
+        raise TurnNotFound(f"filler idx={idx} 越界 (共 {len(FILLER_TEXTS)} 句)")
+    return tts.synthesize(FILLER_TEXTS[idx])
+
+
 def get_report(session_id: str) -> EvaluationReport:
     """获取面试报告。三态:
     - Redis 里仍在 + status=COMPLETED -> 调 finalize, 归档 PG, 清 Redis, 返报告

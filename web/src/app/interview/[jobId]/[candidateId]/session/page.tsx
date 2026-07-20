@@ -3,13 +3,20 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { ApiError, api, type InterviewPlan, type TurnResult } from "@/lib/api";
+import {
+  ApiError,
+  FILLER_COUNT,
+  api,
+  type InterviewPlan,
+  type TurnResult,
+} from "@/lib/api";
 import {
   AiBadge,
   ConsentGate,
   InterviewerPanel,
   SelfView,
   useCandidateMedia,
+  type AvatarState,
 } from "./media";
 
 /**
@@ -130,22 +137,70 @@ export default function SessionPage({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
 
-  /** 拉当前 turn 的 TTS 音频播放; 任何失败 (204/网络/自动播放拦截) 静默退文字。 */
-  const playPrompt = useCallback(async (sessionId: string, refId: string) => {
-    if (!avModeRef.current) return;
-    const blob = await api.fetchTurnAudio(sessionId, refId);
-    if (!blob) return;
-    // 停上一段 + 释放旧 object URL, 防叠音 / 内存泄漏
-    audioRef.current?.pause();
-    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-    const url = URL.createObjectURL(blob);
-    audioUrlRef.current = url;
-    const audio = new Audio(url);
-    audioRef.current = audio;
-    audio.play().catch(() => {
-      /* 浏览器自动播放策略拦截等: 静默, 文字仍在 */
-    });
+  // Sprint 6-3: avatar 三态状态机。talking=TTS 播报中, thinking=提交后空档,
+  // idle=聆听。状态只在这个组件里推, InterviewerPanel 纯展示。
+  const [avatarState, setAvatarState] = useState<AvatarState>("idle");
+
+  /** 播放一段音频 blob, 自动停旧段 + 释放旧 object URL (防叠音/泄漏)。 */
+  const playBlob = useCallback(
+    (blob: Blob, opts?: { onStart?: () => void; onEnd?: () => void }) => {
+      audioRef.current?.pause();
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => opts?.onEnd?.();
+      audio
+        .play()
+        .then(() => opts?.onStart?.())
+        .catch(() => {
+          /* 浏览器自动播放策略拦截等: 静默, 文字仍在 */
+        });
+    },
+    [],
+  );
+
+  /** 拉当前 turn 的 TTS 音频播报; 成功切 talking, 播完回 idle; 失败静默退文字。 */
+  const playPrompt = useCallback(
+    async (sessionId: string, refId: string) => {
+      if (!avModeRef.current) return;
+      const blob = await api.fetchTurnAudio(sessionId, refId);
+      if (!blob) {
+        setAvatarState("idle");
+        return;
+      }
+      playBlob(blob, {
+        onStart: () => setAvatarState("talking"),
+        onEnd: () => setAvatarState("idle"),
+      });
+    },
+    [playBlob],
+  );
+
+  // Sprint 6-3: 过渡语音。进面试后预取一次 (每句 ~几十 KB), 提交时按已答
+  // 题数轮换播放, 遮蔽 Assessor + lazy project gen 的 3-8s 思考空档。
+  const fillerBlobsRef = useRef<Blob[]>([]);
+  const prefetchFillers = useCallback(async (sessionId: string) => {
+    if (!avModeRef.current || fillerBlobsRef.current.length > 0) return;
+    const blobs = await Promise.all(
+      Array.from({ length: FILLER_COUNT }, (_, i) =>
+        api.fetchFillerAudio(sessionId, i),
+      ),
+    );
+    fillerBlobsRef.current = blobs.filter((b): b is Blob => b !== null);
   }, []);
+
+  /** 提交后播一句过渡语; avatar 停在 thinking (由 handleSubmit 设置)。 */
+  const playFiller = useCallback(
+    (turnIndex: number) => {
+      if (!avModeRef.current) return;
+      const pool = fillerBlobsRef.current;
+      if (pool.length === 0) return;
+      playBlob(pool[turnIndex % pool.length]);
+    },
+    [playBlob],
+  );
 
   // 卸载 (含跳 done 页): 停播 + 释放 object URL
   useEffect(() => {
@@ -203,10 +258,11 @@ export default function SessionPage({
           progress,
           answered_count: 0,
         });
-        // Sprint 6-2: 首题 / 恢复的当前题播报
+        // Sprint 6-2: 首题 / 恢复的当前题播报; 6-3: 顺手预取过渡语音
         if (turn.ref_id) {
           playPrompt(turn.session_id, turn.ref_id);
         }
+        prefetchFillers(turn.session_id);
       } catch (e) {
         if (cancelled) return;
         setState({ kind: "error", message: errMessage(e) });
@@ -217,7 +273,7 @@ export default function SessionPage({
     return () => {
       cancelled = true;
     };
-  }, [consented, jobId, candidateId, router, playPrompt]);
+  }, [consented, jobId, candidateId, router, playPrompt, prefetchFillers]);
 
   // 会话终态 (过期/出错) 不再需要摄像头和播报, 立刻释放免得红点常亮
   const stopMedia = media.stop;
@@ -263,6 +319,9 @@ export default function SessionPage({
       progress: prev.progress,
       answered_count: prev.answered_count,
     });
+    // Sprint 6-3: 思考态 + 过渡语音, 遮蔽 Assessor / lazy gen 空档
+    setAvatarState("thinking");
+    playFiller(prev.answered_count);
     try {
       const next = await api.submitAnswer(prev.turn.session_id, text);
       // 本题草稿用完了, 清掉
@@ -289,9 +348,11 @@ export default function SessionPage({
         progress: nextProgress,
         answered_count: prev.answered_count + 1,
       });
-      // Sprint 6-2: 新题 / 追问播报
+      // Sprint 6-2: 新题 / 追问播报 (playPrompt 内部管 avatar talking/idle)
       if (next.ref_id) {
         playPrompt(next.session_id, next.ref_id);
+      } else {
+        setAvatarState("idle");
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
@@ -333,7 +394,7 @@ export default function SessionPage({
             {mediaState.kind === "granted" && (
               <div className="flex gap-3 mb-4">
                 <div className="flex-1 min-w-0">
-                  <InterviewerPanel />
+                  <InterviewerPanel state={avatarState} />
                 </div>
                 <div className="w-36 sm:w-44 shrink-0 self-end rounded-lg overflow-hidden bg-black aspect-video border border-zinc-200 dark:border-zinc-800">
                   <SelfView stream={mediaState.stream} />

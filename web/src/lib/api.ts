@@ -450,6 +450,22 @@ export type ApproveBody = {
   role_family?: string;
 };
 
+/** Sprint 6-3: 过渡语音句数, 与后端 orchestrator.FILLER_TEXTS 保持同步。 */
+export const FILLER_COUNT = 3;
+
+/**
+ * Sprint 6-2/6-3: 拉 TTS 音频 Blob 的共用底座。
+ * 非 200 (204 未配置 / 404) 与网络错误一律 null —— 音频是增强不是依赖。
+ */
+async function fetchAudioBlob(path: string): Promise<Blob | null> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+    if (res.status !== 200) return null;
+    return await res.blob();
+  } catch {
+    return null;
+  }
+}
 
 export const api = {
   health: () => request<Health>("/health"),
@@ -507,21 +523,13 @@ export const api = {
    * 204 (TTS 未配置/合成失败)、404、网络错误一律返回 null ——
    * 音频是增强不是依赖, 调用方拿到 null 就静默退纯文字, 不打断面试。
    */
-  fetchTurnAudio: async (
-    sessionId: string,
-    refId: string,
-  ): Promise<Blob | null> => {
-    try {
-      const res = await fetch(
-        `${API_BASE}/interviews/${sessionId}/turns/${encodeURIComponent(refId)}/audio`,
-        { credentials: "include" },
-      );
-      if (res.status !== 200) return null;
-      return await res.blob();
-    } catch {
-      return null;
-    }
-  },
+  fetchTurnAudio: (sessionId: string, refId: string) =>
+    fetchAudioBlob(
+      `/interviews/${sessionId}/turns/${encodeURIComponent(refId)}/audio`,
+    ),
+  /** Sprint 6-3: 拉第 idx 句过渡语音 ("嗯, 我了解了" 等), 语义同上。 */
+  fetchFillerAudio: (sessionId: string, idx: number) =>
+    fetchAudioBlob(`/interviews/${sessionId}/fillers/${idx}/audio`),
   login: (username: string, password: string) =>
     request<LoginResponse>("/auth/login", {
       method: "POST",
