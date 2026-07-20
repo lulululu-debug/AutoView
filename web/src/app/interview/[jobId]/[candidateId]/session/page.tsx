@@ -7,6 +7,7 @@ import {
   ApiError,
   FILLER_COUNT,
   api,
+  transcribeWsUrl,
   type InterviewPlan,
   type TurnResult,
 } from "@/lib/api";
@@ -18,6 +19,7 @@ import {
   useCandidateMedia,
   type AvatarState,
 } from "./media";
+import { SpeechCapture } from "./stt";
 
 /**
  * 面试 Q&A 主界面:
@@ -25,6 +27,9 @@ import {
  *   拒绝授权 / getUserMedia 失败 → 降级纯文字面试, 流程不断
  * - TTS 播报 (Sprint 6-2): AV 模式下每个新 turn 拉 GET .../turns/{ref_id}/audio
  *   播放面试官语音; 204/失败/自动播放被拦一律静默, 文字永远是主路径
+ * - 语音作答 (Sprint 6-4): /media/config 探测 STT 后显示麦克风入口, 录音走
+ *   WS 转写, partial 实时预览, final 追加进 textarea 可编辑再提交 ——
+ *   文本框是唯一真相源, STT 挂了退打字
  * - 首次进入: POST /interviews 启动 session, session_id 写 localStorage
  * - 已有 localStorage: GET /interviews/{id} 中断恢复, 拉回当前待答提示
  * - 提交答案: POST /interviews/{id}/answers, 显示下一句; done=true 跳 /done
@@ -202,11 +207,25 @@ export default function SessionPage({
     [playBlob],
   );
 
-  // 卸载 (含跳 done 页): 停播 + 释放 object URL
+  // Sprint 6-4: 语音作答。sttEnabled 由 /media/config 探测, rec 是录音三态。
+  const [sttEnabled, setSttEnabled] = useState(false);
+  const [rec, setRec] = useState<"off" | "recording" | "finalizing">("off");
+  const [liveText, setLiveText] = useState("");
+  const captureRef = useRef<SpeechCapture | null>(null);
+
+  const teardownCapture = useCallback(() => {
+    captureRef.current?.dispose();
+    captureRef.current = null;
+    setRec("off");
+    setLiveText("");
+  }, []);
+
+  // 卸载 (含跳 done 页): 停播 + 释放 object URL + 拆录音管线
   useEffect(() => {
     return () => {
       audioRef.current?.pause();
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+      captureRef.current?.dispose();
     };
   }, []);
 
@@ -275,12 +294,16 @@ export default function SessionPage({
     };
   }, [consented, jobId, candidateId, router, playPrompt, prefetchFillers]);
 
-  // 会话终态 (过期/出错) 不再需要摄像头和播报, 立刻释放免得红点常亮
+  // 会话终态 (过期/出错) 不再需要摄像头、播报和录音, 立刻释放免得红点常亮。
+  // 只做资源释放不 setState (react-hooks/set-state-in-effect):
+  // 终态下答题 UI 已不渲染, rec/liveText 留旧值无害。
   const stopMedia = media.stop;
   useEffect(() => {
     if (state.kind === "expired" || state.kind === "error") {
       stopMedia();
       audioRef.current?.pause();
+      captureRef.current?.dispose();
+      captureRef.current = null;
     }
   }, [state.kind, stopMedia]);
 
@@ -288,12 +311,67 @@ export default function SessionPage({
     if (withMedia) {
       const ok = await media.request();
       avModeRef.current = ok;
-      if (!ok) {
+      if (ok) {
+        // Sprint 6-4: 探测部署是否配了 STT, 决定麦克风入口显隐
+        api
+          .getMediaConfig()
+          .then((c) => setSttEnabled(c.stt_enabled))
+          .catch(() => {});
+      } else {
         setMediaNotice("未获得摄像头/麦克风权限, 已切换为纯文字作答");
       }
     }
     setState({ kind: "starting" });
     setConsented(true);
+  }
+
+  // ---- Sprint 6-4: 录音 -> 转写 -> 落 textarea ----
+
+  async function startRecording() {
+    if (state.kind !== "answering" || mediaState.kind !== "granted") return;
+    if (captureRef.current) return;
+    const sc = new SpeechCapture();
+    captureRef.current = sc;
+    setRec("recording");
+    setLiveText("");
+    const sessionId = state.turn.session_id;
+    const refId = state.turn.ref_id;
+    try {
+      await sc.start(mediaState.stream, transcribeWsUrl(sessionId), {
+        onPartial: (t) => setLiveText(t),
+        onFinal: (t) => appendTranscript(t, sessionId, refId),
+        onDone: () => teardownCapture(),
+        onError: () => {
+          teardownCapture();
+          setMediaNotice("语音转写暂不可用, 请打字作答");
+        },
+      });
+    } catch {
+      teardownCapture();
+      setMediaNotice("语音转写暂不可用, 请打字作答");
+    }
+  }
+
+  function stopRecording() {
+    if (!captureRef.current) return;
+    setRec("finalizing");
+    captureRef.current.finish();
+  }
+
+  /** final 转写追加进答案 (换行分隔), 同步草稿; 候选人可继续编辑再提交。 */
+  function appendTranscript(
+    text: string,
+    sessionId: string,
+    refId: string | null,
+  ) {
+    const t = text.trim();
+    setLiveText("");
+    if (!t) return;
+    setAnswer((prev) => {
+      const next = prev ? `${prev}\n${t}` : t;
+      if (refId) writeDraft(sessionId, refId, next);
+      return next;
+    });
   }
 
   function handleAnswerChange(ev: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -424,6 +502,19 @@ export default function SessionPage({
               </p>
             </div>
 
+            {/* Sprint 6-4: 录音实时转写预览 (final 后并入 textarea) */}
+            {rec !== "off" && (
+              <div className="mb-4 rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-zinc-900 px-3 py-2">
+                <p className="flex items-center gap-1.5 text-xs text-zinc-500 mb-1">
+                  <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  {rec === "recording" ? "正在聆听..." : "转写定稿中..."}
+                </p>
+                <p className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line min-h-5">
+                  {liveText || " "}
+                </p>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-3">
               <textarea
                 value={answer}
@@ -438,20 +529,40 @@ export default function SessionPage({
                 <p className="text-xs text-zinc-500">
                   {answer.length} 字 · 答得越具体, AI 越能跟着深挖
                 </p>
-                <button
-                  type="submit"
-                  disabled={
-                    state.kind === "submitting" ||
-                    answer.trim().length < MIN_ANSWER_CHARS
-                  }
-                  className="rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black px-5 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 shrink-0"
-                >
-                  {state.kind === "submitting"
-                    ? isNextTurnLazyProject(state.plan, state.turn.ref_id)
-                      ? "分析中... (评估 + 准备项目题, 约 5-8 秒)"
-                      : "分析中... (评估回答)"
-                    : "提交回答"}
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Sprint 6-4: STT 配了 + 摄像头模式才显示麦克风入口 */}
+                  {sttEnabled && mediaState.kind === "granted" && (
+                    <button
+                      type="button"
+                      onClick={rec === "off" ? startRecording : stopRecording}
+                      disabled={
+                        state.kind === "submitting" || rec === "finalizing"
+                      }
+                      className="rounded-md border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      {rec === "off"
+                        ? "语音回答"
+                        : rec === "recording"
+                          ? "说完了"
+                          : "转写中..."}
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={
+                      state.kind === "submitting" ||
+                      rec !== "off" ||
+                      answer.trim().length < MIN_ANSWER_CHARS
+                    }
+                    className="rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black px-5 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                  >
+                    {state.kind === "submitting"
+                      ? isNextTurnLazyProject(state.plan, state.turn.ref_id)
+                        ? "分析中... (评估 + 准备项目题, 约 5-8 秒)"
+                        : "分析中... (评估回答)"
+                      : "提交回答"}
+                  </button>
+                </div>
               </div>
             </form>
           </>

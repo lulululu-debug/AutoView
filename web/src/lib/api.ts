@@ -453,6 +453,17 @@ export type ApproveBody = {
 /** Sprint 6-3: 过渡语音句数, 与后端 orchestrator.FILLER_TEXTS 保持同步。 */
 export const FILLER_COUNT = 3;
 
+/** Sprint 6-4: GET /media/config —— 部署级媒体能力开关。 */
+export type MediaConfig = {
+  stt_enabled: boolean;
+  tts_enabled: boolean;
+};
+
+/** Sprint 6-4: 语音转写 WS 端点 (http(s) → ws(s) 同源换协议)。 */
+export function transcribeWsUrl(sessionId: string): string {
+  return `${API_BASE.replace(/^http/, "ws")}/interviews/${sessionId}/transcribe`;
+}
+
 /**
  * Sprint 6-2/6-3: 拉 TTS 音频 Blob 的共用底座。
  * 非 200 (204 未配置 / 404) 与网络错误一律 null —— 音频是增强不是依赖。
@@ -530,6 +541,8 @@ export const api = {
   /** Sprint 6-3: 拉第 idx 句过渡语音 ("嗯, 我了解了" 等), 语义同上。 */
   fetchFillerAudio: (sessionId: string, idx: number) =>
     fetchAudioBlob(`/interviews/${sessionId}/fillers/${idx}/audio`),
+  /** Sprint 6-4: 媒体能力探测; 失败按全关处理 (调用方 catch)。 */
+  getMediaConfig: () => request<MediaConfig>("/media/config"),
   login: (username: string, password: string) =>
     request<LoginResponse>("/auth/login", {
       method: "POST",

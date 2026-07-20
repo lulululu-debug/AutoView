@@ -40,6 +40,23 @@ _VOLC_DEFAULT_VOICE = "BV700_streaming"          # 灿灿, 通用中文女声
 _AZURE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"    # 晓晓, 通用中文女声
 
 
+def is_configured() -> bool:
+    """前端 media config 探测用 (Sprint 6-4): 当前部署能否合成语音。
+    只查配置齐不齐, 不打厂商 API —— 配置齐但厂商挂了仍由 synthesize
+    的 None 回退兜住。"""
+    provider = os.environ.get("TTS_PROVIDER", "").strip().lower()
+    if provider == "volc":
+        return bool(
+            os.environ.get("VOLC_TTS_APPID") and os.environ.get("VOLC_TTS_TOKEN")
+        )
+    if provider == "azure":
+        return bool(
+            os.environ.get("AZURE_SPEECH_KEY")
+            and os.environ.get("AZURE_SPEECH_REGION")
+        )
+    return False
+
+
 def synthesize(text: str) -> bytes | None:
     """把面试官文本合成为 mp3 音频。透明 Redis 缓存。
 
