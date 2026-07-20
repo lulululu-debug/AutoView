@@ -4,9 +4,18 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError, api, type InterviewPlan, type TurnResult } from "@/lib/api";
+import {
+  AiBadge,
+  ConsentGate,
+  InterviewerPanel,
+  SelfView,
+  useCandidateMedia,
+} from "./media";
 
 /**
  * 面试 Q&A 主界面:
+ * - Consent 门 (Sprint 6-1): 进面试前先过知情同意, 选择开摄像头或仅文字;
+ *   拒绝授权 / getUserMedia 失败 → 降级纯文字面试, 流程不断
  * - 首次进入: POST /interviews 启动 session, session_id 写 localStorage
  * - 已有 localStorage: GET /interviews/{id} 中断恢复, 拉回当前待答提示
  * - 提交答案: POST /interviews/{id}/answers, 显示下一句; done=true 跳 /done
@@ -31,6 +40,7 @@ type Progress = {
 };
 
 type State =
+  | { kind: "consent" }
   | { kind: "starting" }
   | {
       kind: "answering";
@@ -104,10 +114,16 @@ export default function SessionPage({
 }) {
   const { jobId, candidateId } = use(params);
   const router = useRouter();
-  const [state, setState] = useState<State>({ kind: "starting" });
+  const [state, setState] = useState<State>({ kind: "consent" });
   const [answer, setAnswer] = useState("");
+  // Sprint 6-1: consent 门过了才 init; 媒体授权失败降级纯文字并提示
+  const [consented, setConsented] = useState(false);
+  const [mediaNotice, setMediaNotice] = useState<string | null>(null);
+  const media = useCandidateMedia();
+  const mediaState = media.state;
 
   useEffect(() => {
+    if (!consented) return;
     let cancelled = false;
 
     async function init() {
@@ -164,7 +180,26 @@ export default function SessionPage({
     return () => {
       cancelled = true;
     };
-  }, [jobId, candidateId, router]);
+  }, [consented, jobId, candidateId, router]);
+
+  // 会话终态 (过期/出错) 不再需要摄像头, 立刻释放免得红点常亮
+  const stopMedia = media.stop;
+  useEffect(() => {
+    if (state.kind === "expired" || state.kind === "error") {
+      stopMedia();
+    }
+  }, [state.kind, stopMedia]);
+
+  async function handleConsent(withMedia: boolean) {
+    if (withMedia) {
+      const ok = await media.request();
+      if (!ok) {
+        setMediaNotice("未获得摄像头/麦克风权限, 已切换为纯文字作答");
+      }
+    }
+    setState({ kind: "starting" });
+    setConsented(true);
+  }
 
   function handleAnswerChange(ev: React.ChangeEvent<HTMLTextAreaElement>) {
     const val = ev.target.value;
@@ -227,7 +262,19 @@ export default function SessionPage({
 
   return (
     <main className="min-h-screen flex items-start justify-center bg-zinc-50 dark:bg-black p-4 sm:p-6">
-      <div className="w-full max-w-2xl mt-8 sm:mt-12 mb-12">
+      <div
+        className={`w-full mt-8 sm:mt-12 mb-12 ${
+          mediaState.kind === "granted" ? "max-w-3xl" : "max-w-2xl"
+        }`}
+      >
+        {state.kind === "consent" && (
+          <ConsentGate
+            requesting={mediaState.kind === "requesting"}
+            onAccept={() => handleConsent(true)}
+            onTextOnly={() => handleConsent(false)}
+          />
+        )}
+
         {state.kind === "starting" && (
           <p className="text-zinc-500 text-center mt-20">进入面试中...</p>
         )}
@@ -239,9 +286,29 @@ export default function SessionPage({
               answered={state.answered_count}
             />
 
+            {/* Sprint 6-1 三区布局: 面试官区 + 自拍 PiP (开摄像头时) */}
+            {mediaState.kind === "granted" && (
+              <div className="flex gap-3 mb-4">
+                <div className="flex-1 min-w-0">
+                  <InterviewerPanel />
+                </div>
+                <div className="w-36 sm:w-44 shrink-0 self-end rounded-lg overflow-hidden bg-black aspect-video border border-zinc-200 dark:border-zinc-800">
+                  <SelfView stream={mediaState.stream} />
+                </div>
+              </div>
+            )}
+
+            {mediaNotice && (
+              <p className="mb-4 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-900 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                {mediaNotice}
+              </p>
+            )}
+
             <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 sm:p-6 mb-4">
               <div className="flex items-center gap-2 mb-2">
                 <p className="text-xs text-zinc-500">面试官</p>
+                {/* 纯文字模式没有面试官区, AI 标识挂在题目卡片上 */}
+                {mediaState.kind !== "granted" && <AiBadge />}
                 {state.progress.is_followup && (
                   <span className="text-xs px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300">
                     追问
