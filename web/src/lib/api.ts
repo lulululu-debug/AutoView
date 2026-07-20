@@ -453,10 +453,11 @@ export type ApproveBody = {
 /** Sprint 6-3: 过渡语音句数, 与后端 orchestrator.FILLER_TEXTS 保持同步。 */
 export const FILLER_COUNT = 3;
 
-/** Sprint 6-4: GET /media/config —— 部署级媒体能力开关。 */
+/** Sprint 6-4/6-5: GET /media/config —— 部署级媒体能力开关。 */
 export type MediaConfig = {
   stt_enabled: boolean;
   tts_enabled: boolean;
+  recording_enabled: boolean;
 };
 
 /** Sprint 6-4: 语音转写 WS 端点 (http(s) → ws(s) 同源换协议)。 */
@@ -543,6 +544,25 @@ export const api = {
     fetchAudioBlob(`/interviews/${sessionId}/fillers/${idx}/audio`),
   /** Sprint 6-4: 媒体能力探测; 失败按全关处理 (调用方 catch)。 */
   getMediaConfig: () => request<MediaConfig>("/media/config"),
+  /**
+   * Sprint 6-5: 上传一个录像分片。返回是否成功 —— 失败由 RecordingUploader
+   * 停止整条录制 (保住已上传前缀是合法 webm), 不打断面试。
+   */
+  uploadRecordingChunk: async (
+    sessionId: string,
+    chunk: Blob,
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/interviews/${sessionId}/recordings`, {
+        method: "POST",
+        body: chunk,
+        credentials: "include",
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
   login: (username: string, password: string) =>
     request<LoginResponse>("/auth/login", {
       method: "POST",

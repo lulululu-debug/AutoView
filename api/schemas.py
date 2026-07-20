@@ -240,8 +240,10 @@ class ApproveDraftRequest(BaseModel):
 
 
 class MediaConfig(BaseModel):
-    """GET /media/config (Sprint 6-4): 部署级媒体能力探测。
-    前端据此决定显示麦克风入口 (stt) / 是否拉 turn 音频 (tts)。
+    """GET /media/config (Sprint 6-4/6-5): 部署级媒体能力探测。
+    前端据此决定显示麦克风入口 (stt) / 是否拉 turn 音频 (tts) /
+    是否启动 MediaRecorder 录制 (recording) + consent 文案说"会不会录"。
     只反映配置, 不保证厂商可用 —— 运行期失败仍由各自的降级路径兜住。"""
     stt_enabled: bool
     tts_enabled: bool
+    recording_enabled: bool

@@ -24,15 +24,18 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, WebSocket
+from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import Response
 
 from api.schemas import AnswerSubmit, InterviewStart
-from src import cache, db, orchestrator, stt
+from src import cache, db, media_store, orchestrator, stt
 from src.schemas import EvaluationReport, TurnResult
 from src.tts import AUDIO_MIME
 
 log = logging.getLogger(__name__)
+
+# 单个录像分片上限。前端 5s 一片 @ ~650kbps ≈ 400KB, 20MB 是宽裕的防滥用线
+_MAX_RECORDING_CHUNK_BYTES = 20 * 1024 * 1024
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 
@@ -213,6 +216,37 @@ def get_filler_audio(session_id: str, idx: int) -> Response:
         media_type=AUDIO_MIME,
         headers={"Cache-Control": "private, max-age=604800"},
     )
+
+
+@router.post("/{session_id}/recordings", status_code=204)
+async def upload_recording_chunk(session_id: str, request: Request) -> None:
+    """Sprint 6-5: 追加一个录像分片 (MediaRecorder webm)。**只录不判**。
+
+    - 204: 落盘成功 (分片按序拼接, 顺序由前端串行上传链保证)
+    - 404: session 不在 Redis (面试结束后不再收流)
+    - 409: 录制存储未配置 (前端 /media/config 探测后不该走到这)
+    - 413: 单片超限 (防滥用)
+
+    录像仅作 HR 复核素材; 任何打分/分析消费都属 Sprint 7 且受 §7 约束。
+    """
+    if not media_store.is_configured():
+        raise HTTPException(status_code=409, detail="录制存储未配置")
+
+    try:
+        session = cache.load_session(session_id)
+    except Exception:
+        session = None
+    if session is None:
+        raise HTTPException(status_code=404, detail="面试会话不存在或已结束")
+
+    chunk = await request.body()
+    if len(chunk) > _MAX_RECORDING_CHUNK_BYTES:
+        raise HTTPException(status_code=413, detail="录像分片过大")
+
+    try:
+        media_store.append_chunk(session_id, chunk)
+    except media_store.InvalidSessionId:
+        raise HTTPException(status_code=404, detail="面试会话不存在或已结束")
 
 
 @router.post("/{session_id}/finalize", status_code=204)

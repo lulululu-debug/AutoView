@@ -9,6 +9,7 @@ import {
   api,
   transcribeWsUrl,
   type InterviewPlan,
+  type MediaConfig,
   type TurnResult,
 } from "@/lib/api";
 import {
@@ -19,6 +20,7 @@ import {
   useCandidateMedia,
   type AvatarState,
 } from "./media";
+import { RecordingUploader } from "./recorder";
 import { SpeechCapture } from "./stt";
 
 /**
@@ -207,8 +209,25 @@ export default function SessionPage({
     [playBlob],
   );
 
-  // Sprint 6-4: 语音作答。sttEnabled 由 /media/config 探测, rec 是录音三态。
-  const [sttEnabled, setSttEnabled] = useState(false);
+  // Sprint 6-4/6-5: 部署级媒体能力, 页面挂载即探测 (consent 文案要用
+  // "会不会录制"); 失败保持 null = 全关, 打字路径永远可用。
+  const [mediaCfg, setMediaCfg] = useState<MediaConfig | null>(null);
+  const sttEnabled = mediaCfg?.stt_enabled ?? false;
+  const recordingEnabled = mediaCfg?.recording_enabled ?? false;
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getMediaConfig()
+      .then((c) => {
+        if (!cancelled) setMediaCfg(c);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Sprint 6-4: 语音作答录音三态。
   const [rec, setRec] = useState<"off" | "recording" | "finalizing">("off");
   const [liveText, setLiveText] = useState("");
   const captureRef = useRef<SpeechCapture | null>(null);
@@ -220,12 +239,25 @@ export default function SessionPage({
     setLiveText("");
   }, []);
 
-  // 卸载 (含跳 done 页): 停播 + 释放 object URL + 拆录音管线
+  // Sprint 6-5: AV 模式 + 存储配了 + 面试进行中 -> 启动录制归档 (只录不判)。
+  // MediaRecorder 是外部系统, effect 只做同步, 不 setState。
+  const recorderRef = useRef<RecordingUploader | null>(null);
+  useEffect(() => {
+    if (!recordingEnabled || mediaState.kind !== "granted") return;
+    if (state.kind !== "answering" && state.kind !== "submitting") return;
+    if (recorderRef.current) return;
+    const r = new RecordingUploader();
+    recorderRef.current = r;
+    r.start(mediaState.stream, state.turn.session_id);
+  }, [recordingEnabled, mediaState, state]);
+
+  // 卸载 (含跳 done 页): 停播 + 释放 object URL + 拆录音/录制管线
   useEffect(() => {
     return () => {
       audioRef.current?.pause();
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
       captureRef.current?.dispose();
+      recorderRef.current?.stop();
     };
   }, []);
 
@@ -304,6 +336,8 @@ export default function SessionPage({
       audioRef.current?.pause();
       captureRef.current?.dispose();
       captureRef.current = null;
+      recorderRef.current?.stop();
+      recorderRef.current = null;
     }
   }, [state.kind, stopMedia]);
 
@@ -311,13 +345,7 @@ export default function SessionPage({
     if (withMedia) {
       const ok = await media.request();
       avModeRef.current = ok;
-      if (ok) {
-        // Sprint 6-4: 探测部署是否配了 STT, 决定麦克风入口显隐
-        api
-          .getMediaConfig()
-          .then((c) => setSttEnabled(c.stt_enabled))
-          .catch(() => {});
-      } else {
+      if (!ok) {
         setMediaNotice("未获得摄像头/麦克风权限, 已切换为纯文字作答");
       }
     }
@@ -452,6 +480,7 @@ export default function SessionPage({
         {state.kind === "consent" && (
           <ConsentGate
             requesting={mediaState.kind === "requesting"}
+            recordingEnabled={recordingEnabled}
             onAccept={() => handleConsent(true)}
             onTextOnly={() => handleConsent(false)}
           />

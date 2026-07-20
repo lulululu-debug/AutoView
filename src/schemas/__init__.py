@@ -56,6 +56,10 @@ class JobContext(BaseModel):
                                              # 推荐取值: backend / frontend / data_science / product / hr
                                              # (schema 不限制字符串, 未列出的走 backend fallback 配比)
     track: Track = Track.LATERAL             # Sprint 5.5: 校招 / 社招; 老 Job 缺这列默认 lateral
+    # Sprint H: 出题来源。"rag"(默认) = 题库召回 + LLM 精修 (现有流程);
+    # "llm_direct" = 跳过题库, 按考察维度 + 简历技能纯 LLM 出题 (rubric+few-shot)。
+    # 两套并存互不影响; 项目深挖题两模式共用同一套 (本就是 LLM 直接生成)。
+    question_source: str = "rag"
     # Sprint 5.7: HR 可在新建 job 高级折叠区覆盖默认 policy;
     # None 表示用 stage 默认 / schema 默认值, 让 HR 不动也能用。
     followup_policy: "FollowUpPolicy | None" = None
@@ -64,6 +68,27 @@ class JobContext(BaseModel):
     # 空列表时 Planner 用 role_family 默认模板; 非空时 HR 配置生效。
     # Assessor 在每 turn 看着这个列表标 covered_aspects, 整轮算 richness。
     aspects: list[ProfileAspect] = []
+
+
+class ResumeSection(BaseModel):
+    """简历语义分段 —— Sprint F。
+    text 必须是 resume 原文的连续子串 (LLM 只定位边界, 不改写内容 ——
+    简历是候选人原始材料, 改写/漏抄都破坏保真与公平)。
+    列表顺序 = 文档顺序; project/internship/work 段是项目深挖题的出题单元。
+    source 记切分来源作审计: llm_anchor / heuristic / whole_text。"""
+    type: str = "other"      # 合法值见 RESUME_SECTION_TYPES
+    title: str = ""          # 段标题, 如 "智能法律咨询系统"; 进 PlanTrace 给 HR 看
+    text: str
+    source: str = "heuristic"
+
+
+# ResumeSection.type 的合法值; 分段器与 evals 共用
+RESUME_SECTION_TYPES = (
+    "personal_info", "education", "project", "internship",
+    "work", "skills", "award", "other",
+)
+# 可用于项目深挖出题的段类型
+RESUME_DEEPDIVE_TYPES = ("project", "internship", "work")
 
 
 class CandidateProfile(BaseModel):
@@ -77,6 +102,7 @@ class CandidateProfile(BaseModel):
     job_id: str | None = None                # 关联职位; API 落库时必填, 见 db.save_candidate
     resume: str                              # Resume 原文(后期可结构化解析)
     projects: list[str] = []                 # 已识别的项目/实习要点(可由 resume 解析填充)
+    sections: list[ResumeSection] = []       # Sprint F: 语义分段, ingest 后台回填
 
 
 # ---------- 面试计划 ----------
@@ -170,17 +196,58 @@ class InterviewRound(BaseModel):
     stage: InterviewStage = InterviewStage.KNOWLEDGE
 
 
+class QuestionTrace(BaseModel):
+    """单题的出题过程记录 —— Sprint E 可观测性。
+    path 取值:
+    - self_intro         固定模板
+    - rag_refined        题库召回 + LLM 精修
+    - rag_direct         题库召回, LLM stub 直接用种子原文
+    - llm_generated      题库无(未用过的)题, 纯 LLM 现场生成
+    - fallback_template  LLM 也不可用, 硬编码模板
+    - lazy_pending       project 占位, 等 resolve
+    - resume_section     (resolve 后) 简历语义分段, 单 section 定向深挖 (Sprint F)
+    - resume_rag         (resolve 后) Resume 切片 RAG + LLM 生成
+    - resume_llm         (resolve 后) 无切片, resume 全文 + LLM 生成
+    """
+    question_id: str
+    stage: InterviewStage
+    category: QuestionCategory
+    path: str
+    topic: str | None = None          # knowledge tech slot 的 topic 分配
+    difficulty: str | None = None     # 同上
+    source_question_id: str | None = None
+    source_chunk_ids: list[str] = []  # project 题命中的 resume 切片
+    section_title: str | None = None  # Sprint F: resume_section 路径针对的段标题
+
+
+class PlanTrace(BaseModel):
+    """plan 生成全过程的审计记录 —— Sprint E 可观测性。
+    与 plan 一起落 PG/Redis, 只在 HR 端展示 (候选人端 plan 接口必须剥掉)。
+    matches 保留 query → topics 的逐条明细, matched_topics 是并集。"""
+    aspect_queries: list[str] = []
+    extracted_skills: list[str] = []
+    matches: dict[str, list[str]] = {}
+    matched_topics: list[str] = []
+    unmatched_skills: list[str] = []
+    # Sprint E: 这些 skill 是 embedding 没够着、由 LLM 兜底归类命中的
+    llm_matched_skills: list[str] = []
+    questions: list[QuestionTrace] = []
+
+
 class InterviewPlan(BaseModel):
     """Planner 的输出, Interviewer 的依据。
     Sprint 5.5: 加 competencies 顶层作权威 competency 列表 (跨 stage 共享);
     round.competencies 仍保留为该 stage 涉及的子集 (用于 HR stage 视图展示),
     但 Evaluator / 聚合一律走 plan.competencies。
     老 Plan JSON 缺 competencies 时默认 [], Evaluator 会得到空 content_scores ——
-    实际触发是 5.5 之后新生成的 plan, 老 plan 走完 finalize 不重跑就无影响。"""
+    实际触发是 5.5 之后新生成的 plan, 老 plan 走完 finalize 不重跑就无影响。
+    Sprint E: trace 记录出题全过程 (topic 匹配明细 + 每题来源路径), 老 plan
+    为 None; 候选人端接口返回前必须置 None 防泄漏。"""
     plan_id: str = Field(default_factory=_new_id)
     job_id: str
     rounds: list[InterviewRound]
     competencies: list[Competency] = []
+    trace: PlanTrace | None = None
 
 
 # ---------- 面试过程 ----------
@@ -340,7 +407,11 @@ class InterviewSession(BaseModel):
 
     Sprint 5.6 起加 assessments: 每答一题, Assessor (启用时) 跑一次产出一条
     AnswerAssessment 追加进来。Redis 热存随 session 走; PG 列 + HR UI 留 5.7。
-    ASSESSOR_ENABLED=false 时本列表恒空。"""
+    ASSESSOR_ENABLED=false 时本列表恒空。
+
+    Sprint 6-5 起加 media_ref: 面试录像归档引用 (本地路径 / 未来对象存储 URI)。
+    finalize 时单点写入 (避免与 submit_answer 竞争 Redis 读改写), 仅作 HR
+    复核素材溯源 —— **绝不**被任何打分路径消费 (§7 只录不判)。"""
     session_id: str = Field(default_factory=_new_id)
     plan_id: str
     job_id: str
@@ -350,6 +421,7 @@ class InterviewSession(BaseModel):
     answers: list[CandidateAnswer] = []
     intro_text: str = ""
     assessments: list[AnswerAssessment] = []
+    media_ref: str | None = None
 
 
 # ---------- 多模态信号(扩展, 骨架恒空) ----------
@@ -445,8 +517,16 @@ class SeedQuestion(BaseModel):
     role_family: str                         # "backend" / "frontend" / "data_science" / ...
     competency: str                          # "技术深度" / "沟通协作" / ...
     text: str
-    source: str = "llm_generated"            # llm_generated / fallback_template / human_curated
+    source: str = "llm_generated"            # llm_generated / fallback_template / human_curated / reviewed_llm_derived
     category: QuestionCategory = QuestionCategory.KNOWLEDGE
+    # Sprint C: 知识库审核后入库的题源信息。Milvus 副本不带这些字段, 因为
+    # pymilvus 不支持 ALTER (改要 drop+reseed 现有题库); Planner 召回不变,
+    # 这些字段仅在 PG 用于审计 / 多 dataset 撞车时的离线分析。
+    dataset_id: str = "default"              # 数据集隔离 (javaguide-basis-smoke / ...)
+    source_draft_id: str | None = None       # 反查 QuestionDraft, 审计 prompt 演进
+    key_points: list[str] = []               # 评分要点 (Sprint F+ Evaluator 可用)
+    difficulty: str = ""                     # easy / medium / hard (审核题继承自 draft)
+    qtype: str = ""                          # concept / compare / scenario / followup
 
 
 class TurnResult(BaseModel):
@@ -481,3 +561,99 @@ class EvaluationReport(BaseModel):
     rag_context_chunk_ids: list[str] = []
     # Sprint 5.7: 每维度证据充分性, key=competency_id value ∈ [0, 1]
     competency_coverage: dict[str, float] = {}
+
+
+# ---------- Sprint A 知识库: L1 chunk 层 (反向出题的底座) ----------
+
+class KnowledgeChunk(BaseModel):
+    """通用 md 知识库切片 —— Sprint A 起。
+    HR 上传的 md 文档 (JavaGuide / 前端资料 / 内部 wiki) 经 ingest_md_corpus
+    脚本切分后落进 knowledge_chunks 表, 是 L1 知识层。L2 SeedQuestion 由它
+    LLM 反向派生 (Sprint B), 中间表 question_chunk_link 关联回此处。
+
+    chunk_id 用 sha256(text)[:16]: 跨文件 / 跨 dataset 同内容 = 同 id, 天然
+    去重; 但 dataset_id 不进 PK, 同 chunk 在两个 dataset 都出现时按后写覆盖
+    (sprint A smoke test 不会触发, sprint E 真去重时再改 PK 策略)。
+
+    切分策略 (探查 docs/java/basis 后定): 切到 H3 叶子标题, H4 内容算进所属
+    H3 chunk; heading_path 是 ["H2", "H3"] 两层。
+    is_starred 提取作者用 ⭐️ 标的精选题, 给 Sprint B 反向出题优先级用。"""
+    chunk_id: str
+    source_repo: str                 # "javaguide" / "frontend-wiki" / ...
+    source_commit: str               # 固定 commit, 可复现
+    dataset_id: str = "default"      # Planner 召回隔离 (Sprint E 接入)
+    file_path: str                   # 相对 root 的 posix 路径
+    doc_title: str = ""              # frontmatter.title; 空表示无 frontmatter
+    doc_tags: list[str] = []         # frontmatter.tag, 扁平 list
+    domain: str = ""                 # file_path 第一段, e.g. "java"
+    topic: str = ""                  # file_path 第二段, e.g. "basis"
+    heading_path: list[str] = []     # ["基础概念与常识", "⭐️ JVM vs JDK vs JRE"]
+    is_starred: bool = False         # 叶子 heading 以 "⭐️" 起 (作者精选)
+    text: str
+    char_count: int = 0              # 抽样统计用
+    content_hash: str                # 全 sha256(text), 增量更新比对
+    quality_tag: str = "ok"          # ok / navigation / low_value / oversize
+
+
+class SkillBacklog(BaseModel):
+    """Sprint B+D: 候选人 resume 抽出的 skill 没匹配上任何 dataset.topic 时, 落表。
+    HR 后续用 SQL 看 backlog 决定要不要专门 ingest 新 dataset (扩库)。
+
+    幂等键 sha256(skill)[:16]: 同 skill 重复落只一行, count 字段记累计被多少候选人提到。
+    候选人 / job 上下文存最后一次出现的 (用于审计), 真正的频次看 count。"""
+    skill_id: str                    # sha256(normalized skill)[:16]
+    skill: str                       # 原文 (大小写保持)
+    count: int = 1                   # 累计次数, upsert 时 +=1
+    last_job_id: str = ""            # 最后一次出现的 job 上下文
+    last_candidate_id: str = ""      # 同上
+
+
+class Dataset(BaseModel):
+    """数据集元数据 —— Sprint D-lite。
+    一个 dataset_id 一行, 记录人写的 topic (e.g. "JAVA 基础") + 源信息。
+
+    与 KnowledgeChunk/QuestionDraft/SeedQuestion 的 dataset_id 一一对应。
+    HR ingest md 时先 upsert 这条, 再灌 chunk; 召回路径可按 topic / difficulty
+    过滤 (Milvus 同字段同步).
+
+    Sprint upload: 加 category 让 HR 选 dataset 整批是 knowledge 还是 scenario,
+    决定 derive 用哪套 prompt + SeedQuestion 落库时 category 一并继承。
+    project_experience / self_intro 不开放 HR 选 (前者用 resume RAG 现场生成,
+    后者固定文本)."""
+    dataset_id: str                  # 主键, e.g. "javaguide-basis-smoke"
+    topic: str                       # HR 写的主题词, e.g. "JAVA 基础"
+    description: str = ""            # 可选: 数据集详情/备注
+    source_repo: str = ""            # 通常等于 ingest 的 --source-name
+    source_commit: str = ""          # ingest 时固定的 git commit (可复现)
+    category: str = "knowledge"      # knowledge / scenario (面试阶段类型, 与 qtype 正交)
+
+
+class DerivedQuestion(BaseModel):
+    """LLM 反向出题单题结构 —— Sprint B 中间产物, 不入库。
+    derive_chunk() 调 LLM, 解析 JSON 后产出 list[DerivedQuestion],
+    CLI 再拼上 chunk_id / dataset_id / prompt_version 落进 QuestionDraft。"""
+    question_text: str
+    qtype: str                       # concept / compare / scenario / followup
+    difficulty: str                  # easy / medium / hard
+    key_points: list[str] = []       # 评分要点 3-5 条, Evaluator 后续可用
+
+
+class QuestionDraft(BaseModel):
+    """L2 题库待审核条目 —— Sprint B 起。
+    审核流: derive 写入 (status=pending) → HR 审核 (Sprint C) → approved 的
+    INSERT 进 seed_questions 留 source_draft_id 溯源, rejected 留底不入题库。
+
+    draft_id = sha256(chunk_id + prompt_version + question_text)[:16]
+    保证: 同 chunk 同 prompt 同题文本只入一条; 改 prompt 重跑会得到不同
+    draft_id (即便题文本巧合相同) 便于审计 prompt 演进。"""
+    draft_id: str
+    chunk_id: str                    # 派生源 chunk; Sprint E 真去重前一对多关系
+    dataset_id: str                  # 跟 chunk 的 dataset_id 一致, 按 dataset 跑/筛
+    question_text: str
+    qtype: str
+    difficulty: str
+    key_points: list[str] = []
+    prompt_version: str              # sha256(system_prompt + category)[:8], 改 prompt 或 category 自动失效
+    llm_model: str                   # 实际调用的模型名 (gpt-4o-mini / ...)
+    review_status: str = "pending"   # pending / approved / rejected
+    category: str = "knowledge"      # 继承自 Dataset.category, approve 时透传到 SeedQuestion
