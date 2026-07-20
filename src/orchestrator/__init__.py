@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 
-from src import cache, db
+from src import cache, db, tts
 
 log = logging.getLogger(__name__)
 from src.agents import analyzer, assessor, evaluator, interviewer, planner
@@ -52,6 +52,10 @@ class SessionNotFound(LookupError):
 
 class SessionInvalidState(RuntimeError):
     """会话状态不允许当前操作, 比如对已 COMPLETED 的会话再 submit_answer。"""
+
+
+class TurnNotFound(LookupError):
+    """ref_id 不是当前会话的任何面试官 turn (Sprint 6-2 音频端点用)。"""
 
 
 def _assessor_enabled() -> bool:
@@ -286,6 +290,33 @@ def resume_session(session_id: str) -> TurnResult:
     return TurnResult(
         session_id=session_id, done=False, prompt=last.text, ref_id=last.ref_id,
     )
+
+
+def get_turn_audio(session_id: str, ref_id: str) -> bytes | None:
+    """Sprint 6-2: 取某个面试官 turn 的 TTS 音频 (mp3)。
+
+    - session 不在 Redis -> SessionNotFound (已 finalize 的会话没有播报语义)
+    - ref_id 不是本会话的任何面试官 turn -> TurnNotFound
+    - TTS 未配置 / 合成失败 -> None (API 层映射 204, 前端静默退纯文字)
+
+    幂等: tts.synthesize 内置按 (text, provider, voice) 的 Redis 缓存,
+    同一 ref_id 重复请求 (刷新 / 中断恢复) 命中缓存, 不重复打厂商 API。
+    """
+    session = cache.load_session(session_id)
+    if session is None:
+        raise SessionNotFound(f"session {session_id} 不在 Redis 中")
+
+    turn = next(
+        (
+            t for t in session.history
+            if t.role == TurnRole.INTERVIEWER and t.ref_id == ref_id
+        ),
+        None,
+    )
+    if turn is None:
+        raise TurnNotFound(f"session {session_id} 无 ref_id={ref_id} 的面试官 turn")
+
+    return tts.synthesize(turn.text)
 
 
 def get_report(session_id: str) -> EvaluationReport:
