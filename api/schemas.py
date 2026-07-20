@@ -39,6 +39,11 @@ class JobCreate(BaseModel):
         default="backend",
         description="岗位族; 决定 (track, role_family) 配比 + aspect 模板",
     )
+    # Sprint H: 出题来源。rag(默认) = 题库召回+精修; llm_direct = 纯 LLM 出题。
+    question_source: Literal["rag", "llm_direct"] = Field(
+        default="rag",
+        description="出题来源: rag 题库召回+精修 / llm_direct 纯 LLM 按维度+技能出题",
+    )
     # Sprint 5.7 高级折叠区配置; 用 dict 接, src.schemas.FollowUpPolicy /
     # CompletionPolicy 在 JobContext 构造时校验, 让 api/schemas 不重复声明字段。
     followup_policy: dict | None = Field(
@@ -57,13 +62,29 @@ class JobCreate(BaseModel):
     )
 
 
+class ResumeSectionIn(BaseModel):
+    """简历语义分段 (API 边界版, Sprint F Phase 2)。
+    与 src.schemas.ResumeSection 同形但独立定义: source 不接受客户端传
+    (server 端强制标 user_confirmed), 见本文件头"为什么不直接复用"。"""
+    type: str = Field(default="other", max_length=32)
+    title: str = Field(default="", max_length=80)
+    text: str = Field(..., min_length=1)
+
+
 class CandidateCreate(BaseModel):
     """POST /jobs/{job_id}/candidates 请求体。
-    job_id 走 path param, candidate_id 由 server 生成, 都不在 body 里。"""
+    job_id 走 path param, candidate_id 由 server 生成, 都不在 body 里。
+    Sprint F Phase 2: sections 可选 —— 前端把 parse-resume 返回的分段给
+    候选人确认/编辑后原样提交; 提交了 sections 则后台跳过重新分段
+    (候选人确认的结果优先于机器切分)。不传 = 旧纯文本流程。"""
     resume: str = Field(..., min_length=1, description="Resume 原文")
     projects: list[str] = Field(
         default_factory=list,
         description="已识别的项目/实习要点(可由 resume 解析填充)",
+    )
+    sections: list[ResumeSectionIn] = Field(
+        default_factory=list,
+        description="候选人确认后的简历语义分段 (可选)",
     )
 
 
@@ -75,11 +96,24 @@ class CandidateCreated(BaseModel):
     plan_pending: bool = True
 
 
+class ResumeSectionOut(BaseModel):
+    """parse-resume 返回的单个分段 (Sprint F Phase 2)。
+    source 透传给前端作提示 (llm_anchor 切的可提示"AI 分段, 请检查";
+    whole_text 表示没切出来, 前端退纯文本编辑)。"""
+    type: str
+    title: str
+    text: str
+    source: str
+
+
 class ParsedResume(BaseModel):
     """POST /jobs/{job_id}/candidates/parse-resume 响应 (Sprint 5.8)。
     parsed_text 是用户后续可编辑的字符串, 由前端填回 textarea, 再走旧
-    POST .../candidates {resume: text} 提交。"""
+    POST .../candidates {resume: text} 提交。
+    Sprint F Phase 2: 同时返回 sections 分段, 前端渲染成分段编辑器让
+    候选人确认; 老前端忽略该字段零成本兼容。"""
     parsed_text: str
+    sections: list[ResumeSectionOut] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):
@@ -123,6 +157,15 @@ class CandidateWithStatus(BaseModel):
     created_at: datetime
 
 
+class ResumeChunk(BaseModel):
+    """GET /hr/candidates/{cid}/resume-chunks 单个切片 —— Sprint E 出题过程视图。
+    project 题的 source_chunk_ids 指向这里的 document_id, HR 可对照看
+    「哪段简历内容催生了哪道深挖题」。"""
+    document_id: str
+    chunk_index: int
+    text: str
+
+
 class ReviewSubmit(BaseModel):
     """PATCH /hr/reports/{id}/review 请求体。
     reviewer_id 由 server 从 JWT 取, 客户端不传; record_id 也由 server 生成。"""
@@ -141,3 +184,64 @@ class InterviewStart(BaseModel):
 class AnswerSubmit(BaseModel):
     """POST /interviews/{session_id}/answers 请求体。"""
     text: str = Field(..., min_length=1, description="候选人回答原文")
+
+
+# ---------- Admin: 知识库审核 (Sprint C) ----------
+
+class DatasetSummary(BaseModel):
+    """GET /admin/datasets 单条目。"""
+    dataset_id: str
+    n_chunks: int
+    n_pending: int
+    n_approved: int
+    n_rejected: int
+    n_seed: int
+    # Sprint D-lite: datasets 元数据 (LEFT JOIN, 老数据缺元数据时为空串)
+    topic: str = ""
+    description: str = ""
+    source_repo: str = ""
+    source_commit: str = ""
+    # Sprint upload: knowledge / scenario
+    category: str = "knowledge"
+
+
+class ChunkWithDraftStats(BaseModel):
+    """GET /admin/datasets/{ds}/chunks 单条目。审核入口列表。"""
+    chunk_id: str
+    file_path: str
+    heading_path: list[str]
+    quality_tag: str
+    is_starred: bool
+    char_count: int
+    n_pending: int
+    n_approved: int
+    n_rejected: int
+
+
+class ChunkWithDraftsResponse(BaseModel):
+    """GET /admin/chunks/{cid}/drafts: chunk 上下文 + 该 chunk 全部 drafts。
+    chunk / drafts 类型直接用 src.schemas 的领域模型, FastAPI 自动序列化。"""
+    chunk: dict     # KnowledgeChunk
+    drafts: list[dict]  # list[QuestionDraft]
+
+
+class EditDraftRequest(BaseModel):
+    """PATCH /admin/drafts/{did} 请求体; None 字段不动。"""
+    question_text: str | None = None
+    key_points: list[str] | None = None
+
+
+class ApproveDraftRequest(BaseModel):
+    """POST /admin/drafts/{did}/approve / POST /admin/chunks/{cid}/bulk-approve.
+    competency_id 必填; role_family 默认 backend (JavaGuide 全是 backend, 其他
+    数据集 HR UI 应主动传)."""
+    competency_id: Literal["comp:tech", "comp:comm"]
+    role_family: str = "backend"
+
+
+class MediaConfig(BaseModel):
+    """GET /media/config (Sprint 6-4): 部署级媒体能力探测。
+    前端据此决定显示麦克风入口 (stt) / 是否拉 turn 音频 (tts)。
+    只反映配置, 不保证厂商可用 —— 运行期失败仍由各自的降级路径兜住。"""
+    stt_enabled: bool
+    tts_enabled: bool

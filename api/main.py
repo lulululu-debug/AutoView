@@ -32,11 +32,14 @@ if not logging.getLogger().handlers:
     )
 
 from api.exceptions import register_handlers
+from api.routes import admin_drafts as admin_drafts_routes
+from api.routes import admin_upload as admin_upload_routes
 from api.routes import auth as auth_routes
 from api.routes import candidates as candidates_routes
 from api.routes import hr as hr_routes
 from api.routes import interviews as interviews_routes
 from api.routes import jobs as jobs_routes
+from api.routes import media as media_routes
 
 API_TITLE = "AI Interview Platform API"
 API_VERSION = "0.0.1"
@@ -69,7 +72,10 @@ def create_app() -> FastAPI:
     app.include_router(jobs_routes.router)
     app.include_router(candidates_routes.router)
     app.include_router(interviews_routes.router)
+    app.include_router(media_routes.router)
     app.include_router(hr_routes.router)
+    app.include_router(admin_drafts_routes.router)
+    app.include_router(admin_upload_routes.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:

@@ -20,13 +20,19 @@ POST /interviews 只收 candidate_id:
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+import json
+import logging
+
+from fastapi import APIRouter, HTTPException, WebSocket
 from fastapi.responses import Response
 
 from api.schemas import AnswerSubmit, InterviewStart
-from src import db, orchestrator
+from src import cache, db, orchestrator, stt
 from src.schemas import EvaluationReport, TurnResult
 from src.tts import AUDIO_MIME
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 
@@ -71,6 +77,101 @@ def resume_interview(session_id: str) -> TurnResult:
     """中断恢复 / 查询: 返当前待答提示, 或 done=True。
     SessionNotFound -> 404。"""
     return orchestrator.resume_session(session_id)
+
+
+@router.websocket("/{session_id}/transcribe")
+async def transcribe(ws: WebSocket, session_id: str) -> None:
+    """Sprint 6-4: 语音转写 WS 代理。厂商 key 不出后端, 前端只连本端点。
+
+    协议 (与 web session/stt.ts 共同遵守):
+    - client -> server: 二进制帧 = PCM 16bit LE 16kHz mono 分片;
+      文本帧 {"type":"finish"} = 说完了, 触发厂商定稿
+    - server -> client: {"type":"partial","text":累计全文}
+                        {"type":"final","text":累计全文}
+                        {"type":"done"} / {"type":"error","message":...}
+    - 关闭码: 4404 session 不存在, 4503 STT 未配置
+
+    任何厂商侧异常都翻译成 error 消息 + 关连接, 前端退打字 —— 打字永远保底。
+    """
+    await ws.accept()
+
+    # session 校验, 同 audio 端点: 不给无会话方白嫖 ASR
+    try:
+        session = cache.load_session(session_id)
+    except Exception:
+        session = None
+    if session is None:
+        await ws.send_json({"type": "error", "message": "面试会话不存在或已结束"})
+        await ws.close(code=4404)
+        return
+
+    stream = await stt.create_stream()
+    if stream is None:
+        await ws.send_json({"type": "error", "message": "语音转写未配置"})
+        await ws.close(code=4503)
+        return
+
+    async def pump_client() -> None:
+        """浏览器 -> 厂商: 转发音频分片; finish 信号触发定稿。"""
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                return
+            chunk = msg.get("bytes")
+            if chunk:
+                await stream.send_audio(chunk)
+                continue
+            text = msg.get("text")
+            if not text:
+                continue
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                continue
+            if parsed.get("type") == "finish":
+                await stream.finish()
+
+    async def pump_vendor() -> None:
+        """厂商 -> 浏览器: 转发转写事件; final 后补 done 收尾。"""
+        while True:
+            ev = await stream.receive()
+            if ev is None:
+                return
+            payload: dict = {"type": ev.kind}
+            if ev.kind in ("partial", "final"):
+                payload["text"] = ev.text
+            if ev.kind == "error":
+                payload["message"] = ev.message
+            await ws.send_json(payload)
+            if ev.kind in ("done", "error"):
+                return
+            if ev.kind == "final":
+                await ws.send_json({"type": "done"})
+                return
+
+    async def _safe(coro) -> None:
+        # 断连 / 厂商异常都走这里静默收尾; 主链路 (打字提交) 不受影响
+        try:
+            await coro
+        except Exception:
+            log.debug("transcribe pump 提前结束", exc_info=True)
+
+    try:
+        tasks = {
+            asyncio.create_task(_safe(pump_client())),
+            asyncio.create_task(_safe(pump_vendor())),
+        }
+        _done, pending = await asyncio.wait(
+            tasks, return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+    finally:
+        await stream.close()
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 @router.get("/{session_id}/turns/{ref_id}/audio")
