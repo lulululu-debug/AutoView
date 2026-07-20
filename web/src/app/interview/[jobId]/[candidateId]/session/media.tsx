@@ -88,10 +88,13 @@ function mediaErrMessage(e: unknown): string {
 
 export function ConsentGate({
   requesting,
+  recordingEnabled,
   onAccept,
   onTextOnly,
 }: {
   requesting: boolean;
+  /** Sprint 6-5: 部署配了录制存储才说"将被录制", 没配就明说不录 —— 文案必须与实际行为一致 */
+  recordingEnabled: boolean;
   onAccept: () => void;
   onTextOnly: () => void;
 }) {
@@ -104,16 +107,26 @@ export function ConsentGate({
       </p>
       <ul className="space-y-3 text-sm text-zinc-700 dark:text-zinc-300 mb-6 list-disc pl-5">
         <li>面试官的形象与语音为 AI 合成 (虚拟形象, 非真人)。</li>
-        <li>
-          开启摄像头与麦克风后, 面试过程的音视频可能被录制,
-          仅用于招聘评估与 HR 人工复核。
-        </li>
+        {recordingEnabled ? (
+          <>
+            <li>
+              开启摄像头与麦克风后, 面试过程的音视频<strong>将被录制</strong>,
+              仅用于招聘评估与 HR 人工复核。
+            </li>
+            <li>
+              录制内容最长保留 {RETENTION_DAYS} 天,
+              招聘流程结束后按留存策略删除。
+            </li>
+          </>
+        ) : (
+          <li>
+            本次面试<strong>不会录制</strong>音视频;
+            摄像头画面仅用于面试过程实时展示。
+          </li>
+        )}
         <li>
           视频画面<strong>不参与自动评分</strong>,
           系统不会仅凭表情、眼神等信号自动淘汰候选人。
-        </li>
-        <li>
-          录制内容最长保留 {RETENTION_DAYS} 天, 招聘流程结束后按留存策略删除。
         </li>
         <li>
           你也可以选择「仅文字作答」, 不开启摄像头与麦克风,

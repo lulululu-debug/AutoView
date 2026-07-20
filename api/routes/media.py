@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from api.schemas import MediaConfig
-from src import stt, tts
+from src import media_store, stt, tts
 
 router = APIRouter(prefix="/media", tags=["media"])
 
@@ -23,4 +23,5 @@ def media_config() -> MediaConfig:
     return MediaConfig(
         stt_enabled=stt.is_configured(),
         tts_enabled=tts.is_configured(),
+        recording_enabled=media_store.is_configured(),
     )

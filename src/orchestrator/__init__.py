@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 
-from src import cache, db, tts
+from src import cache, db, media_store, tts
 
 log = logging.getLogger(__name__)
 from src.agents import analyzer, assessor, evaluator, interviewer, planner
@@ -383,6 +383,13 @@ def finalize(session_id: str) -> EvaluationReport:
     # 允许在尚未走完所有题目时由调用方决定提前结束
     if session.status != SessionStatus.COMPLETED:
         session.status = SessionStatus.COMPLETED
+
+    # Sprint 6-5: 有录像就把归档引用挂上。只在 finalize 这个单点写
+    # (每片 chunk 都写会与 submit_answer 竞争 Redis 读改写)。
+    # 只是溯源引用 —— evaluator/analyzer 不消费录像内容 (§7 只录不判)。
+    ref = media_store.media_ref(session_id)
+    if ref:
+        session.media_ref = ref
 
     signals = analyzer.analyze(session)
     # Sprint 5.7: 让 Evaluator 看到 job.completion_policy 决定 evidence_insufficient

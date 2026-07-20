@@ -114,6 +114,23 @@ class SeedQuestionORM(Base):
         default="knowledge", server_default="knowledge",
         index=True,
     )
+    # Sprint C: 审核入库时填; 老 seed 行 ALTER 加列时拿默认值。
+    dataset_id: Mapped[str] = mapped_column(
+        String(64), nullable=False,
+        default="default", server_default="default", index=True,
+    )
+    source_draft_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True,
+    )
+    key_points: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+    )
+    difficulty: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="", server_default="",
+    )
+    qtype: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default="",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -133,6 +150,12 @@ class JobORM(Base):
     company_materials: Mapped[str] = mapped_column(String, nullable=False, default="")
     track: Mapped[str] = mapped_column(
         String(16), nullable=False, default="lateral", server_default="lateral",
+    )
+    # Sprint H: 出题来源 rag(默认) | llm_direct。已有库需手动补列:
+    #   ALTER TABLE jobs ADD COLUMN IF NOT EXISTS question_source
+    #   VARCHAR(16) NOT NULL DEFAULT 'rag';
+    question_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="rag", server_default="rag",
     )
     # Sprint 5.7: HR 在高级折叠区配置的覆盖策略; NULL = 用默认 (stage 默认 /
     # CompletionPolicy schema 默认), 老 Job 缺这列也是 NULL 自然兼容。
@@ -171,6 +194,13 @@ class CandidateORM(Base):
     )
     resume: Mapped[str] = mapped_column(String, nullable=False)
     projects: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Sprint F: 简历语义分段 (list[ResumeSection] 的 JSON), ingest 后台回填。
+    # 已有库需手动补列 (无 Alembic 约定):
+    #   ALTER TABLE candidates ADD COLUMN IF NOT EXISTS sections JSONB
+    #   NOT NULL DEFAULT '[]'::jsonb;
+    sections: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -234,6 +264,9 @@ class InterviewSessionORM(Base):
     assessments: Mapped[list] = mapped_column(
         JSONB, nullable=False, default=list, server_default="[]",
     )
+    # Sprint 6-5: 录像归档引用 (本地路径 / 未来对象存储 URI), finalize 时写入。
+    # 只作 HR 复核素材溯源, 不被打分路径消费 (§7)。nullable, 旧行天然 NULL。
+    media_ref: Mapped[str | None] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -287,3 +320,147 @@ class EvaluationReportORM(Base):
     )
 
     session: Mapped[InterviewSessionORM] = relationship(back_populates="report")
+
+
+class SkillBacklogORM(Base):
+    """Sprint B+D: resume 抽出的 skill 没匹配上 dataset.topic 时落表。
+    HR 可基于此判断要不要专门 ingest 新 dataset (扩库)。
+
+    skill_id = sha256(skill_lower)[:16] 让重复落同一行, 用 count 累计;
+    last_job_id / last_candidate_id 只存最后一次出现 (审计用, 频次看 count)."""
+    __tablename__ = "skill_backlog"
+
+    skill_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    skill: Mapped[str] = mapped_column(String(128), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_job_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_candidate_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class DatasetORM(Base):
+    """数据集元数据 (Sprint D-lite). 一行 = 一个 dataset_id 的"名片".
+
+    没用 FK 反向约束 KnowledgeChunk/QuestionDraft/SeedQuestion 的 dataset_id:
+    历史数据 (ingest 前的老 seed) 可能 dataset_id 在 datasets 表里没有,
+    硬 FK 会拒绝写入. 现行是软关联, list_datasets_summary 走 join 兜底
+    null topic."""
+    __tablename__ = "datasets"
+
+    dataset_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    topic: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    description: Mapped[str] = mapped_column(String, nullable=False, default="")
+    source_repo: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    source_commit: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # Sprint upload: HR 选 dataset 整批 category; 派生题继承到 draft → seed → Milvus
+    category: Mapped[str] = mapped_column(
+        String(32), nullable=False,
+        default="knowledge", server_default="knowledge", index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class KnowledgeChunkORM(Base):
+    """L1 知识切片表 (Sprint A)。HR 上传 md 后 ingest_md_corpus 写入。
+
+    与 SeedQuestionORM 的关系: 这里是知识的"底座 / 真理之源", SeedQuestion 是
+    从此派生 (Sprint B 反向出题) 的题; 后续 question_chunk_link 表做 N:M 关联。
+
+    与 vector_store COLLECTION_KNOWLEDGE 的关系: 暂未建立 (Sprint A 不入向量库),
+    Sprint 1c 起 PG 是真理之源, Milvus 仅检索副本, 关系同 SeedQuestion。
+
+    主键 chunk_id = sha256(text)[:16], 跨 dataset 同内容同 id; dataset_id 留作
+    隔离过滤字段, 不进 PK (Sprint E 真去重时再决定要不要复合 PK)。
+    """
+    __tablename__ = "knowledge_chunks"
+
+    chunk_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_repo: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_commit: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="default",
+        server_default="default", index=True,
+    )
+    file_path: Mapped[str] = mapped_column(String, nullable=False)
+    doc_title: Mapped[str] = mapped_column(String, nullable=False, default="")
+    doc_tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    domain: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True,
+    )
+    topic: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True,
+    )
+    heading_path: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    text: Mapped[str] = mapped_column(String, nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    quality_tag: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ok",
+        server_default="ok", index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class QuestionDraftORM(Base):
+    """L2 题库待审核条目 (Sprint B)。LLM 反向出题落表, 审核通过后转 SeedQuestion。
+
+    chunk_id 走 FK + ondelete=RESTRICT, 与项目其他 FK 一致 (不允许静默级联),
+    重新 ingest 时要先 truncate drafts 再 truncate chunks; 但 chunk_id 是
+    sha256 内容 hash, 重跑 ingest 同内容仍是同 chunk_id, 实操不会触发删除。
+
+    review_status 用字符串而不是枚举: SA 枚举跨方言行为不稳, 字符串 + index
+    + 应用层校验更省事。
+    """
+    __tablename__ = "question_drafts"
+
+    draft_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("knowledge_chunks.chunk_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    dataset_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True,
+    )
+    question_text: Mapped[str] = mapped_column(String, nullable=False)
+    qtype: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    difficulty: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    key_points: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    prompt_version: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    llm_model: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending",
+        server_default="pending", index=True,
+    )
+    # Sprint upload: 继承自 Dataset.category, approve 时透传 SeedQuestion
+    category: Mapped[str] = mapped_column(
+        String(32), nullable=False,
+        default="knowledge", server_default="knowledge", index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
