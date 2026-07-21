@@ -1,16 +1,21 @@
-"""Resume 文件解析 —— Sprint 5.8。
+"""Resume 文件解析 —— Sprint 5.8 (+ Sprint G 图片 OCR)。
 
 定位:
-- 把 PDF / docx 文件二进制解析成纯文本, 交给候选人编辑后走旧 JSON 端点。
-- 无副作用 (不写库 / 不调 LLM), 纯字节计算; 端点 / eval 都能直接用。
-- 任何拒绝路径 (大小 / mime / 解析后过短) 一律抛 ResumeParseError, 上游
-  api 路由映射成 422 + detail 给用户。
+- 把 PDF / docx / 图片文件二进制解析成纯文本, 交给候选人编辑后走旧 JSON 端点。
+- PDF/docx 分支无副作用 (纯字节计算); 图片分支走 vision OCR (唯一的 LLM
+  调用路径, Sprint G 起)。
+- 任何拒绝路径 (大小 / mime / 解析后过短 / OCR 不可用) 一律抛 ResumeParseError,
+  上游 api 路由映射成 422 + detail 给用户。
 
-设计取舍 (per Sprint 5.8 design point a, b, c):
+设计取舍:
 - 库: pypdf (PDF) + python-docx (docx)。Resume 多单列纯文本, pdfplumber 的
   表格 / 多列优势用不上, 多依赖反而引 image 链路更重。
+- 图片 (Sprint G): png/jpeg/webp 没文字层, 走 OpenAI vision (gpt-4o-mini)
+  OCR。视觉模型能看懂排版, 比"扫描件 PDF 拍平文本"更准; 未配 key 时 vision
+  返 stub, 本模块检测到就拒并提示贴文本。图片原图会发给 OpenAI (与文本简历
+  出题同一数据流)。
 - 校验: 5MB 上限远高于真实简历; mime + ext 双判防 mime 欺骗; 解析后文本
-  < MIN_TEXT_CHARS 当作"扫描件图片 PDF 没文字层", 直接拒, 让用户立刻贴文本。
+  < MIN_TEXT_CHARS 当作"扫描件图片 PDF 没文字层 / OCR 失败", 直接拒。
 - 解析后做轻 normalize (合并空白行 / strip 行尾), 让前端 textarea 看着干净。
 """
 from __future__ import annotations
@@ -21,15 +26,33 @@ import re
 from docx import Document  # python-docx
 from pypdf import PdfReader
 
+from src import llm
+
 MAX_BYTES = 5 * 1024 * 1024              # 5 MB
-MIN_TEXT_CHARS = 100                     # 解析后最少字数, 防扫描件图片 PDF
+MIN_TEXT_CHARS = 100                     # 解析后最少字数, 防扫描件图片 PDF / OCR 失败
 
 _PDF_MIME = "application/pdf"
 _DOCX_MIME = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+# Sprint G: 图片 mime → 允许的扩展名 (gpt-4o vision 支持 png/jpeg/webp/非动 gif)
+_IMAGE_MIMES: dict[str, tuple[str, ...]] = {
+    "image/png": (".png",),
+    "image/jpeg": (".jpg", ".jpeg"),
+    "image/webp": (".webp",),
+}
 _PDF_EXTS = (".pdf",)
 _DOCX_EXTS = (".docx",)
+
+_OCR_TIMEOUT = 60.0        # 图片处理比纯文本慢, 给足; 前端有 loading 态
+_OCR_SYSTEM = (
+    "你是简历 OCR 工具。把图片里的简历内容完整、逐行转成纯文本, "
+    "保留原始信息与顺序 (姓名、联系方式、教育经历、项目/实习/工作经历、"
+    "技能、获奖等全部保留)。"
+    "只输出简历文本本身: 不要任何解释, 不要 markdown 代码块包裹, "
+    "绝不补充图片里没有的内容。"
+)
+_OCR_USER = "请把这张简历图片的内容转成纯文本。"
 
 
 class ResumeParseError(ValueError):
@@ -51,47 +74,66 @@ def parse_resume(*, filename: str, mime: str, blob: bytes) -> str:
             f"文件超过 {MAX_BYTES // 1024 // 1024}MB 上限"
         )
 
-    kind = _classify(filename, mime)
+    kind, mime_norm = _classify(filename, mime)
     try:
         if kind == "pdf":
             text = _parse_pdf(blob)
         elif kind == "docx":
             text = _parse_docx(blob)
+        elif kind == "image":
+            text = _ocr_image(blob, mime_norm)
         else:  # 防御性, 实际 _classify 不会返其他值
             raise ResumeParseError("不支持的文件类型")
     except ResumeParseError:
         raise
     except Exception as e:
-        # pypdf.PdfReadError / docx.opc 异常等统一吞成 ResumeParseError,
-        # 不向上抛底层栈, 候选人看到友好消息。
+        # pypdf.PdfReadError / docx.opc / openai 网络异常等统一吞成
+        # ResumeParseError, 不向上抛底层栈, 候选人看到友好消息。
         raise ResumeParseError(f"解析失败: {type(e).__name__}") from e
 
     text = _normalize(text)
     if len(text) < MIN_TEXT_CHARS:
         raise ResumeParseError(
             f"解析后文本仅 {len(text)} 字符 (< {MIN_TEXT_CHARS}); "
-            "可能是扫描件 PDF 或排版图片化, 请直接粘贴文本"
+            "可能是扫描件 PDF、图片过于模糊或排版图片化, 请直接粘贴文本"
         )
     return text
 
 
-def _classify(filename: str, mime: str) -> str:
+def _classify(filename: str, mime: str) -> tuple[str, str]:
     """按 mime 和 extension 双判, 二者必须指向同一类型 (防 mime 欺骗 +
-    防扩展名欺骗)。返回 'pdf' | 'docx'。"""
+    防扩展名欺骗)。返回 (kind, mime) —— kind ∈ 'pdf'|'docx'|'image'。"""
     name = filename.lower()
-    ext_is_pdf = name.endswith(_PDF_EXTS)
-    ext_is_docx = name.endswith(_DOCX_EXTS)
 
-    if mime == _PDF_MIME and ext_is_pdf:
-        return "pdf"
-    if mime == _DOCX_MIME and ext_is_docx:
-        return "docx"
+    if mime == _PDF_MIME and name.endswith(_PDF_EXTS):
+        return "pdf", mime
+    if mime == _DOCX_MIME and name.endswith(_DOCX_EXTS):
+        return "docx", mime
+    # Sprint G: 图片 mime + 对应扩展名匹配
+    exts = _IMAGE_MIMES.get(mime)
+    if exts and name.endswith(exts):
+        return "image", mime
 
-    # 任一不匹配, 拒绝。错误消息把两个都列出来, 用户能立刻看出问题。
+    # 任一不匹配, 拒绝。错误消息把支持的类型列出来, 用户能立刻看出问题。
     raise ResumeParseError(
         f"文件类型不被支持: filename={filename!r} mime={mime!r}; "
-        "仅接受 PDF (.pdf) 和 docx (.docx)"
+        "仅接受 PDF (.pdf)、docx (.docx) 和图片 (.png/.jpg/.webp)"
     )
+
+
+def _ocr_image(blob: bytes, mime: str) -> str:
+    """图片简历 → vision OCR → 纯文本 (Sprint G)。
+    未配 vision (返 stub) / 空输出 → 抛 ResumeParseError, 让用户改贴文本。
+    vision 网络异常由上层 parse_resume 的 except 兜成友好错误。"""
+    text = llm.complete_vision(
+        _OCR_SYSTEM, _OCR_USER, [(mime, blob)], timeout=_OCR_TIMEOUT,
+    )
+    if not text or llm.is_stub(text):
+        raise ResumeParseError(
+            "图片识别当前不可用 (未配置视觉模型); "
+            "请上传 PDF / docx, 或直接粘贴简历文本"
+        )
+    return text
 
 
 def _parse_pdf(blob: bytes) -> str:

@@ -25,10 +25,16 @@ from src.ingestion.pipeline import (
     ingest_jd,
     ingest_resume,
 )
+from src.ingestion.resume_sections import (
+    normalize_confirmed_sections,
+    segment_resume,
+)
 
 __all__ = [
     "chunk_text",
     "ingest_company_material",
     "ingest_jd",
     "ingest_resume",
+    "normalize_confirmed_sections",
+    "segment_resume",
 ]
