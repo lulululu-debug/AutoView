@@ -77,6 +77,35 @@ def _apply_incremental_migrations(engine: Engine) -> None:
         'ALTER TABLE evaluation_reports '
         'ADD COLUMN IF NOT EXISTS rag_context_chunk_ids JSONB '
         "NOT NULL DEFAULT '[]'::jsonb",
+        # Sprint C: SeedQuestion 加 5 字段记录知识库审核入库来源
+        "ALTER TABLE seed_questions "
+        "ADD COLUMN IF NOT EXISTS dataset_id VARCHAR(64) "
+        "NOT NULL DEFAULT 'default'",
+        "ALTER TABLE seed_questions "
+        "ADD COLUMN IF NOT EXISTS source_draft_id VARCHAR(64)",
+        "ALTER TABLE seed_questions "
+        "ADD COLUMN IF NOT EXISTS key_points JSONB "
+        "NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE seed_questions "
+        "ADD COLUMN IF NOT EXISTS difficulty VARCHAR(16) "
+        "NOT NULL DEFAULT ''",
+        "ALTER TABLE seed_questions "
+        "ADD COLUMN IF NOT EXISTS qtype VARCHAR(32) "
+        "NOT NULL DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_seed_questions_dataset_id "
+        "ON seed_questions (dataset_id)",
+        "CREATE INDEX IF NOT EXISTS ix_seed_questions_source_draft_id "
+        "ON seed_questions (source_draft_id)",
+        # Sprint upload: Dataset / QuestionDraft 加 category, 老 dataset 全部
+        # 落 knowledge (跟现有 javaguide-* 数据保持一致, 不影响召回)
+        "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS category "
+        "VARCHAR(32) NOT NULL DEFAULT 'knowledge'",
+        "ALTER TABLE question_drafts ADD COLUMN IF NOT EXISTS category "
+        "VARCHAR(32) NOT NULL DEFAULT 'knowledge'",
+        "CREATE INDEX IF NOT EXISTS ix_datasets_category "
+        "ON datasets (category)",
+        "CREATE INDEX IF NOT EXISTS ix_question_drafts_category "
+        "ON question_drafts (category)",
     ]
     with engine.connect() as conn:
         for sql in statements:

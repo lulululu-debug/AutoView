@@ -158,5 +158,133 @@ class InterviewPlanRoundTripTests(unittest.TestCase):
             save_plan(self.plan, candidate_id="ghost-cand-" + uuid.uuid4().hex[:8])
 
 
+class ComposeQuestionTopicTests(unittest.TestCase):
+    """compose_question_topic 纯函数: 写入端与匹配候选端共用的构造规则。"""
+
+    def test_both_present_makes_composite(self):
+        from src.db import compose_question_topic
+        self.assertEqual(
+            compose_question_topic("basis", "JAVA 基础"), "JAVA 基础/basis",
+        )
+
+    def test_chunk_only_and_dataset_only(self):
+        from src.db import compose_question_topic
+        self.assertEqual(compose_question_topic("basis", ""), "basis")
+        self.assertEqual(compose_question_topic("", "系统设计"), "系统设计")
+        self.assertEqual(compose_question_topic("", ""), "")
+
+    def test_whitespace_treated_as_empty(self):
+        from src.db import compose_question_topic
+        self.assertEqual(compose_question_topic("  ", "系统设计"), "系统设计")
+
+
+@unittest.skipUnless(_has_postgres(), "需要 POSTGRES_URL")
+class QuestionTopicLineageTests(unittest.TestCase):
+    """Sprint E: chunk 级 topic 谱系查询 —— seed.source_draft_id → draft →
+    chunk.topic, 以及匹配候选列表 list_question_topics 的复合规则。"""
+
+    _DS = "eval-topic-lineage"
+
+    @classmethod
+    def setUpClass(cls):
+        from src.db import (
+            init_db, upsert_dataset, upsert_knowledge_chunks,
+            upsert_question_drafts, save_seed_question,
+        )
+        from src.schemas import (
+            Dataset, KnowledgeChunk, QuestionDraft, SeedQuestion,
+        )
+        init_db()
+        cls._cleanup()
+        upsert_dataset(Dataset(dataset_id=cls._DS, topic="测试主题"))
+        upsert_knowledge_chunks([KnowledgeChunk(
+            chunk_id="eval-tl-chunk-1",
+            source_repo="eval-repo",
+            source_commit="deadbeef",
+            dataset_id=cls._DS,
+            file_path="java/concurrency/x.md",
+            domain="java",
+            topic="concurrency",
+            text="chunk 正文" * 10,
+            char_count=50,
+            content_hash="h1",
+        )])
+        upsert_question_drafts([QuestionDraft(
+            draft_id="eval-tl-draft-1",
+            chunk_id="eval-tl-chunk-1",
+            dataset_id=cls._DS,
+            question_text="问一道并发题?",
+            qtype="concept",
+            difficulty="easy",
+            prompt_version="pv1",
+            llm_model="stub",
+            review_status="approved",
+        )])
+        # seed A: 有 draft 谱系 → 复合 topic
+        save_seed_question(SeedQuestion(
+            question_id="eval-tl-seed-a",
+            role_family="backend",
+            competency="技术深度",
+            text="问一道并发题?",
+            dataset_id=cls._DS,
+            source_draft_id="eval-tl-draft-1",
+        ))
+        # seed B: 无 draft 谱系 (老题/脚本灌入) → 纯 dataset topic
+        save_seed_question(SeedQuestion(
+            question_id="eval-tl-seed-b",
+            role_family="backend",
+            competency="技术深度",
+            text="问一道无谱系的题?",
+            dataset_id=cls._DS,
+        ))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._cleanup()
+
+    @classmethod
+    def _cleanup(cls):
+        from src.db.base import session_scope
+        from src.db.models import (
+            KnowledgeChunkORM, QuestionDraftORM, SeedQuestionORM, DatasetORM,
+        )
+        with session_scope() as s:
+            s.query(SeedQuestionORM).filter(
+                SeedQuestionORM.question_id.in_(
+                    ["eval-tl-seed-a", "eval-tl-seed-b"]
+                )
+            ).delete(synchronize_session=False)
+            s.query(QuestionDraftORM).filter(
+                QuestionDraftORM.dataset_id == cls._DS
+            ).delete(synchronize_session=False)
+            s.query(KnowledgeChunkORM).filter(
+                KnowledgeChunkORM.dataset_id == cls._DS
+            ).delete(synchronize_session=False)
+            s.query(DatasetORM).filter(
+                DatasetORM.dataset_id == cls._DS
+            ).delete(synchronize_session=False)
+
+    def test_get_chunk_topic_for_draft(self):
+        from src.db import get_chunk_topic_for_draft
+        self.assertEqual(
+            get_chunk_topic_for_draft("eval-tl-draft-1"), "concurrency",
+        )
+        self.assertEqual(get_chunk_topic_for_draft("ghost-draft"), "")
+
+    def test_map_draft_chunk_topics(self):
+        from src.db import map_draft_chunk_topics
+        m = map_draft_chunk_topics()
+        self.assertEqual(m.get("eval-tl-draft-1"), "concurrency")
+
+    def test_list_question_topics_uses_compose_rule(self):
+        from src.db import list_question_topics
+        topics = list_question_topics()
+        # seed A 有谱系 → 复合; seed B 无谱系 → 纯 dataset topic。两者都在。
+        self.assertIn("测试主题/concurrency", topics)
+        self.assertIn("测试主题", topics)
+        # 去重 + 排序稳定
+        self.assertEqual(topics, sorted(set(topics)))
+
+
 if __name__ == "__main__":
     unittest.main()

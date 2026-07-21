@@ -29,6 +29,7 @@ from src.vector_store.collections import (
 from src.vector_store.operations import (
     count_documents,
     count_questions,
+    list_documents,
     search_documents,
     search_questions,
     upsert_document,
@@ -48,6 +49,7 @@ __all__ = [
     "drop_collections",
     "count_documents",
     "count_questions",
+    "list_documents",
     "search_documents",
     "search_questions",
     "upsert_document",
