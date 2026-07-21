@@ -19,14 +19,17 @@ review_decision 在 PATCH 处校验合法值, 不让前端塞奇怪字符串。
 """
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.schemas import CandidateWithStatus, ReviewSubmit
-from src import auth, db
+from api.schemas import CandidateWithStatus, ResumeChunk, ReviewSubmit
+from src import auth, db, vector_store
+from src.agents import planner
 from src.schemas import (
     EvaluationReport,
+    InterviewPlan,
     InterviewSession,
     JobContext,
     ReviewDecision,
@@ -57,6 +60,102 @@ def list_candidates_for_job(
     GET /hr/jobs 选择已知 job。"""
     rows = db.list_candidates_with_status_for_job(job_id)
     return [CandidateWithStatus.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/jobs/{job_id}/candidates/{candidate_id}/plan",
+    response_model=InterviewPlan,
+)
+def get_hr_plan(job_id: str, candidate_id: str, _user: HrUser) -> InterviewPlan:
+    """HR 视角的 plan: 与候选人端同一份数据, 但**保留 trace**
+    (出题过程审计: topic 匹配明细 + 每题来源路径)。候选人端接口剥 trace,
+    这里不剥 —— HR 是 trace 的目标读者 (Sprint E)。"""
+    candidate = db.load_candidate(candidate_id)
+    if candidate is None or candidate.job_id != job_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"candidate {candidate_id} 不在 job {job_id} 下",
+        )
+    plan = db.load_latest_plan_for_candidate(candidate_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="plan 尚未生成")
+    return plan
+
+
+def _dev_plan_preview_enabled() -> bool:
+    return os.environ.get("DEV_PLAN_PREVIEW", "").lower() in ("1", "true", "yes")
+
+
+@router.get(
+    "/jobs/{job_id}/candidates/{candidate_id}/plan-preview",
+    response_model=InterviewPlan,
+)
+def get_plan_preview(
+    job_id: str, candidate_id: str, _user: HrUser,
+) -> InterviewPlan:
+    """开发者测试端点: 不答题预览全部题目 (含 lazy project 题)。
+
+    knowledge / scenario / self_intro 题在 plan 阶段已生成, 直接返回;
+    lazy project 题用 intro_text="" 在**内存里** resolve 一份预览。
+
+    硬约束:
+    - resolve 结果**绝不写回** Redis / PG —— 正式面试进 project stage 时
+      必须带真实 intro_text 重新生成, 否则 lazy generation 设计失效。
+      因此预览的 project 题与正式面试的题面不会逐字一致, 仅示意深挖方向。
+    - 双门控: require_hr_user + DEV_PLAN_PREVIEW env, 默认关闭,
+      候选人端永远接触不到本端点 (防泄题)。
+    """
+    if not _dev_plan_preview_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail="plan 预览未开启 (需要环境变量 DEV_PLAN_PREVIEW=true)",
+        )
+
+    candidate = db.load_candidate(candidate_id)
+    if candidate is None or candidate.job_id != job_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"candidate {candidate_id} 不在 job {job_id} 下",
+        )
+    plan = db.load_latest_plan_for_candidate(candidate_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="plan 尚未生成, 请稍后重试")
+    job = db.load_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} 不存在")
+
+    return planner.resolve_lazy_questions(plan, job, candidate, intro_text="")
+
+
+@router.get(
+    "/candidates/{candidate_id}/resume-chunks",
+    response_model=list[ResumeChunk],
+)
+def list_resume_chunks(candidate_id: str, _user: HrUser) -> list[ResumeChunk]:
+    """Sprint E 出题过程视图: 该候选人 Resume 在 Milvus 里的全部切片。
+    project 题的 source_chunk_ids 指向这些 document_id, HR 端对照展示
+    「哪段简历催生了哪道深挖题」。Milvus 未配置 / 无切片时返空列表。"""
+    if db.load_candidate(candidate_id) is None:
+        raise HTTPException(
+            status_code=404, detail=f"candidate {candidate_id} 不存在",
+        )
+    try:
+        rows = vector_store.list_documents(
+            kind=vector_store.DOC_KIND_RESUME, source_id=candidate_id,
+        )
+    except vector_store.MilvusNotConfigured:
+        return []
+    except Exception:
+        # 观测性接口不应因 Milvus 抖动报 500, 返空让 UI 降级展示
+        return []
+    return [
+        ResumeChunk(
+            document_id=r["document_id"],
+            chunk_index=r.get("chunk_index", 0),
+            text=r.get("text", ""),
+        )
+        for r in rows
+    ]
 
 
 @router.get(

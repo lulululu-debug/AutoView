@@ -98,6 +98,26 @@ export default function HrLayout({
           </Link>
           {pathname !== LOGIN_PATH && authed && (
             <div className="flex items-center gap-3 text-xs text-zinc-500">
+              <Link
+                href="/hr"
+                className={
+                  pathname === "/hr" || pathname.startsWith("/hr/jobs")
+                    ? "text-zinc-900 dark:text-zinc-100 font-medium"
+                    : "hover:text-zinc-900 dark:hover:text-zinc-100"
+                }
+              >
+                职位
+              </Link>
+              <Link
+                href="/hr/admin"
+                className={
+                  pathname.startsWith("/hr/admin")
+                    ? "text-zinc-900 dark:text-zinc-100 font-medium"
+                    : "hover:text-zinc-900 dark:hover:text-zinc-100"
+                }
+              >
+                题库
+              </Link>
               {role && (
                 <span className="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 uppercase tracking-wide">
                   {role}

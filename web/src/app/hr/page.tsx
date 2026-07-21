@@ -189,6 +189,10 @@ function CreateJobForm({
   // 默认模板, HR 可在此模板上增删改。空数组提交给后端 -> 后端会用
   // default_aspects_for(role_family) 兜底 (与拉模板等价)。
   const [roleFamily, setRoleFamily] = useState<RoleFamily>("backend");
+  // Sprint H: 出题来源 rag(默认) | llm_direct
+  const [questionSource, setQuestionSource] = useState<"rag" | "llm_direct">(
+    "rag",
+  );
   const [aspects, setAspects] = useState<ProfileAspect[]>([]);
   const [aspectsLoading, setAspectsLoading] = useState(false);
   const [state, setState] = useState<CreateState>({ kind: "idle" });
@@ -299,6 +303,7 @@ function CreateJobForm({
         company_materials: companyMaterials.trim(),
         track,
         role_family: roleFamily,
+        question_source: questionSource,
         aspects: aspectsOut,
         followup_policy,
         completion_policy,
@@ -378,6 +383,28 @@ function CreateJobForm({
             决定知识/项目/场景/沟通题配比与下方画像维度默认模板。
           </p>
         </div>
+      </div>
+
+      <div>
+        <label className="block text-xs text-zinc-500 mb-1">
+          出题来源 * (question_source)
+        </label>
+        <select
+          value={questionSource}
+          onChange={(e) =>
+            setQuestionSource(e.target.value as "rag" | "llm_direct")
+          }
+          disabled={state.kind === "submitting"}
+          className="w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 p-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400 disabled:opacity-60"
+        >
+          <option value="rag">题库召回 + LLM 精修 (rag)</option>
+          <option value="llm_direct">纯 LLM 出题 (llm_direct)</option>
+        </select>
+        <p className="text-xs text-zinc-400 mt-1">
+          {questionSource === "rag"
+            ? "知识/场景题从题库按维度召回后 LLM 精修; 项目题按简历分段深挖。"
+            : "知识/场景题跳过题库, 按考察维度 + 简历技能直接 LLM 出题; 项目题同样按简历分段深挖。"}
+        </p>
       </div>
 
       <div>

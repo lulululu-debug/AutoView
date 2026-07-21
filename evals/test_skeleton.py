@@ -214,12 +214,17 @@ class SkeletonPlanTests(unittest.TestCase):
                 else:
                     self.assertFalse(q.lazy, f"{r.stage} 题不应是 lazy")
 
-    def test_planner_threads_rank_and_prior_texts_per_competency(self):
-        """Sprint 5.9 patch: 同一 (stage, competency) 内多题不能全用 rank=0 +
-        prior_texts=[] 调 LLM, 不然 LLM cache 让 11 道 knowledge 全相同
-        (实战 bug). 本测试用 monkey-patch 拦截 _knowledge_question /
-        _scenario_question / _project_question, 校验 caller 是否在多题之间
-        给 rank 递增 + prior_texts 累积.
+    def test_planner_threads_used_source_ids_and_prior_texts(self):
+        """多题防重复的两层机制都必须被 plan() 正确线程化:
+        - used_source_ids (plan 全局): 每命中一道 seed 就加入排除集, 后续召回
+          不再用同一道 (取代 Sprint 5.9 的 rank 轮转 —— 题库 seed 少时轮转会
+          循环命中同一批, LLM 精修产出"同一道题的三种说法", 实战 bug)
+        - prior_texts (同 (stage, category, competency) 内): 已生成题文本
+          累积喂进 prompt, 防 LLM cache 复读
+
+        本测试用 monkey-patch 拦截 _knowledge_question / _scenario_question,
+        spy 每次返回唯一 source_id, 校验 caller 在多题之间把排除集持续做大 +
+        prior_texts 累积.
 
         不直接校验 self.plan.rounds 文本去重: stub 路径 (无 OPENAI_API_KEY)
         下 LLM 直接返 seed_text, 同 RAG 召回的 hits 不够多时仍会全相同,
@@ -230,20 +235,24 @@ class SkeletonPlanTests(unittest.TestCase):
         calls: dict[str, list[tuple[int, int]]] = {
             "knowledge": [],
             "scenario": [],
-            "project": [],
         }
+        counter = {"n": 0}
 
-        def _spy_knowledge(*args, rank=0, prior_texts=None, **kw):
-            calls["knowledge"].append((rank, len(prior_texts or [])))
-            return ("dummy knowledge", None)
+        def _next_id() -> str:
+            counter["n"] += 1
+            return f"seed-{counter['n']}"
 
-        def _spy_scenario(*args, rank=0, prior_texts=None, **kw):
-            calls["scenario"].append((rank, len(prior_texts or [])))
-            return ("dummy scenario", None)
+        def _spy_knowledge(*args, used_source_ids=None, prior_texts=None, **kw):
+            calls["knowledge"].append(
+                (len(used_source_ids or ()), len(prior_texts or [])),
+            )
+            return ("dummy knowledge", _next_id(), "rag_refined")
 
-        def _spy_project(*args, prior_texts=None, **kw):
-            calls["project"].append((0, len(prior_texts or [])))
-            return ("dummy project", [])
+        def _spy_scenario(*args, used_source_ids=None, prior_texts=None, **kw):
+            calls["scenario"].append(
+                (len(used_source_ids or ()), len(prior_texts or [])),
+            )
+            return ("dummy scenario", _next_id(), "rag_refined")
 
         from src.schemas import JobContext, CandidateProfile, Track
         # 用 campus + backend 强制 11 道 knowledge tech (max stage)
@@ -256,30 +265,31 @@ class SkeletonPlanTests(unittest.TestCase):
              patch.object(planner_mod, "_scenario_question", _spy_scenario):
             p = planner_mod.plan(job, cand)
 
-        # Knowledge: campus tech=11, comm=1. 同一 competency 内 rank 应 0..N-1,
-        # prior_texts 长度也应当 0, 1, 2, ... 单调递增
-        # comp:tech 那 11 个调用
-        # campus 配比里 knowledge 11+1, 调用顺序就是 slot 顺序
-        # comp:tech 11 个的 rank 应当 0..10
+        # Knowledge: campus tech=11, comm=1, 调用顺序就是 slot 顺序。
+        # 排除集 plan 全局: 每次 spy 返回唯一 seed id, 下一次调用应看到 +1
         assert len(calls["knowledge"]) == 12, f"应当 12 次 knowledge, 实际 {len(calls['knowledge'])}"
-        # 前 11 个是 tech, rank 应 0..10
-        tech_ranks = [r for r, _ in calls["knowledge"][:11]]
+        used_sizes = [u for u, _ in calls["knowledge"]]
         self.assertEqual(
-            tech_ranks, list(range(11)),
-            f"tech knowledge rank 应当 0..10, 实际 {tech_ranks}",
+            used_sizes, list(range(12)),
+            f"knowledge 排除集应当逐题 +1 (0..11), 实际 {used_sizes}",
         )
-        # prior_texts 长度同样 0..10 (上一题的 dummy text 应当被回灌)
+        # prior_texts 长度 0..10 (上一题的 dummy text 应当被回灌);
+        # comm 那 1 道是 0 (不同 competency 不共享 priors)
         tech_priors = [n for _, n in calls["knowledge"][:11]]
         self.assertEqual(
             tech_priors, list(range(11)),
             f"tech knowledge prior_texts 长度应当 0..10, 实际 {tech_priors}",
         )
-        # comm knowledge 1 个, rank=0 prior_texts=0 (不同 competency 不共享 priors)
-        self.assertEqual(calls["knowledge"][11], (0, 0))
+        self.assertEqual(calls["knowledge"][11][1], 0)
 
-        # Scenario: campus tech=3
+        # Scenario: campus tech=3。排除集跨 stage 共享, 接着 knowledge 的
+        # 12 道继续变大 (12, 13, 14); prior_texts 是 stage 内的, 从 0 重新累积
         self.assertEqual(len(calls["scenario"]), 3)
-        self.assertEqual([r for r, _ in calls["scenario"]], [0, 1, 2])
+        self.assertEqual(
+            [u for u, _ in calls["scenario"]], [12, 13, 14],
+            "排除集应当跨 stage 共享",
+        )
+        self.assertEqual([n for _, n in calls["scenario"]], [0, 1, 2])
 
 
 # ---------- Report 结构 ----------
