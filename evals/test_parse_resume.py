@@ -129,6 +129,88 @@ class ParserUnitTests(unittest.TestCase):
         self.assertIn("解析失败", str(cm.exception))
 
 
+_PNG_MIME = "image/png"
+_JPEG_MIME = "image/jpeg"
+
+
+class ImageOcrTests(unittest.TestCase):
+    """Sprint G: 图片简历 → vision OCR 分支。
+    monkeypatch src.llm.complete_vision, 不烧 token / 不依赖 OPENAI_API_KEY。
+    resume_parser 通过 `from src import llm` 引用, 换 llm.complete_vision 即可。"""
+
+    def _patch_vision(self, fn):
+        import src.llm as llm_mod
+        self._orig = llm_mod.complete_vision
+        llm_mod.complete_vision = fn
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        import src.llm as llm_mod
+        llm_mod.complete_vision = self._orig
+
+    def test_image_ocr_happy_path(self):
+        self._patch_vision(lambda system, user, images, **kw: _LONG_RESUME)
+        text = parse_resume(
+            filename="cv.png", mime=_PNG_MIME, blob=b"\x89PNG" + b"x" * 500,
+        )
+        self.assertIn("订单系统", text)
+        self.assertGreaterEqual(len(text), MIN_TEXT_CHARS)
+
+    def test_image_ocr_passes_mime_and_bytes(self):
+        seen = {}
+
+        def _spy(system, user, images, **kw):
+            seen["images"] = images
+            return _LONG_RESUME
+
+        self._patch_vision(_spy)
+        blob = b"\x89PNG" + b"y" * 300
+        parse_resume(filename="cv.jpeg", mime=_JPEG_MIME, blob=blob)
+        self.assertEqual(len(seen["images"]), 1)
+        self.assertEqual(seen["images"][0][0], _JPEG_MIME)
+        self.assertEqual(seen["images"][0][1], blob)
+
+    def test_image_ocr_stub_rejected(self):
+        """未配 vision (返 stub) -> 拒并提示贴文本, 不把 stub 当简历。"""
+        self._patch_vision(lambda system, user, images, **kw: "[stub] user")
+        with self.assertRaises(ResumeParseError) as cm:
+            parse_resume(filename="cv.png", mime=_PNG_MIME, blob=b"\x89PNG" * 50)
+        self.assertIn("图片识别当前不可用", str(cm.exception))
+
+    def test_image_ocr_too_short_rejected(self):
+        """OCR 出的文本太短 (模糊图) -> MIN_TEXT_CHARS 拒。"""
+        self._patch_vision(lambda system, user, images, **kw: "郑某")
+        with self.assertRaises(ResumeParseError) as cm:
+            parse_resume(filename="cv.png", mime=_PNG_MIME, blob=b"\x89PNG" * 50)
+        self.assertIn(f"< {MIN_TEXT_CHARS}", str(cm.exception))
+
+    def test_image_ocr_vision_exception_wrapped(self):
+        """vision 网络异常 -> 包装成友好 ResumeParseError, 不抛 raw 栈。"""
+        def _boom(system, user, images, **kw):
+            raise RuntimeError("openai timeout")
+
+        self._patch_vision(_boom)
+        with self.assertRaises(ResumeParseError) as cm:
+            parse_resume(filename="cv.png", mime=_PNG_MIME, blob=b"\x89PNG" * 50)
+        self.assertIn("解析失败", str(cm.exception))
+
+    def test_image_mime_ext_mismatch_rejected(self):
+        """.png 扩展名但声明 jpeg mime -> 双判拦截 (与 pdf/docx 同规则)。"""
+        with self.assertRaises(ResumeParseError) as cm:
+            parse_resume(
+                filename="cv.png", mime=_JPEG_MIME, blob=b"\x89PNG" * 50,
+            )
+        self.assertIn("文件类型不被支持", str(cm.exception))
+
+    def test_unsupported_image_type_rejected(self):
+        """gif 不在白名单 -> 拒。"""
+        with self.assertRaises(ResumeParseError) as cm:
+            parse_resume(
+                filename="cv.gif", mime="image/gif", blob=b"GIF89a" * 50,
+            )
+        self.assertIn("仅接受", str(cm.exception))
+
+
 @unittest.skipUnless(
     os.environ.get("POSTGRES_URL") and os.environ.get("REDIS_URL"),
     "需要 POSTGRES_URL + REDIS_URL 走 API",

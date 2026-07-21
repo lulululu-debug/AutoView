@@ -18,6 +18,8 @@ Redis 缓存(Sprint 1):
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import os
 
@@ -100,6 +102,70 @@ def complete(
     if result and not is_stub(result):
         llm_cache.set(cache_key, result)
 
+    return result
+
+
+def complete_vision(
+    system: str,
+    user: str,
+    images: list[tuple[str, bytes]],
+    *,
+    model: str | None = None,
+    max_tokens: int = 1500,
+    timeout: float | None = None,
+) -> str:
+    """多模态 LLM 调用 (Sprint G: 图片简历 OCR)。
+    images: list[(mime, raw_bytes)], 编码成 data URL 拼进 user message。
+    返回纯文本 (已 strip)。透明 Redis 缓存 (key 含图片内容 hash, 同图同 key)。
+    无 key / SDK 不可用 → stub, 让 resume_parser 判 stub 后拒绝并提示贴文本。
+
+    与 complete() 一致的约束: stub / 空不入缓存。走 gpt-4o 系列 (默认模型
+    gpt-4o-mini 支持 vision); 若 OPENAI_CHAT_MODEL 被配成不支持 vision 的
+    模型, 调用会 API 报错, 由上游 (resume_parser) 包装成 ResumeParseError。"""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return _stub(user)
+
+    resolved_model = model or DEFAULT_MODEL
+    # cache key 必须含图片内容, 否则不同图片同 (system,user) 会命中同一条
+    img_digest = hashlib.sha256(b"".join(raw for _, raw in images)).hexdigest()
+    cache_key = llm_cache.make_key(
+        system, f"{user}|vision:{img_digest}", resolved_model, max_tokens,
+    )
+
+    cached = llm_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return _stub(user)
+
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    content: list[dict] = [{"type": "text", "text": user}]
+    for mime, raw in images:
+        b64 = base64.b64encode(raw).decode("ascii")
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
+        })
+    create_kwargs: dict = {
+        "model": resolved_model,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": content},
+        ],
+    }
+    if timeout is not None:
+        create_kwargs["timeout"] = timeout
+    resp = client.chat.completions.create(**create_kwargs)
+    result = (resp.choices[0].message.content or "").strip()
+
+    if result and not is_stub(result):
+        llm_cache.set(cache_key, result)
     return result
 
 

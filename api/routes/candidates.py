@@ -15,11 +15,17 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from api.schemas import CandidateCreate, CandidateCreated, ParsedResume
 from src import cache, db, ingestion, resume_parser
 from src.agents import planner
-from src.schemas import CandidateProfile, InterviewPlan, JobContext
+from src.schemas import (
+    RESUME_DEEPDIVE_TYPES,
+    CandidateProfile,
+    InterviewPlan,
+    JobContext,
+)
 
 log = logging.getLogger(__name__)
 
@@ -45,9 +51,30 @@ def _run_planner_in_background(job: JobContext, candidate: CandidateProfile) -> 
         )
 
 
-def _ingest_resume_in_background(candidate_id: str, resume_text: str) -> None:
+def _ingest_resume_in_background(
+    candidate_id: str, resume_text: str, skip_segmentation: bool = False,
+) -> None:
     """后台任务 (Sprint 3-4): 切 Resume -> embed -> 入 Milvus, 给 Planner 项目深挖
-    RAG 召回用。失败仅日志, 与 Planner 并行跑, 互不阻塞。"""
+    RAG 召回用。失败仅日志, 与 Planner 并行跑, 互不阻塞。
+
+    Sprint F: 同时做语义分段落 PG (candidates.sections), resolve_lazy 按段出题。
+    分段与 Milvus ingest 互不阻塞 —— 各自失败都有下游 fallback (分段失败
+    resolve_lazy 走老 RAG 路径; ingest 失败老路径退 resume_llm)。
+    Phase 2: skip_segmentation=True 表示候选人已确认分段 (create_candidate
+    落库), 不再机器重切覆盖人工结果。"""
+    if not skip_segmentation:
+        try:
+            sections = ingestion.segment_resume(resume_text)
+            db.save_candidate_sections(candidate_id, sections)
+            log.info(
+                "segmented resume: candidate=%s sections=%d (source=%s)",
+                candidate_id, len(sections),
+                sections[0].source if sections else "-",
+            )
+        except Exception:
+            log.exception(
+                "background segment_resume failed: candidate=%s", candidate_id,
+            )
     try:
         n = ingestion.ingest_resume(candidate_id, resume_text)
         log.info(
@@ -84,7 +111,15 @@ async def parse_resume_endpoint(
         )
     except resume_parser.ResumeParseError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return ParsedResume(parsed_text=parsed)
+
+    # Sprint F Phase 2: 顺带做语义分段返回前端确认。segment_resume 内含
+    # LLM 调用 (同步, 最长 ~20s), 丢线程池防塞 event loop; 它三级降级
+    # 永不抛, 最差 whole_text 单段 (前端据此退纯文本编辑)。
+    sections = await run_in_threadpool(ingestion.segment_resume, parsed)
+    return ParsedResume(
+        parsed_text=parsed,
+        sections=[s.model_dump() for s in sections],
+    )
 
 
 @router.post("", response_model=CandidateCreated, status_code=202)
@@ -102,10 +137,21 @@ def create_candidate(
     if job is None:
         raise HTTPException(status_code=404, detail=f"job {job_id} 不存在")
 
+    # Sprint F Phase 2: 候选人确认过的分段直接采纳 (规范化 + 强制标
+    # user_confirmed), 后台跳过机器重分段 —— 人工确认优先于 LLM 切分。
+    confirmed = ingestion.normalize_confirmed_sections(body.sections)
+    projects = body.projects
+    if confirmed and not projects:
+        # 顺手把 deep-dive 段标题填进 projects (旧字段, HR 端展示用)
+        projects = [
+            s.title for s in confirmed if s.type in RESUME_DEEPDIVE_TYPES
+        ]
+
     candidate = CandidateProfile(
         job_id=job_id,
         resume=body.resume,
-        projects=body.projects,
+        projects=projects,
+        sections=confirmed,
     )
     db.save_candidate(candidate)
 
@@ -114,7 +160,10 @@ def create_candidate(
     # Resume 切片召回的区别。Sprint 3-6 设计的"BG 并行"在 BackgroundTasks 模式下
     # 失效, Sprint 7 接 RQ/Celery 时可以做真正并行。
     background_tasks.add_task(
-        _ingest_resume_in_background, candidate.candidate_id, candidate.resume,
+        _ingest_resume_in_background,
+        candidate.candidate_id,
+        candidate.resume,
+        bool(confirmed),          # skip_segmentation: 已有人工确认分段
     )
     background_tasks.add_task(_run_planner_in_background, job, candidate)
 
@@ -151,4 +200,5 @@ def get_candidate_plan(job_id: str, candidate_id: str) -> InterviewPlan:
     plan = db.load_latest_plan_for_candidate(candidate_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="plan 尚未生成, 请稍后重试")
-    return plan
+    # Sprint E: trace 是 HR 侧审计信息 (匹配明细/题目来源路径), 候选人端剥掉。
+    return plan.model_copy(update={"trace": None})
