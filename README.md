@@ -3,8 +3,10 @@
 多 agent 的 AI 视频面试基础设施。HR 上传 JD / 岗位要求 / 公司资料，候选人上传 Resume，
 系统自动生成面试计划、执行多轮面试与追问、产出结构化评估报告，并支持 HR 人工复核。
 
-终态是「招聘端 + 候选人端」双边 AI 面试平台。当前主链路文本面试已贯通，
-视频/实时与多模态评价在后续 sprint。
+终态是「招聘端 + 候选人端」双边 AI 面试平台。当前已贯通**视频面试**（Tier B）：
+AI 虚拟面试官有脸、开口说中文提问，候选人可语音作答（转写可校对再提交）、
+摄像头画面录制归档；真口型数字人（Tier A）与多模态评价在后续 sprint。
+文字问答是永远的保底路径——任何媒体环节失败都自动降级，面试不中断。
 
 > 详细架构与合规约束见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)，开发进度与里程碑见
 > [`sprint.md`](./sprint.md)，仓库内协作守则见 [`CLAUDE.md`](./CLAUDE.md)。
@@ -23,12 +25,20 @@
   missing_signals / followup_goal），驱动追问与终止策略；LLM 失败一律降级到启发式
 - **FollowUpPolicy + CompletionPolicy**：追问配额与结束条件全配置驱动，
   不做动态补题（保证可复现 + 公平性）
+- **视频面试媒体层（纯适配器，Sprint 6）**：consent 门（PIPL 告知 + AI 合成标识）→
+  TTS 面试官播报（火山 / Azure 按 region 路由）→ 三态视频 avatar（说话 / 聆听 / 思考,
+  思考空档播预合成过渡语音遮蔽）→ 流式 STT 语音作答（WS 代理, 厂商 key 不出后端）→
+  摄像头录制归档（**只录不判**）。agent 内核与三段式 API 零改动
 - **RAG 题库与资料检索**：Milvus Lite 存 questions + documents 两个 collection，
   Planner / Evaluator 共用
+- **知识管线**：md 语料（`corpus/`）→ 切片入库 → LLM 反向出题 → HR 审核队列 →
+  批准进题库；LLM 失败宁缺勿滥，不塞模板题
+- **简历深解析**：分段结构化（教育 / 项目 / 实习）+ 图片简历 OCR + 文件上传；
+  Planner 出题走主题匹配 + 技能抽取，`used_source_ids + prior_texts` 防同维度重复
 - **合规分区写进 schema**：`EvaluationReport` 把 `content_scores`（进总分）与
   `performance_observations`（软信号，不进总分）严格分开
-- **Stub 回退**：无 `OPENAI_API_KEY` / Postgres / Redis / Milvus 时各自走 stub 或惰性连接，
-  骨架可纯本地跑通
+- **Stub 回退**：无 `OPENAI_API_KEY` / Postgres / Redis / Milvus / TTS / STT 时各自走
+  stub、惰性连接或纯文字降级，骨架可纯本地跑通
 
 ---
 
@@ -44,6 +54,8 @@
 | 向量检索 | Milvus Lite（pymilvus） |
 | HTTP API | FastAPI + uvicorn |
 | 鉴权 | JWT + httpOnly cookie + bcrypt |
+| 实时媒体 | TTS / 流式 STT 按 region 路由（火山 / Azure）· WS 转写代理 · MediaRecorder 录制 |
+| 数字人 | Tier B 三态视频循环（`web/public/avatar/`）→ Tier A 真口型（规划中） |
 | 候选人 / HR 前端 | Next.js 16 + React 19 + Tailwind 4（`web/`） |
 | 测试 | stdlib `unittest`（`evals/`） |
 
@@ -76,6 +88,9 @@ createdb interview_test     # eval 专用, 防误删 dev 数据
 - `POSTGRES_URL` / `TEST_POSTGRES_URL` / `REDIS_URL` / `MILVUS_LITE_URI`
 - `JWT_SECRET` —— prod 用 `openssl rand -hex 32`，dev 随便 hex
 - `ASSESSOR_ENABLED` —— 默认 `true`（Sprint 5.9 起 calibration 通过后翻默认）
+- **媒体（可选，Sprint 6）**：`TTS_PROVIDER` + 火山 / Azure key（面试官出声）、
+  `STT_PROVIDER` + key（语音作答）、`MEDIA_STORAGE_DIR`（录制归档）——
+  全部不配 = 纯文字面试，功能自动隐藏；改 `.env` 后要重启 uvicorn
 
 各变量的语义与失败回退行为见 `.env.example` 注释。
 
@@ -104,12 +119,21 @@ npm run dev
 # http://localhost:3000
 ```
 
-### 7. 种子数据
+### 7. 种子数据与运维脚本
 
 ```bash
-python -m scripts.seed_questions   # 灌题库到 Milvus
-python -m scripts.seed_users       # 灌默认 HR 账号
+python -m scripts.seed_questions       # 灌题库到 Milvus
+python -m scripts.seed_users           # 灌默认 HR 账号
+python -m scripts.ingest_md_corpus     # corpus/ md 语料切片入库 (知识管线)
+python -m scripts.derive_questions     # 反向出题, 进 HR 审核队列
+python -m scripts.cleanup_recordings   # 面试录像留存清理 (建议挂 cron, 默认 90 天)
 ```
+
+### 8. 数字人素材（可选）
+
+`web/public/avatar/{idle,talking,thinking}.mp4` 三段同人视频按状态切换，
+生成与 ffmpeg 处理规范见 [`web/public/avatar/README.md`](./web/public/avatar/README.md)。
+素材缺失自动退回占位面板，不影响面试。
 
 ---
 
@@ -126,24 +150,34 @@ src/
     assessor/     单题在线评估 (AnswerAssessment); LLM 失败降级启发式
     evaluator/    面试结束时合成 EvaluationReport (content vs performance 分区)
     analyzer/     多模态分析占位 (Sprint 7)
-  orchestrator/   串联 agent + Redis 状态机 + Postgres 归档
+  orchestrator/   串联 agent + Redis 状态机 + Postgres 归档 + turn/filler 音频
   db/             Postgres 惰性连接 + ORM + repository
-  cache/          Redis 惰性连接 + 会话热存储 + LLM/embedding 缓存
+  cache/          Redis 惰性连接 + 会话热存储 + LLM/embedding/TTS 缓存
   vector_store/   Milvus Lite: questions + documents 两个 collection
-  ingestion/      文档切片 + 向量化 pipeline
-  resume_parser/  PDF / DOCX / TXT Resume 解析
+  tts/            统一 TTS 调用点 (火山/Azure 路由; 未配置返 None, 前端退文字)
+  stt/            流式 STT 抽象 + 火山 ASR 二进制 WS 协议客户端
+  media_store/    面试录像归档 (本地盘起步, S3/MinIO 换实现即可; 只录不判)
+  knowledge_pipeline/  md 语料解析 (知识管线)
+  derivation/     反向出题 (KnowledgeChunk → DerivedQuestion)
+  ingestion/      文档切片 + 向量化 + resume_sections 简历分段
+  resume_parser/  PDF / DOCX / TXT / 图片(OCR) Resume 解析
   auth/           JWT + bcrypt + cookie 鉴权
   coverage.py     CompletionPolicy 用的 competency_coverage 计算
   main.py         Sprint 0 风格的写死输入跑通 demo
 
 api/
   main.py         FastAPI 工厂, CORS / 异常映射 / 路由聚合
-  routes/         auth · jobs · candidates · interviews · hr
+  routes/         auth · jobs · candidates · interviews · media · hr
+                  · admin_upload · admin_drafts
   schemas.py      API 出入参 (DTO)
 
 web/              Next.js 16 候选人端 + HR Dashboard
+  .../session/    面试主界面: page + media(consent/avatar/PiP) + stt(录音转写)
+                  + recorder(录制上传)
+  public/avatar/  Tier B 数字人三态视频素材 (idle/talking/thinking)
 
-scripts/          一次性运维脚本 (seed_questions / seed_users)
+scripts/          运维脚本 (seed_* / ingest_md_corpus / derive_questions
+                  / cleanup_recordings)
 evals/            stdlib unittest, 结构性 + 合规护栏 + API smoke + calibration
 ```
 
@@ -159,7 +193,9 @@ evals/            stdlib unittest, 结构性 + 合规护栏 + API smoke + calibr
 | Jobs | `GET/POST /jobs` · `GET /jobs/{id}` | HR 创建 / 列出职位 |
 | Candidates | `POST /jobs/{id}/candidates` · `POST /candidates/parse-resume` · `GET /candidates/{id}` · `GET /candidates/{id}/plan` | Resume 解析 + 触发 Planner |
 | Interviews | `POST /interviews` · `POST /interviews/{id}/answers` · `GET /interviews/{id}` · `POST /interviews/{id}/finalize` · `GET /interviews/{id}/report` | 三段式会话 + 中断恢复 + 报告 |
+| Media | `GET /media/config` · `GET /interviews/{id}/turns/{ref}/audio` · `GET /interviews/{id}/fillers/{i}/audio` · `WS /interviews/{id}/transcribe` · `POST /interviews/{id}/recordings` | 能力探测 / TTS 播报 / 过渡语音 / 转写代理 / 录制归档 |
 | HR | `GET /hr/jobs` · `GET /hr/sessions/{id}` · `GET /hr/reports/{id}` · `PATCH /hr/reports/{id}/review` | Dashboard + 人工复核 |
+| Admin | `POST /admin/upload-knowledge` · `GET /admin/datasets` · `PATCH /admin/drafts/{id}` · `POST /admin/drafts/{id}/approve` 等 | 语料上传 + 反向出题审核入库 |
 
 ---
 
@@ -196,7 +232,11 @@ python -m unittest evals.test_assessor_calibration
 - **不做动态补题**——题库由 plan + lazy project gen 一次确定；coverage 不够走人工复核兜底
 - 多模态「眼神 / 语气」信号只能作为参考证据，**绝不可**作为自动淘汰的唯一依据
 - 嵌套结构走 JSONB，顶层可查询字段提列；按需拆子表，不一次拆完
-- 骨架阶段不实现视频 / 实时语音 / 多模态分析，全部用文本或占位
+- **媒体层是纯适配器**——面试官的嘴 = `TurnResult.prompt` 文本，候选人的答 =
+  `submit_answer(text)`；TTS / STT / avatar / 录制任一环节失败都降级回文字问答，
+  agent 内核不感知媒体
+- **录像只录不判**——仅作 HR 复核素材（`media_ref` 溯源），打分路径绝不消费；
+  转写文本候选人可校对后再提交，textarea 是唯一真相源
 
 ---
 
@@ -213,7 +253,10 @@ python -m unittest evals.test_assessor_calibration
 - ✅ Sprint 5.7 — Assessment 持久化 + CompletionPolicy
 - ✅ Sprint 5.8 — PDF Resume + Cookie 鉴权 + 追问 UI
 - ✅ Sprint 5.9 — Assessor calibration 升级 + 默认开启
-- ⏳ Sprint 6 — 实时媒体（视频面试）
+- ✅ 字母 sprint 系列 — 知识管线（语料 + 反向出题 + 审核）/ 简历分段 + 图片 OCR /
+  Planner 主题匹配
+- 🔨 Sprint 6 — 视频面试（5/6：consent 门 / TTS 播报 / 三态 avatar / 语音作答 /
+  录制归档已落；Tier A 真口型待定）
 - ⏳ Sprint 7 — 多模态评价（含合规护栏）
 
 完整任务清单见 [`sprint.md`](./sprint.md)。
