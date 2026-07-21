@@ -14,6 +14,13 @@ import os
 import tempfile
 import unittest
 
+# Sprint B+D 起 plan() 依赖 PG (topic_match 读 list_question_topics +
+# record_skill_backlog): 必须切 test DB, 否则 dev 库的真实 topic 会让
+# fixed-vector patch 下"所有 query 匹配所有 topic", 种子题被 topic 硬过滤挡掉
+from evals._test_db import swap_to_test_url
+
+swap_to_test_url()
+
 
 def _fixed_vector(dim: int = 1536) -> list[float]:
     """返回固定向量, 让所有 embed 调用 cosine 距离=0, search 必中。"""
@@ -131,7 +138,9 @@ class RagHitTests(_PlannerRagBase):
         self.assertTrue(all(q.lazy for q in project_q), "project 题在 plan 阶段都是 lazy")
 
     def test_llm_stub_falls_back_to_seed_text_but_keeps_source(self):
-        """题库有题 + embed 可用 + LLM stub 时, 应当用种子题原文且仍记 source。"""
+        """题库有题 + embed 可用 + LLM stub 时, 命中的题应当用种子题原文且仍记
+        source; 同一道 seed 在整个 plan 里**至多用一次** (used_source_ids 排除,
+        取代 rank 轮转), seed 耗尽后的题走 fallback (source=None), 不复读种子。"""
         from src.agents.planner import plan
         from src.schemas import (
             CandidateProfile, JobContext, QuestionCategory,
@@ -150,15 +159,31 @@ class RagHitTests(_PlannerRagBase):
         finally:
             restore()
 
-        # Sprint 5.5: lateral 1 knowledge, 走遍 rounds
         knowledge_q = [
             q for r in p.rounds for q in r.questions
             if q.category == QuestionCategory.KNOWLEDGE
         ]
         self.assertTrue(len(knowledge_q) >= 1)
-        for q in knowledge_q:
+
+        # 命中 seed 的题: 原文 + source; 每道 seed 全 plan 至多出现一次
+        sourced = [q for q in knowledge_q if q.source_question_id is not None]
+        self.assertTrue(len(sourced) >= 1, "至少第一道题应当命中题库 seed")
+        for q in sourced:
             self.assertTrue(q.source_question_id in {"seed-T", "seed-C"})
             self.assertIn("种子题", q.text, "LLM stub 时应当用种子原文")
+        source_ids = [q.source_question_id for q in sourced]
+        self.assertEqual(
+            len(source_ids), len(set(source_ids)),
+            f"同一道 seed 不允许复用: {source_ids}",
+        )
+
+        # seed 耗尽后的题: fallback 模板 (LLM 也 stub), 不该再是种子原文
+        unsourced = [q for q in knowledge_q if q.source_question_id is None]
+        for q in unsourced:
+            self.assertNotIn(
+                "种子题", q.text,
+                "seed 耗尽后应走 fallback 模板, 不能复读种子原文",
+            )
 
 
 class ProjectRagHitTests(_PlannerRagBase):
@@ -361,6 +386,130 @@ class RagMissTests(_PlannerRagBase):
             all(q.source_question_id is None for q in knowledge_q),
             "embed stub 时不应调 Milvus 召回",
         )
+
+
+class BigPoolDistanceFilterTests(unittest.TestCase):
+    """Sprint E: _retrieve_seed_question 的 max_distance 硬过滤 (大池才用)。
+    直接 mock search_questions + embed, 不依赖真 Milvus。"""
+
+    def setUp(self):
+        os.environ.pop("OPENAI_API_KEY", None)
+
+    def _call(self, hits, max_distance):
+        from unittest.mock import patch
+        from src.agents.planner import _retrieve_seed_question
+        from src.schemas import Competency, QuestionCategory
+        comp = Competency(competency_id="comp:tech", name="技术深度", description="d")
+        with patch(
+            "src.agents.planner.embeddings.embed", return_value=_fixed_vector(),
+        ), patch(
+            "src.agents.planner.embeddings.is_stub_vector", return_value=False,
+        ), patch(
+            "src.agents.planner.vector_store.search_questions", return_value=hits,
+        ):
+            return _retrieve_seed_question(
+                "backend", comp, "jd",
+                category=QuestionCategory.KNOWLEDGE,
+                max_distance=max_distance,
+            )
+
+    def test_nearest_within_threshold_returned(self):
+        hits = [{"question_id": "a", "text": "近", "distance": 0.45}]
+        got = self._call(hits, max_distance=0.49)
+        self.assertEqual(got["question_id"], "a")
+
+    def test_nearest_over_threshold_returns_none(self):
+        # 最近题就超阈值 -> 退纯 LLM (返 None), 不看后面更远的
+        hits = [
+            {"question_id": "a", "text": "远", "distance": 0.53},
+            {"question_id": "b", "text": "更远", "distance": 0.60},
+        ]
+        self.assertIsNone(self._call(hits, max_distance=0.49))
+
+    def test_none_threshold_disables_filter(self):
+        # max_distance=None -> 旧行为, 距离多远都返回最近的
+        hits = [{"question_id": "a", "text": "远", "distance": 0.90}]
+        got = self._call(hits, max_distance=None)
+        self.assertEqual(got["question_id"], "a")
+
+    def test_excluded_then_threshold(self):
+        # 最近的被排除, 下一个非排除题超阈值 -> None
+        from unittest.mock import patch
+        from src.agents.planner import _retrieve_seed_question
+        from src.schemas import Competency, QuestionCategory
+        comp = Competency(competency_id="comp:tech", name="技术深度", description="d")
+        hits = [
+            {"question_id": "used", "text": "近但已用", "distance": 0.40},
+            {"question_id": "far", "text": "远", "distance": 0.55},
+        ]
+        with patch(
+            "src.agents.planner.embeddings.embed", return_value=_fixed_vector(),
+        ), patch(
+            "src.agents.planner.embeddings.is_stub_vector", return_value=False,
+        ), patch(
+            "src.agents.planner.vector_store.search_questions", return_value=hits,
+        ):
+            got = _retrieve_seed_question(
+                "backend", comp, "jd",
+                category=QuestionCategory.KNOWLEDGE,
+                exclude_ids={"used"}, max_distance=0.49,
+            )
+        self.assertIsNone(got)
+
+    def test_bigpool_config_parsing(self):
+        from src.agents.planner import _bigpool_max_distance
+        import src.agents.planner as P
+        orig = os.environ.get("KNOWLEDGE_BIGPOOL_MAX_DISTANCE")
+        try:
+            os.environ["KNOWLEDGE_BIGPOOL_MAX_DISTANCE"] = "0.6"
+            self.assertEqual(_bigpool_max_distance(), 0.6)
+            os.environ["KNOWLEDGE_BIGPOOL_MAX_DISTANCE"] = ""     # 显式关闭
+            self.assertIsNone(_bigpool_max_distance())
+            os.environ["KNOWLEDGE_BIGPOOL_MAX_DISTANCE"] = "abc"  # 非法 -> 默认
+            self.assertEqual(_bigpool_max_distance(), P._DEFAULT_BIGPOOL_MAX_DISTANCE)
+            os.environ.pop("KNOWLEDGE_BIGPOOL_MAX_DISTANCE")      # 未设 -> 默认
+            self.assertEqual(_bigpool_max_distance(), P._DEFAULT_BIGPOOL_MAX_DISTANCE)
+        finally:
+            if orig is None:
+                os.environ.pop("KNOWLEDGE_BIGPOOL_MAX_DISTANCE", None)
+            else:
+                os.environ["KNOWLEDGE_BIGPOOL_MAX_DISTANCE"] = orig
+
+
+class RefinePromptGuardrailTests(unittest.TestCase):
+    """精修 prompt 的不变式护栏。evals 强制 LLM stub, 无法测精修语义质量,
+    但能锁住 prompt 模板的关键约束不被后续改动悄悄删掉:
+    1. 考点不变 (防"精修换题"失真 bug 复发)
+    2. 自包含 (题库题源自文档切片, 常残留 "Agent A"/"该协议" 这类只有读过
+       原文才懂的悬空指代; 精修必须消除, 让候选人零上下文能看懂题目)
+    3. 禁塞岗位关键词 (防"贴合 JD"把无关技术名词硬塞进题干)
+    改这些约束 = 改精修行为, 必须连同本测试一起改并人工复核精修输出。"""
+
+    def test_knowledge_rag_prompt_keeps_core_invariants(self):
+        from src.agents.planner import _KNOWLEDGE_RAG_SYSTEM as p
+        self.assertIn("知识对象/主题完全不变", p)
+        self.assertIn("自包含", p)
+        self.assertIn("悬空指代", p)
+        self.assertIn("不得把答案写进题干", p)
+        self.assertIn("硬塞进题目", p)
+        # 主题域消歧: prompt 端与 _knowledge_question 的 topic_line 配套
+        self.assertIn("题目主题域", p)
+
+    def test_scenario_rag_prompt_keeps_core_invariants(self):
+        from src.agents.planner import _SCENARIO_RAG_SYSTEM as p
+        self.assertIn("核心问题不变", p)
+        self.assertIn("硬塞进情境", p)
+        # 与 knowledge 同步 (用户要求): 自包含 + 主题域消歧
+        self.assertIn("自包含", p)
+        self.assertIn("悬空指代", p)
+        self.assertIn("题目主题域", p)
+        self.assertIn("不得把期望的处理方案写进题干", p)
+
+    def test_project_section_prompt_keeps_core_invariants(self):
+        # Sprint F: 单段定向深挖 —— 必须点名经历 (题干自包含) + 不跨段串题
+        from src.agents.planner import _PROJECT_SECTION_SYSTEM as p
+        self.assertIn("点名该经历", p)
+        self.assertIn("这段经历之外", p)
 
 
 if __name__ == "__main__":

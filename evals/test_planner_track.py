@@ -272,5 +272,373 @@ class CategoryDistributionTests(unittest.TestCase):
         )
 
 
+class FallbackRotationTests(unittest.TestCase):
+    """LLM 完全不可用时, 同 competency 多道题的 fallback 应轮换模板池而非复读
+    同一句 (实战 bug: 6/23 冒烟面试 6 道 project 题全部同一句 fallback)。
+    monkeypatch 强制 llm/embed 走 stub, 不依赖环境有没有 key/Milvus。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import src.embeddings as emb_mod
+        import src.llm as llm_mod
+        cls._orig_complete = llm_mod.complete
+        cls._orig_embed = emb_mod.embed
+        llm_mod.complete = lambda system, user, **kw: "[stub] forced"
+        emb_mod.embed = lambda text, **kw: [0.0] * 1536
+        cls.plan_campus = planner.plan(_job(Track.CAMPUS), _CANDIDATE)
+        cls.plan_lateral = planner.resolve_lazy_questions(
+            planner.plan(_job(Track.LATERAL), _CANDIDATE),
+            _job(Track.LATERAL), _CANDIDATE,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        import src.embeddings as emb_mod
+        import src.llm as llm_mod
+        llm_mod.complete = cls._orig_complete
+        emb_mod.embed = cls._orig_embed
+
+    @staticmethod
+    def _groups(plan, category) -> list[tuple[str | None, int, int]]:
+        """[(competency_id, 组内题数, 去重后数)], 组 = (round, competency)。"""
+        out = []
+        for r in plan.rounds:
+            by_comp: dict[str | None, list[str]] = {}
+            for q in r.questions:
+                if q.category is category and q.text:
+                    by_comp.setdefault(q.competency_id, []).append(q.text)
+            for comp_id, texts in by_comp.items():
+                out.append((comp_id, len(texts), len(set(texts))))
+        return out
+
+    @staticmethod
+    def _pool_size(pools: tuple[tuple[str, ...], tuple[str, ...]], comp_id) -> int:
+        tech_pool, comm_pool = pools
+        return len(tech_pool if comp_id == planner.COMPETENCY_TECH_ID else comm_pool)
+
+    def _assert_rotates(self, groups, pools, label: str):
+        self.assertTrue(groups, f"{label}: 应有题目")
+        for comp_id, n, distinct in groups:
+            if n <= 1:
+                continue
+            expected = min(n, self._pool_size(pools, comp_id))
+            self.assertEqual(
+                distinct, expected,
+                f"{label} fallback 应轮换模板池: comp={comp_id} "
+                f"{n} 题只有 {distinct} 种文案 (期望 {expected})",
+            )
+
+    def test_knowledge_fallback_rotates(self):
+        self._assert_rotates(
+            self._groups(self.plan_campus, QuestionCategory.KNOWLEDGE),
+            (planner._KNOWLEDGE_FALLBACK_TECH, planner._KNOWLEDGE_FALLBACK_COMM),
+            "knowledge",
+        )
+
+    def test_project_fallback_rotates(self):
+        self._assert_rotates(
+            self._groups(self.plan_lateral, QuestionCategory.PROJECT_EXPERIENCE),
+            (planner._PROJECT_FALLBACK_TECH, planner._PROJECT_FALLBACK_COMM),
+            "project",
+        )
+
+    def test_scenario_fallback_rotates(self):
+        self._assert_rotates(
+            self._groups(self.plan_lateral, QuestionCategory.SCENARIO),
+            (planner._SCENARIO_FALLBACK_TECH, planner._SCENARIO_FALLBACK_COMM),
+            "scenario",
+        )
+
+
+class SectionAssignmentTests(unittest.TestCase):
+    """Sprint F: candidate.sections 有 deep-dive 段 (project/internship/work)
+    时, resolve_lazy 按段轮询定向出题 —— 一段一题, trace 记 section_title;
+    embedding stub → 段保持文档顺序 (确定性)。无 sections 的老路径由
+    LazyResolveTests 锁, 不受影响。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import src.embeddings as emb_mod
+        import src.llm as llm_mod
+        from src.schemas import ResumeSection
+        cls._orig_complete = llm_mod.complete
+        cls._orig_embed = emb_mod.embed
+        # LLM 可用 (非 stub): project 题应走 resume_section 路径
+        llm_mod.complete = (
+            lambda system, user, **kw: "针对这段经历, 你做的关键技术决策是什么?"
+        )
+        emb_mod.embed = lambda text, **kw: [0.0] * 1536
+        cls.cand = CandidateProfile(
+            candidate_id="cand-sections",
+            resume="张三 / 后端",
+            sections=[
+                ResumeSection(type="personal_info", title="个人信息", text="张三"),
+                ResumeSection(type="project", title="项目A", text="项目A 详情"),
+                ResumeSection(type="project", title="项目B", text="项目B 详情"),
+                ResumeSection(type="internship", title="实习C", text="实习C 详情"),
+                ResumeSection(type="skills", title="技能", text="Python"),
+            ],
+        )
+        job = _job(Track.CAMPUS)
+        cls.plan_resolved = planner.resolve_lazy_questions(
+            planner.plan(job, cls.cand), job, cls.cand, intro_text="自我介绍",
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        import src.embeddings as emb_mod
+        import src.llm as llm_mod
+        llm_mod.complete = cls._orig_complete
+        emb_mod.embed = cls._orig_embed
+
+    def _project_traces(self):
+        return [
+            qt for qt in self.plan_resolved.trace.questions
+            if qt.category == QuestionCategory.PROJECT_EXPERIENCE
+        ]
+
+    def test_round_robin_over_deepdive_sections(self):
+        titles = [qt.section_title for qt in self._project_traces()]
+        n = len(titles)
+        self.assertGreaterEqual(n, 2)
+        expected = [["项目A", "项目B", "实习C"][i % 3] for i in range(n)]
+        self.assertEqual(titles, expected, "应按 deep-dive 段轮询分配")
+
+    def test_path_is_resume_section(self):
+        for qt in self._project_traces():
+            self.assertEqual(qt.path, "resume_section")
+
+    def test_non_deepdive_sections_never_assigned(self):
+        for qt in self._project_traces():
+            self.assertNotIn(
+                qt.section_title, ("个人信息", "技能"),
+                "personal_info/skills 段不该被拿来出项目题",
+            )
+
+    def test_resolved_texts_non_empty(self):
+        for r in self.plan_resolved.rounds:
+            for q in r.questions:
+                if q.category == QuestionCategory.PROJECT_EXPERIENCE:
+                    self.assertTrue(q.text.strip())
+
+
+class SectionAssignmentStubLLMTests(unittest.TestCase):
+    """sections 存在但 LLM 不可用: 走轮换 fallback, section_title 不落 trace
+    (fallback 文案与段无关, 标了反而误导 HR)。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import src.embeddings as emb_mod
+        import src.llm as llm_mod
+        from src.schemas import ResumeSection
+        cls._orig_complete = llm_mod.complete
+        cls._orig_embed = emb_mod.embed
+        llm_mod.complete = lambda system, user, **kw: "[stub] x"
+        emb_mod.embed = lambda text, **kw: [0.0] * 1536
+        cand = CandidateProfile(
+            candidate_id="cand-sections-stub",
+            resume="张三 / 后端",
+            sections=[
+                ResumeSection(type="project", title="项目A", text="项目A 详情"),
+            ],
+        )
+        job = _job(Track.CAMPUS)
+        cls.plan_resolved = planner.resolve_lazy_questions(
+            planner.plan(job, cand), job, cand,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        import src.embeddings as emb_mod
+        import src.llm as llm_mod
+        llm_mod.complete = cls._orig_complete
+        emb_mod.embed = cls._orig_embed
+
+    def test_fallback_path_without_section_title(self):
+        traces = [
+            qt for qt in self.plan_resolved.trace.questions
+            if qt.category == QuestionCategory.PROJECT_EXPERIENCE
+        ]
+        self.assertTrue(traces)
+        for qt in traces:
+            self.assertEqual(qt.path, "fallback_template")
+            self.assertIsNone(qt.section_title)
+
+
+class LlmDirectSourceTests(unittest.TestCase):
+    """Sprint H: question_source=llm_direct —— 纯 LLM 出题, 与 RAG 路径隔离。
+    monkeypatch llm.complete 出真串 + skill_extraction 出固定技能, 验证:
+    - knowledge/scenario 全走 llm_direct_* 路径 (不召回题库, source_id 恒 None)
+    - 简历技能进 prompt (确定出题方向)
+    - rag 模式完全不受影响 (仍走原路径)
+    - 项目题两模式共用 (llm_direct 下仍是 lazy 占位, 不受影响)"""
+
+    @classmethod
+    def setUpClass(cls):
+        import src.agents.planner.skill_extraction as se
+        import src.llm as llm_mod
+        cls._orig_complete = llm_mod.complete
+        cls._orig_extract = se.extract_skills
+        cls._seen_prompts = []
+
+        def _fake_complete(system, user, **kw):
+            cls._seen_prompts.append((system, user))
+            if "基础知识" in system:
+                return "针对 Redis 持久化取舍你会怎么选型?"
+            if "场景题" in system:
+                return "线上接口 P99 突增, 你怎么排查?"
+            return "[stub] x"
+
+        llm_mod.complete = _fake_complete
+        se.extract_skills = lambda resume: ["Redis", "FastAPI", "Milvus"]
+
+        job = JobContext(
+            title="AI后端", jd="RAG 系统", role_family="backend",
+            track=Track.CAMPUS, question_source="llm_direct",
+        )
+        cls.plan = planner.plan(job, _CANDIDATE)
+
+    @classmethod
+    def tearDownClass(cls):
+        import src.agents.planner.skill_extraction as se
+        import src.llm as llm_mod
+        llm_mod.complete = cls._orig_complete
+        se.extract_skills = cls._orig_extract
+
+    def _traces(self, *cats):
+        return [qt for qt in self.plan.trace.questions if qt.category in cats]
+
+    def test_knowledge_all_llm_direct(self):
+        ks = self._traces(QuestionCategory.KNOWLEDGE)
+        self.assertTrue(ks)
+        for qt in ks:
+            self.assertEqual(qt.path, "llm_direct_knowledge")
+            self.assertIsNone(qt.source_question_id, "纯 LLM 出题无题库溯源")
+
+    def test_scenario_all_llm_direct(self):
+        ss = self._traces(QuestionCategory.SCENARIO)
+        self.assertTrue(ss)
+        for qt in ss:
+            self.assertEqual(qt.path, "llm_direct_scenario")
+
+    def test_resume_skills_in_prompt(self):
+        # 至少一个 knowledge prompt 含简历技能
+        k_prompts = [u for s, u in self._seen_prompts if "基础知识" in s]
+        self.assertTrue(k_prompts)
+        self.assertTrue(
+            any("Redis" in u and "简历技能" in u for u in k_prompts),
+            "简历技能应进 knowledge prompt 定向出题",
+        )
+
+    def test_extracted_skills_in_trace(self):
+        self.assertEqual(self.plan.trace.extracted_skills, ["Redis", "FastAPI", "Milvus"])
+
+    def test_project_still_lazy(self):
+        proj = [
+            q for r in self.plan.rounds for q in r.questions
+            if q.category == QuestionCategory.PROJECT_EXPERIENCE
+        ]
+        self.assertTrue(proj)
+        self.assertTrue(all(q.lazy and not q.text for q in proj),
+                        "项目题两模式共用: llm_direct 下仍是 lazy 占位")
+
+    def test_rag_mode_unaffected(self):
+        # 同 candidate 换 rag 模式, 不应出现 llm_direct_* 路径
+        job = JobContext(title="t", jd="x", role_family="backend",
+                         track=Track.CAMPUS, question_source="rag")
+        p = planner.plan(job, _CANDIDATE)
+        paths = {qt.path for qt in p.trace.questions}
+        self.assertNotIn("llm_direct_knowledge", paths)
+        self.assertNotIn("llm_direct_scenario", paths)
+
+
+class LlmDirectPromptGuardrailTests(unittest.TestCase):
+    """好题 rubric prompt 的不变式护栏 (改 prompt = 改出题行为, 必须连测试一起改)。"""
+
+    def test_rubric_shared_by_both(self):
+        self.assertIn(planner._GOOD_QUESTION_RUBRIC, planner._KNOWLEDGE_LLM_SYSTEM)
+        self.assertIn(planner._GOOD_QUESTION_RUBRIC, planner._SCENARIO_LLM_SYSTEM)
+
+    def test_rubric_core_criteria(self):
+        r = planner._GOOD_QUESTION_RUBRIC
+        self.assertIn("可深挖", r)
+        self.assertIn("单一核心考点", r)
+        self.assertIn("考理解而非记忆", r)
+        self.assertIn("自包含", r)
+
+    def test_prompts_have_fewshot(self):
+        # 正/反示范都在 (few-shot 定调)
+        self.assertIn("示范", planner._KNOWLEDGE_LLM_SYSTEM)
+        self.assertIn("示范", planner._SCENARIO_LLM_SYSTEM)
+
+
+class LlmDirectTrackToneTests(unittest.TestCase):
+    """Sprint H: llm_direct 出题按 track 定制基调 —— 校招重概念/基础/理解,
+    社招重实战/深度/权衡。捕获出题 system prompt, 验证基调按 track 正确注入,
+    且互斥 (校招 job 不含社招基调, 反之亦然)。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import src.agents.planner.skill_extraction as se
+        import src.llm as llm_mod
+        cls._orig_complete = llm_mod.complete
+        cls._orig_extract = se.extract_skills
+        cls._systems: dict[str, list[str]] = {"campus": [], "lateral": []}
+
+        se.extract_skills = lambda resume: ["Redis"]
+
+        def _run(track: Track, key: str):
+            captured: list[str] = []
+            llm_mod.complete = lambda system, user, **kw: (
+                captured.append(system) or "针对 X 的取舍你会怎么选?"
+            )
+            job = JobContext(title="后端", jd="x", role_family="backend",
+                             track=track, question_source="llm_direct")
+            planner.plan(job, _CANDIDATE)
+            # 只保留出题 system (含好题标准的), 排除 topic-match 等其他 LLM 调用
+            cls._systems[key] = [s for s in captured if "好的面试题标准" in s]
+
+        _run(Track.CAMPUS, "campus")
+        _run(Track.LATERAL, "lateral")
+
+    @classmethod
+    def tearDownClass(cls):
+        import src.agents.planner.skill_extraction as se
+        import src.llm as llm_mod
+        llm_mod.complete = cls._orig_complete
+        se.extract_skills = cls._orig_extract
+
+    def test_campus_tone_injected_exclusively(self):
+        sys_list = self._systems["campus"]
+        self.assertTrue(sys_list, "campus 应有出题 system")
+        for s in sys_list:
+            self.assertIn("【校招】", s)
+            self.assertNotIn("【社招】", s)
+
+    def test_lateral_tone_injected_exclusively(self):
+        sys_list = self._systems["lateral"]
+        self.assertTrue(sys_list, "lateral 应有出题 system")
+        for s in sys_list:
+            self.assertIn("【社招】", s)
+            self.assertNotIn("【校招】", s)
+
+    def test_campus_tone_emphasizes_concept(self):
+        # 用户要求: 校招更注重概念/基础/理解
+        t = planner._CAMPUS_TONE
+        self.assertIn("校招", t)
+        self.assertIn("基础概念", t)
+        self.assertIn("理解", t)
+
+    def test_lateral_tone_emphasizes_practice(self):
+        t = planner._LATERAL_TONE
+        self.assertIn("社招", t)
+        self.assertIn("实战", t)
+        self.assertIn("权衡", t)
+
+    def test_track_tone_helper(self):
+        self.assertEqual(planner._track_tone(Track.CAMPUS), planner._CAMPUS_TONE)
+        self.assertEqual(planner._track_tone(Track.LATERAL), planner._LATERAL_TONE)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -175,13 +175,18 @@ class RagE2EProvenanceTests(_RagE2EBase):
     def test_full_pipeline_provenance(self):
         from src.db import load_seed_question
 
-        # 1) 灌种子题 (PG + Milvus 双写)
+        # 1) 灌种子题 (PG + Milvus 双写)。
+        # used_source_ids 排除机制下同一道 seed 全 plan 只用一次, tech-lateral
+        # 有 4 道 tech knowledge, 所以 tech 种子灌 4 道, 保证每道题都能命中
+        # 一道**不同的** seed (本 eval 测 provenance 透传, 要全部有 source)。
         self._seed_questions(
             role_family="backend",
-            mapping={
-                "技术深度": "seed-tech-e2e",
-                "沟通协作": "seed-comm-e2e",
-            },
+            mapping={"沟通协作": "seed-comm-e2e"},
+        )
+        for i in range(1, 5):
+            self._seed_questions(
+                role_family="backend",
+                mapping={"技术深度": f"seed-tech-e2e-{i}"},
         )
 
         # 2) POST /jobs (含 JD + 公司资料, BG ingest 走 monkey-patched embed)
@@ -222,7 +227,8 @@ class RagE2EProvenanceTests(_RagE2EBase):
         knowledge_q = [q for q in questions if q["category"] == "knowledge"]
         project_q = [q for q in questions if q["category"] == "project_experience"]
 
-        # 4a) knowledge 题 (lateral 1 道): source_question_id 必须指向真实 SeedQuestion
+        # 4a) knowledge 题 (tech-lateral 4 道): source_question_id 必须指向真实
+        # SeedQuestion, 且互不重复 (used_source_ids 排除机制)
         self.assertEqual(len(knowledge_q), 4)
         for q in knowledge_q:
             src_id = q.get("source_question_id")
@@ -233,6 +239,11 @@ class RagE2EProvenanceTests(_RagE2EBase):
             )
             self.assertEqual(seed.role_family, "backend")
             self.assertIn(seed.competency, {"技术深度", "沟通协作"})
+        knowledge_src_ids = [q["source_question_id"] for q in knowledge_q]
+        self.assertEqual(
+            len(knowledge_src_ids), len(set(knowledge_src_ids)),
+            f"同一道 seed 不允许在 plan 里复用: {knowledge_src_ids}",
+        )
 
         # 4b) project 题 (lateral 3 道, 经 orchestrator.start_session 已 resolve_lazy):
         #     source_chunk_ids 非空, 且全部指向本 candidate 的 resume 切片。

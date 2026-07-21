@@ -13,6 +13,8 @@ import {
   type InterviewPlan,
   type InterviewSessionDetail,
   type JobContext,
+  type PlanTrace,
+  type ResumeChunk,
   type ReviewDecision,
   type ReviewRecord,
 } from "@/lib/api";
@@ -45,6 +47,8 @@ type FullData = {
   plan: InterviewPlan | null;
   // Sprint 5.7: 含 assessments / answers / intro_text, 拉得到才有
   session: InterviewSessionDetail | null;
+  // Sprint E: resume 切片原文, 出题过程视图对照 project 题溯源用
+  resumeChunks: ResumeChunk[];
 };
 
 type LoadState =
@@ -72,9 +76,14 @@ export default function CandidateDetailPage({
       let session: InterviewSessionDetail | null = null;
       // Sprint 5.5: plan 单独拉 (plan_pending 状态下 plan 未生成会 404, 静默吞);
       // 用于 HR 看面试 stage 视图 + report 里 competency 名映射。
+      // Sprint E: 换 HR 端接口, 多返 trace (出题过程审计)。
       const plan: InterviewPlan | null = await api
-        .getCandidatePlan(jobId, candidateId)
+        .getHrPlan(jobId, candidateId)
         .catch(() => null as InterviewPlan | null);
+      // Sprint E: resume 切片 (trace 视图对照 project 题溯源); 失败静默空
+      const resumeChunks: ResumeChunk[] = await api
+        .getResumeChunks(candidateId)
+        .catch(() => [] as ResumeChunk[]);
       if (
         (candidate.status === "completed" || candidate.status === "reviewed") &&
         candidate.report_id
@@ -93,7 +102,7 @@ export default function CandidateDetailPage({
       }
       setState({
         kind: "ok",
-        data: { candidate, job, report, review, plan, session },
+        data: { candidate, job, report, review, plan, session, resumeChunks },
       });
     } catch (e) {
       setState({ kind: "error", message: errMessage(e) });
@@ -154,7 +163,10 @@ function Detail({
   data: FullData;
   onReviewSubmitted: (review: ReviewRecord) => void;
 }) {
-  const { candidate, job, report, review, plan, session } = data;
+  const { candidate, job, report, review, plan, session, resumeChunks } = data;
+  // 开发者预览: lazy project 题的内存 resolve 结果 (后端不落库)。
+  // 非 null 时 StageView 换用预览 plan; 只影响本页展示, 不影响正式面试。
+  const [previewPlan, setPreviewPlan] = useState<InterviewPlan | null>(null);
 
   // 把 plan 里的 competency 信息编成 id -> {name, description, weight} 映射
   const competencyById = useMemo(() => {
@@ -205,7 +217,31 @@ function Detail({
         />
       )}
 
-      {plan && <StageView plan={plan} />}
+      {plan && (
+        <StageView
+          plan={previewPlan ?? plan}
+          previewActive={previewPlan !== null}
+          onPreview={
+            hasUnresolvedLazy(plan) && !previewPlan
+              ? async () => {
+                  const resolved = await api.getPlanPreview(
+                    candidate.job_id,
+                    candidate.candidate_id,
+                  );
+                  setPreviewPlan(resolved);
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {plan?.trace && (
+        <PlanTraceView
+          trace={plan.trace}
+          plan={plan}
+          resumeChunks={resumeChunks}
+        />
+      )}
 
       {session && plan && (
         <AssessmentView session={session} plan={plan} />
@@ -287,13 +323,66 @@ function describeSource(q: {
   return { label: q.category, tone: "muted" };
 }
 
-function StageView({ plan }: { plan: InterviewPlan }) {
+function hasUnresolvedLazy(plan: InterviewPlan): boolean {
+  return plan.rounds.some((r) => r.questions.some((q) => q.lazy && !q.text));
+}
+
+function StageView({
+  plan,
+  previewActive,
+  onPreview,
+}: {
+  plan: InterviewPlan;
+  previewActive?: boolean;
+  onPreview?: () => Promise<void>;
+}) {
+  const [previewState, setPreviewState] = useState<
+    "idle" | "loading" | "error"
+  >("idle");
+  const [previewError, setPreviewError] = useState("");
+
+  async function handlePreview() {
+    if (!onPreview) return;
+    setPreviewState("loading");
+    try {
+      await onPreview();
+      setPreviewState("idle");
+    } catch (e) {
+      setPreviewError(errMessage(e));
+      setPreviewState("error");
+    }
+  }
+
   return (
     <section className="mb-8">
-      <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-wide mb-3">
-        面试阶段 ({plan.rounds.length} 个 stage,{" "}
-        {plan.rounds.reduce((n, r) => n + r.questions.length, 0)} 道题)
-      </h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-wide">
+          面试阶段 ({plan.rounds.length} 个 stage,{" "}
+          {plan.rounds.reduce((n, r) => n + r.questions.length, 0)} 道题)
+        </h2>
+        {onPreview && (
+          <button
+            onClick={handlePreview}
+            disabled={previewState === "loading"}
+            className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-50"
+          >
+            {previewState === "loading"
+              ? "生成预览中..."
+              : "预览项目题 (dev)"}
+          </button>
+        )}
+      </div>
+      {previewState === "error" && (
+        <p className="text-xs text-red-600 dark:text-red-400 mb-3">
+          预览失败: {previewError}
+        </p>
+      )}
+      {previewActive && (
+        <p className="text-xs text-amber-700 dark:text-amber-300 mb-3">
+          ⚠ 开发者预览: 项目题为无自我介绍时的模拟生成, 正式面试会结合候选人
+          intro 重新生成, 题面不会逐字一致; 该预览不落库、不影响正式面试。
+        </p>
+      )}
       <div className="space-y-3">
         {plan.rounds.map((round) => (
           <div
@@ -348,6 +437,258 @@ function StageView({ plan }: { plan: InterviewPlan }) {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+// ---------- 出题过程视图 (Sprint E) ----------
+//
+// 展示 plan.trace: topic 匹配全过程 (aspect query + resume 技能 → matched
+// topics) + 每题来源路径 + project 题命中的 resume 切片原文。
+// 默认折叠 —— 这是审计/调试信息, 不是 HR 日常主路径。
+
+const PATH_LABEL: Record<string, string> = {
+  self_intro: "固定模板",
+  rag_refined: "题库召回 + LLM 精修",
+  llm_direct_knowledge: "纯 LLM 出题 (维度+技能)",
+  llm_direct_scenario: "纯 LLM 场景题 (维度+技能)",
+  rag_direct: "题库原文 (LLM 不可用)",
+  llm_generated: "纯 LLM 生成 (题库未命中)",
+  fallback_template: "兜底模板",
+  lazy_pending: "待懒生成",
+  resume_section: "简历分段定向深挖",
+  resume_rag: "Resume 切片 RAG + LLM",
+  resume_llm: "Resume 全文 + LLM",
+};
+
+function PlanTraceView({
+  trace,
+  plan,
+  resumeChunks,
+}: {
+  trace: PlanTrace;
+  plan: InterviewPlan;
+  resumeChunks: ResumeChunk[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set());
+
+  const questionById = useMemo(
+    () =>
+      new Map(
+        plan.rounds.flatMap((r) => r.questions).map((q) => [q.question_id, q]),
+      ),
+    [plan],
+  );
+  const chunkById = useMemo(
+    () => new Map(resumeChunks.map((c) => [c.document_id, c])),
+    [resumeChunks],
+  );
+
+  function toggleChunk(id: string) {
+    setExpandedChunks((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <section className="mb-8">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="text-sm font-medium text-zinc-500 uppercase tracking-wide mb-3 flex items-center gap-2 hover:text-zinc-900 dark:hover:text-zinc-100"
+      >
+        出题过程 (trace) {open ? "▲" : "▼"}
+      </button>
+
+      {open && (
+        <div className="space-y-4">
+          {/* 1. topic 匹配过程 */}
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+            <p className="text-xs text-zinc-400 uppercase tracking-wide mb-2">
+              第一步 · topic 匹配 (query = HR 考察维度 + 简历技能, 与题库 topic
+              做 embedding 语义匹配)
+            </p>
+            <div className="space-y-1 text-sm">
+              {[...trace.aspect_queries, ...trace.extracted_skills].map((q) => {
+                const isSkill = trace.extracted_skills.includes(q);
+                const hits = trace.matches[q] ?? [];
+                return (
+                  <div key={q} className="flex items-baseline gap-2 flex-wrap">
+                    <span
+                      className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+                        isSkill
+                          ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                          : "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+                      }`}
+                    >
+                      {isSkill ? "简历技能" : "考察维度"}
+                    </span>
+                    <span className="text-zinc-700 dark:text-zinc-300">
+                      {q.length > 40 ? q.slice(0, 40) + "…" : q}
+                    </span>
+                    <span className="text-zinc-400">→</span>
+                    {hits.length > 0 ? (
+                      <>
+                        {hits.map((t) => (
+                          <span
+                            key={t}
+                            className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                          >
+                            {t}
+                          </span>
+                        ))}
+                        {(trace.llm_matched_skills ?? []).includes(q) && (
+                          <span className="text-xs px-1 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400">
+                            LLM 归类
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs text-zinc-400">无匹配</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800 text-sm flex flex-wrap gap-x-6 gap-y-1">
+              <span className="text-zinc-500">
+                命中 topic 并集:{" "}
+                {trace.matched_topics.length > 0 ? (
+                  <span className="text-emerald-700 dark:text-emerald-300">
+                    {trace.matched_topics.join("、")}
+                  </span>
+                ) : (
+                  <span className="text-zinc-400">
+                    无 (knowledge 题走全题库向量检索)
+                  </span>
+                )}
+              </span>
+              {trace.unmatched_skills.length > 0 && (
+                <span className="text-zinc-500">
+                  未匹配技能 (已记 skill_backlog):{" "}
+                  <span className="text-amber-700 dark:text-amber-300">
+                    {trace.unmatched_skills.join("、")}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* 2. 每题来源路径 */}
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+            <p className="text-xs text-zinc-400 uppercase tracking-wide mb-2">
+              第二步 · 逐题来源 (topic/难度分配 → 题库检索或生成路径)
+            </p>
+            <ul className="space-y-2">
+              {trace.questions.map((qt) => {
+                const q = questionById.get(qt.question_id);
+                return (
+                  <li
+                    key={qt.question_id}
+                    className="border-l-2 border-zinc-200 dark:border-zinc-700 pl-3 text-sm"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap text-xs mb-0.5">
+                      <span
+                        className={`px-1.5 py-0.5 rounded uppercase ${
+                          STAGE_BADGE_COLOR[qt.stage] ?? ""
+                        }`}
+                      >
+                        {STAGE_LABEL[qt.stage] ?? qt.stage}
+                      </span>
+                      <span className="text-zinc-600 dark:text-zinc-300 font-medium">
+                        {PATH_LABEL[qt.path] ?? qt.path}
+                      </span>
+                      {qt.topic && (
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                          {qt.topic}
+                        </span>
+                      )}
+                      {qt.section_title && (
+                        <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
+                          {qt.section_title}
+                        </span>
+                      )}
+                      {qt.difficulty && (
+                        <span className="text-zinc-400">{qt.difficulty}</span>
+                      )}
+                      {qt.source_question_id && (
+                        <span className="font-mono text-zinc-400">
+                          seed:{qt.source_question_id.slice(0, 10)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-zinc-800 dark:text-zinc-200 leading-relaxed">
+                      {q?.text || (
+                        <span className="text-zinc-400 italic">(待生成)</span>
+                      )}
+                    </p>
+                    {qt.source_chunk_ids.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {qt.source_chunk_ids.map((cid) => (
+                          <button
+                            key={cid}
+                            onClick={() => toggleChunk(cid)}
+                            className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                          >
+                            切片 {cid.slice(-8)}{" "}
+                            {expandedChunks.has(cid) ? "▲" : "▼"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {qt.source_chunk_ids
+                      .filter((cid) => expandedChunks.has(cid))
+                      .map((cid) => {
+                        const chunk = chunkById.get(cid);
+                        return (
+                          <div
+                            key={cid}
+                            className="mt-1 rounded bg-zinc-50 dark:bg-zinc-800/40 p-2 text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed whitespace-pre-wrap"
+                          >
+                            {chunk
+                              ? chunk.text
+                              : "(切片不在 Milvus 中, 可能已过期)"}
+                          </div>
+                        );
+                      })}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+
+          {/* 3. resume 切片总览 */}
+          {resumeChunks.length > 0 && (
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+              <p className="text-xs text-zinc-400 uppercase tracking-wide mb-2">
+                Resume 切片总览 ({resumeChunks.length} 片, project 题从中按
+                考察维度语义召回 top-3)
+              </p>
+              <div className="space-y-1">
+                {resumeChunks.map((c) => (
+                  <div key={c.document_id}>
+                    <button
+                      onClick={() => toggleChunk(c.document_id)}
+                      className="text-xs font-mono text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                    >
+                      #{c.chunk_index} {c.document_id.slice(-10)}{" "}
+                      {expandedChunks.has(c.document_id) ? "▲" : "▼"}
+                    </button>
+                    {expandedChunks.has(c.document_id) && (
+                      <div className="mt-1 mb-2 rounded bg-zinc-50 dark:bg-zinc-800/40 p-2 text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed whitespace-pre-wrap">
+                        {c.text}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

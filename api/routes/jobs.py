@@ -63,6 +63,7 @@ def create_job(body: JobCreate, background_tasks: BackgroundTasks) -> JobContext
         company_materials=body.company_materials,
         track=body.track,
         role_family=body.role_family,
+        question_source=body.question_source,
         followup_policy=body.followup_policy,
         completion_policy=body.completion_policy,
         aspects=[ProfileAspect.model_validate(a) for a in aspects_in],
