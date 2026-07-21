@@ -7,6 +7,9 @@ questions —— 题库, 按维度召回的目标
   - role_family  VARCHAR(32)  按职位族过滤(后端 / 前端 / 数据科学 / ...)
   - competency   VARCHAR(64)  按考察维度过滤(技术深度 / 沟通协作 / ...)
   - category     VARCHAR(32)  Sprint 5.5: knowledge / scenario, 让 Planner 按 stage 分流
+  - dataset_id   VARCHAR(64)  Sprint D-lite: 数据集隔离, 召回可按 dataset 过滤
+  - topic        VARCHAR(128) Sprint D-lite: 主题词 (e.g. "JAVA 基础"), 召回可按 topic 过滤
+  - difficulty   VARCHAR(16)  Sprint D-lite: easy / medium / hard, 召回可按难度过滤
   - text         VARCHAR(2048) 题目原文
   - embedding    FLOAT_VECTOR(1536)  text-embedding-3-small
 
@@ -48,6 +51,10 @@ def _build_questions_schema():
     s.add_field("role_family", DataType.VARCHAR, max_length=32)
     s.add_field("competency", DataType.VARCHAR, max_length=64)
     s.add_field("category", DataType.VARCHAR, max_length=32)
+    # Sprint D-lite: 新增 3 个可过滤字段, 召回 expr 可按 dataset/topic/difficulty 缩池
+    s.add_field("dataset_id", DataType.VARCHAR, max_length=64)
+    s.add_field("topic", DataType.VARCHAR, max_length=128)
+    s.add_field("difficulty", DataType.VARCHAR, max_length=16)
     s.add_field("text", DataType.VARCHAR, max_length=2048)
     s.add_field("embedding", DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM)
     return s

@@ -20,7 +20,10 @@ from src.vector_store.collections import COLLECTION_DOCUMENTS, COLLECTION_QUESTI
 
 log = logging.getLogger(__name__)
 
-_QUESTIONS_OUTPUT = ("question_id", "role_family", "competency", "category", "text")
+_QUESTIONS_OUTPUT = (
+    "question_id", "role_family", "competency", "category",
+    "dataset_id", "topic", "difficulty", "text",
+)
 _DOCUMENTS_OUTPUT = ("document_id", "kind", "source_id", "chunk_index", "text")
 
 # 跨进程 drop+reseed 后, 持有 stale client 的进程 search 会抛
@@ -101,9 +104,14 @@ def upsert_question(
     text: str,
     embedding: list[float],
     category: str = "knowledge",
+    dataset_id: str = "",
+    topic: str = "",
+    difficulty: str = "",
 ) -> bool:
     """写入或更新一道题。返回 True 表示真的入库, False 表示因 stub 向量被跳过。
-    Sprint 5.5: category 默认 knowledge 让老调用方零改动。"""
+    Sprint 5.5: category 默认 knowledge 让老调用方零改动。
+    Sprint D-lite: 加 dataset_id / topic / difficulty 三字段 (默认空串保持
+    老调用方零改动); 召回侧 search_questions 可按这三字段硬过滤。"""
     if is_stub_vector(embedding):
         log.warning(
             "skip upsert_question(%s): stub vector (全零), 不污染向量空间",
@@ -118,6 +126,9 @@ def upsert_question(
             "role_family": role_family,
             "competency": competency,
             "category": category,
+            "dataset_id": dataset_id,
+            "topic": topic,
+            "difficulty": difficulty,
             "text": text,
             "embedding": embedding,
         }],
@@ -132,15 +143,21 @@ def search_questions(
     role_family: Optional[str] = None,
     competency: Optional[str] = None,
     category: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+    topic: Optional[str] = None,
+    difficulty: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """按向量召回 top_k 道题, 可选 role_family / competency / category 过滤。
+    """按向量召回 top_k 道题, 可选过滤字段。
     返回 list[dict], 含字段 + distance (COSINE: 越小越相似)。
-    Sprint 5.5: category 过滤让 Planner 按 stage 分别拉 knowledge / scenario 题。"""
+    Sprint 5.5: category 过滤让 Planner 按 stage 分别拉 knowledge / scenario 题。
+    Sprint D-lite: 新增 dataset_id / topic / difficulty 过滤; None 表示不过滤
+    (保留向后兼容, 老调用方零改动). 同时召回结果带这三字段供日志/UI 使用。"""
     if is_stub_vector(embedding):
         # stub 向量召回结果无意义, 返回空免得调用方误用
         return []
     expr = _build_filter(
         role_family=role_family, competency=competency, category=category,
+        dataset_id=dataset_id, topic=topic, difficulty=difficulty,
     )
     results = _search_with_load_retry(
         collection_name=COLLECTION_QUESTIONS,
@@ -214,6 +231,33 @@ def count_documents() -> int:
     client = get_client()
     stats = client.get_collection_stats(COLLECTION_DOCUMENTS)
     return int(stats.get("row_count", 0))
+
+
+def list_documents(
+    *, kind: str, source_id: str, limit: int = 200,
+) -> list[dict[str, Any]]:
+    """按 (kind, source_id) 列出全部切片, 标量 query 不走向量。
+    Sprint E: HR 端「出题过程」视图展示 project 题命中的 resume 切片原文。
+    按 chunk_index 排序返回。"""
+    client = get_client()
+    expr = _build_filter(kind=kind, source_id=source_id)
+    try:
+        rows = client.query(
+            collection_name=COLLECTION_DOCUMENTS,
+            filter=expr,
+            output_fields=list(_DOCUMENTS_OUTPUT),
+            limit=limit,
+        )
+    except Exception:
+        # released 状态下 query 报 code=101, load 后重试一次 (与 search 同款语义)
+        client.load_collection(COLLECTION_DOCUMENTS)
+        rows = client.query(
+            collection_name=COLLECTION_DOCUMENTS,
+            filter=expr,
+            output_fields=list(_DOCUMENTS_OUTPUT),
+            limit=limit,
+        )
+    return sorted(rows, key=lambda r: r.get("chunk_index", 0))
 
 
 # ---------- 内部: 把 pymilvus 的 Hits 拍成 list[dict] ----------
