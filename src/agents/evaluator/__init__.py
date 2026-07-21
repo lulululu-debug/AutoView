@@ -65,6 +65,80 @@ def _score_for_competency(
     questions: list[Question],
     session: InterviewSession,
 ) -> DimensionScore:
+    """维度分入口 —— Sprint 6.5 起双路径:
+    优先 assessment 驱动 (_assessment_score); session 无 assessments
+    (ASSESSOR_ENABLED=false / 老 session) 退 Sprint 0 启发式保底, 不删。"""
+    ds = _assessment_score(comp, questions, session)
+    if ds is not None:
+        return ds
+    return _heuristic_score(comp, questions, session)
+
+
+def _assessment_score(
+    comp: Competency,
+    questions: list[Question],
+    session: InterviewSession,
+) -> DimensionScore | None:
+    """Sprint 6.5 (sim 冒烟结案后的修复): score = 100 × mean(该维度每道题的
+    best sufficiency)。
+
+    背景: 旧启发式 (字数+关键词) 在真实长答案下饱和于 95 (base 129 字封顶 80
+    + bonus 5 词封顶 15), 强弱候选人同分, 区分度全靠未答维度记 0 的加权拖拽。
+    质量信号 (AnswerAssessment.sufficiency) 早已落库却没被打分消费, 本函数补上。
+
+    规则:
+    - **只对实际被问过的题求均值** (被问过 = 有 ≥1 条 assessment):
+      CompletionPolicy 提前结束 / hard cap 截断是系统行为, 没被问到的题不许
+      记 0 反过来罚候选人 —— 覆盖缺口由 coverage + evidence_insufficient
+      表达, 质量分只衡量已收集证据的质量, 不双重计罚;
+    - 同题多次 assessment (原答 + 追问后再评) 取 max —— 与 coverage 同口径;
+    - 该维度有题但一道都没被问到 -> 0.0 (无证据, 与 coverage=0 一致);
+    - session.assessments 全空 -> None (调用方退启发式);
+    - 该维度没配题 -> None (启发式走"无答案 -> 0"老路径)。
+
+    合规: 本分数是 sufficiency 的聚合派生量, 层级与已展示的 coverage 相同
+    (Sprint 5.7 附加确认该层级可见); 裸 sufficiency 数字仍不进 UI。
+    """
+    if not session.assessments:
+        return None
+    comp_q_ids = {
+        q.question_id for q in questions
+        if q.competency_id == comp.competency_id
+    }
+    if not comp_q_ids:
+        return None
+
+    best: dict[str, float] = {}  # 只收被问过的题
+    for a in session.assessments:
+        if a.question_id in comp_q_ids:
+            if a.sufficiency > best.get(a.question_id, -1.0):
+                best[a.question_id] = a.sufficiency
+
+    if not best:
+        return DimensionScore(
+            competency_id=comp.competency_id,
+            score=0.0,
+            evidence=["未收集到该维度的有效回答"],
+        )
+
+    score = round(100.0 * sum(best.values()) / len(best), 1)
+    answers = [a for a in session.answers if a.question_id in best]
+    evidence = (
+        _evidence(answers) if answers else ["未收集到该维度的有效回答"]
+    )
+    return DimensionScore(
+        competency_id=comp.competency_id, score=score, evidence=evidence,
+    )
+
+
+def _heuristic_score(
+    comp: Competency,
+    questions: list[Question],
+    session: InterviewSession,
+) -> DimensionScore:
+    """Sprint 0 启发式 (字数 + 关键词) —— 仅作 assessments 缺失时的保底。
+    已知缺陷 (sim 冒烟坐实): 真实长答案下 base/bonus 双双封顶, 分数饱和于
+    95, 无区分度。不要再作为主路径使用, 也不要删 (双路径保底约定)。"""
     comp_q_ids = {q.question_id for q in questions if q.competency_id == comp.competency_id}
     answers = [a for a in session.answers if a.question_id in comp_q_ids]
 
@@ -83,8 +157,14 @@ def _score_for_competency(
     bonus = min(15.0, specificity_hits * 3.0)
     score = round(base + bonus, 1)
 
-    # Evidence: dedupe by normalized text (避免同一段被复制粘贴多次刷屏),
-    # 截取首 120 字, 上限 _EVIDENCE_MAX 条。保留首次出现顺序 = 按答题顺序展示。
+    return DimensionScore(
+        competency_id=comp.competency_id, score=score, evidence=_evidence(answers),
+    )
+
+
+def _evidence(answers: list) -> list[str]:
+    """Evidence: 按 text 去重 (防复制粘贴刷屏) + 截 120 字 + 上限 _EVIDENCE_MAX,
+    保留答题顺序。assessment 路径与启发式路径共用, UI 契约不变。"""
     evidence: list[str] = []
     seen: set[str] = set()
     for a in answers:
@@ -95,9 +175,7 @@ def _score_for_competency(
         evidence.append(norm[:120] + ("…" if len(norm) > 120 else ""))
         if len(evidence) >= _EVIDENCE_MAX:
             break
-    return DimensionScore(
-        competency_id=comp.competency_id, score=score, evidence=evidence,
-    )
+    return evidence
 
 
 def _retrieve_job_context_chunks(
