@@ -19,3 +19,6 @@ venv/
 # Milvus Lite 本地数据
 milvus_lite*
 *.db.lock
+
+# sim 仿真 artifacts (效果评估跑批产物)
+sim/runs/
