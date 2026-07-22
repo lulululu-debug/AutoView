@@ -322,9 +322,14 @@ class FollowUpPolicy(BaseModel):
       assessment.confidence >= min_confidence_to_stop -> 停 (拿到足够信号)
     - 否则追问
 
-    阈值取值 0.0-1.0 与 AnswerAssessment 字段对齐。"""
+    阈值取值 0.0-1.0 与 AnswerAssessment 字段对齐。
+
+    Sprint 6.5 F1: min_sufficiency_to_stop 0.7 -> 0.6。Assessor prompt 加分类别
+    评分锚点后 sufficiency 量表整体下移 (虚高 0.9+ 回归 0.65-0.85), 阈值必须
+    跟着重校 —— 新锚点里 0.4-0.6 = "有经历但缺量化/深度" (该追问), ≥ 0.65 =
+    有效证据 (不该追)。改 Assessor 量表必须连带复核本阈值, 复验走 sim 批次。"""
     max_followups_per_question: int = 1
-    min_sufficiency_to_stop: float = 0.7
+    min_sufficiency_to_stop: float = 0.6
     min_confidence_to_stop: float = 0.5
 
     @classmethod

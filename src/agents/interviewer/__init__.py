@@ -216,8 +216,22 @@ def next_turn(
         # 取当前题对应的最新 assessment (orchestrator 刚追加的)
         assessment = _latest_assessment_for(session, current_q.question_id)
         policy = _policy_for_question(plan, current_q, job)
-        if latest is not None and _decide_followup(
-            current_q, latest, assessment, policy, followups_since,
+        # Sprint 6.5 F1: 追问不许挤掉正题。剩余答题预算若不足以问完剩余正题,
+        # 跳过追问直接推进 —— 防止 "sufficiency 量表变严 → 追问变多 → 尾部题
+        # (常是 comm/scenario) 被 hard cap 挤掉 → 该维度 0 分" 的级联崩塌。
+        # 正题优先是对候选人的公平: 追问只花"盈余"预算。
+        asked_ids = {
+            t.ref_id for t in session.history
+            if t.role == TurnRole.INTERVIEWER and t.ref_id in question_ids
+        }
+        remaining_q = len(question_ids) - len(asked_ids)
+        budget_left = completion.max_total_questions - total_questions_asked(session)
+        if (
+            budget_left > remaining_q
+            and latest is not None
+            and _decide_followup(
+                current_q, latest, assessment, policy, followups_since,
+            )
         ):
             return FollowUp(
                 parent_question_id=current_q.question_id,
