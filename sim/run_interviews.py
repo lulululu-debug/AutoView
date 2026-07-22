@@ -24,6 +24,10 @@ def main() -> None:
     )
     ap.add_argument("--repeat", type=int, default=1, help="每个 persona 跑几次")
     ap.add_argument("--out", default="sim/runs", help="artifacts 根目录")
+    ap.add_argument(
+        "--run-dir", default=None,
+        help="精确输出目录 (分批合并 / 断点续跑用); 缺省 = <out>/<时间戳>",
+    )
     args = ap.parse_args()
 
     bootstrap()
@@ -42,7 +46,10 @@ def main() -> None:
     )
 
     db.init_db()
-    out_dir = Path(args.out) / time.strftime("%Y%m%d-%H%M%S")
+    out_dir = (
+        Path(args.run_dir) if args.run_dir
+        else Path(args.out) / time.strftime("%Y%m%d-%H%M%S")
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []
@@ -78,7 +85,8 @@ def main() -> None:
                 f"{r['overall']:<9.3f}{r['n_answers']:<5}"
             )
     import json
-    (out_dir / "summary.json").write_text(
+    # 带时间戳防分批互相覆盖; report.py 靠 "report" 字段过滤, 不会误读 summary
+    (out_dir / f"summary-{time.strftime('%H%M%S')}.json").write_text(
         json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8",
     )
     print(f"\n[sim] artifacts: {out_dir}/")
