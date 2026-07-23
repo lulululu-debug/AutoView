@@ -87,6 +87,18 @@ class _RagE2EBase(unittest.TestCase):
         cls._db = tempfile.mktemp(suffix=".db")
         os.environ.pop("MILVUS_URI", None)
         os.environ["MILVUS_LITE_URI"] = cls._db
+        # Sprint 6.5 F8: 本类 setUp 会 flushdb —— 必须切到独立 Redis db,
+        # 否则每跑一次 discover 就把 dev 的 llm/emb/tts 缓存全部清零
+        # (实战教训: 30 天 embedding 缓存被反复清空, 一天烧穿 API 配额)。
+        # 与上面 MILVUS_LITE_URI 换测试文件同款隔离哲学; PG 早有 TEST 库。
+        cls._old_redis_url = os.environ.get("REDIS_URL")
+        if cls._old_redis_url:
+            base = cls._old_redis_url.rsplit("/", 1)[0]
+            os.environ["REDIS_URL"] = os.environ.get(
+                "TEST_REDIS_URL", f"{base}/9",
+            )
+        from src.cache.base import reset_client_for_testing as _reset_redis
+        _reset_redis()
         from fastapi.testclient import TestClient
         from src.db import init_db
         from src.vector_store import init_collections
@@ -101,6 +113,11 @@ class _RagE2EBase(unittest.TestCase):
     def tearDownClass(cls):
         from src.vector_store.base import reset_client_for_testing
         reset_client_for_testing()
+        # F8: 还原 Redis 指向并重置单例, 防污染后续 TestCase 的连接
+        if cls._old_redis_url:
+            os.environ["REDIS_URL"] = cls._old_redis_url
+        from src.cache.base import reset_client_for_testing as _reset_redis
+        _reset_redis()
         for ext in ("", "-shm", "-wal", ".lock"):
             try:
                 os.unlink(cls._db + ext)
