@@ -23,6 +23,7 @@ from src import llm
 from src.coverage import (
     compute_coverage,
     compute_richness,
+    assessed_counts,
     mandatory_coverage_met,
     total_questions_asked,
 )
@@ -253,8 +254,12 @@ def next_turn(
 
     # 3) mandatory coverage 达标 -> 提前 done
     #    (老 plan plan.competencies 空时 mandatory_coverage_met 返 False, 不早停)
+    #    F5 第二轮: 附加 assessed_counts 稳健性检查 —— 每个 mandatory 至少
+    #    min_assessed_per_mandatory 道不同题被评估过才许提前结束, 防单发
+    #    幸运高分让对抗型候选人逃过追问 (对抗批次坐实的泄漏)。
     coverage = compute_coverage(session, plan)
-    if mandatory_coverage_met(coverage, completion, plan):
+    counts = assessed_counts(session, plan)
+    if mandatory_coverage_met(coverage, completion, plan, counts=counts):
         return None
 
     # 3) 还有未答的 plan 题 -> 继续

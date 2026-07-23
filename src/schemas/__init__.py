@@ -379,6 +379,12 @@ class CompletionPolicy(BaseModel):
     # Sprint 6.5 F5: 0.7 -> 0.6, 随 Assessor 量表重锚同步 (新量表下 0.6+ 即
     # 有效证据; 0.7 会让 medium 档永远"不覆盖", insufficient flag 沦为全员噪声)。
     min_competency_coverage: float = Field(default=0.6, ge=0.0, le=1.0)
+    # Sprint 6.5 F5 第二轮: 提前结束前每个 mandatory competency 至少要有
+    # 几道**不同的题**被评估过。coverage 取 max() 对单发幸运分敏感 ——
+    # 对抗批次坐实 copy-paste 靠一道 knowledge 教科书答案触发提前结束逃过
+    # 追问; >= 2 让提前结束至少建立在两个独立数据点上, strong 多答 1-2 题
+    # 的代价换稳健。
+    min_assessed_per_mandatory: int = Field(default=2, ge=1)
     min_total_questions: int = Field(default=0, ge=0)
     max_total_questions: int = Field(default=15, gt=0)
     min_profile_richness: float = Field(default=0.0, ge=0.0, le=1.0)
