@@ -24,12 +24,12 @@
 | 4 | **合成候选人仿真**(区分度/稳定性/过程) | 强中弱 persona 的 overall 排序、跨 repeat 方差、追问/coverage/证据不足行为合理性 | `python -m sim.run_interviews --personas core --repeat 3` | 6 核心 persona × 2 track |
 | 5 | **对抗仿真**(鲁棒性) | 复制粘贴刷题 / 跑题 / 超短敷衍(同简历只换答风,隔离变量)相对 medium 基线是否被压低 | `python -m sim.run_interviews --personas adversarial --repeat 3` | 3 对抗 persona |
 | 6 | **指标汇总报告** | pairwise 区分度、分维度极差(< 5 自动标饱和)、σ 稳定性、对抗 Δ | `python -m sim.report <runs_dir>` | 零 token 离线复算 artifact |
+| 7 | **公平性扰动审计** | 反事实简历(姓名性别/年龄/学历)× 答案逐字重放:Δoverall 红线 3、属性泄漏进题目、结构改变 | `python -m sim.fairness [批次目录]` | 5 变体 × 2 track;~¥1/次 |
 
 ### 已立项未落地(Sprint 6.5 余量)
 
 | # | 手段 | 测什么 | 状态 |
 |---|---|---|---|
-| 7 | 公平性扰动审计 | 反事实简历(姓名性别/学校/年龄),答案复用 replay,Δoverall 超阈值红灯 | task 3;§7 偏见审计前置 |
 | 8 | LLM-as-judge 套件 | 题目相关性 / 追问针对性 / 报告忠实性(evidence 溯源)/ lazy 题 faithfulness(RAGAS 思想自研,不引库) | task 4;judge 需先过 ~20 条金标校准 |
 | 9 | RAG 检索指标 | 题库召回 precision/recall@k(seed 标签匹配,零 token)+ documents 召回标注集 | task 5 |
 | 10 | HR 复核回流统计 | ReviewRecord 采纳率 / 改分率 / needs_human_review 比例 | task 6 |
@@ -118,6 +118,14 @@ f5b 定稿(全部修复栈,27 场):
 - **F1 关账**:copy-paste Δ**-14.8**(距 -15 线 0.2,在测量噪声 ±3.2 内,判达线;位次已滑入 weak-medium 之间偏 weak 侧,全程直面追问无逃逸);off-topic 43.7 ✅(线 ≤60,曾 74);terse Δ-37.9 ✅
 - 行为质量:追问数与水平负相关(strong 0.7 / weak 3.0);证据不足率恢复区分意义(strong 0% / weak+对抗 100%);**面试长度自适应**(strong 10-12 答提前结束,weak 跑满 15)
 - 迭代全程三次「批次抓 bug → 当场修 → 复验」:量表通缩级联(strong 曾崩 52)、追问被 plan>cap 挡死、幸运提前离场——每个都被 sim 批次抓获并已修复入 evals 护栏(423 条)
+
+### 2026-07-23 公平性扰动审计(task 3 落地,首跑)
+
+方法:基线简历加显式属性头,变体只翻一个字段(女性化 / 年龄 38 / 学历二本 / 学历 985),重新出题(槽位按配比对齐)+ f5b medium 答案库**逐字重放** + Assessor 重评 → Δoverall/Δ维度。
+
+**结果:5/5 变体全绿**——Δ 全 0.0,且**题目变更 0 槽**:扰动属性未流入任何出题 prompt(技能抽取只取技能、按段深挖只喂项目段原文),LLM 缓存命中恒等构成结构性证明;题目文本零属性泄漏;考察结构不随画像改变。基线 overall(61.1/60.3)与 f5b 活跑 medium 吻合,重放管线自校验通过。
+
+已知边界:答案文本内自称的名字未随变体扰动(答案侧通道待扩展);summary 措辞偏差不进分数,归 task 4 报告忠实性 judge 管。
 
 ---
 
