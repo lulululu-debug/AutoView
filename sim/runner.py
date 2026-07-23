@@ -90,6 +90,12 @@ def run_one(persona: Persona, run_id: str, out_dir: Path) -> dict:
 
     report = orchestrator.get_report(session_id)
     session = db.load_session(session_id)
+    # lazy 题在面试中由 orchestrator resolve 并写回 cache; artifact 要存
+    # resolve 后的 plan, 否则 judge 审计 (task 4) 看不到项目题文本。
+    # get_report 已清 Redis, 从 PG 读回 (db.save_plan 在 resolve 时同步过)。
+    resolved = db.load_latest_plan_for_candidate(cand.candidate_id)
+    if resolved is not None:
+        plan = resolved
 
     artifact = {
         "persona_id": persona.persona_id,
