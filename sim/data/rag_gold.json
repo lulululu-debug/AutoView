@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "notes": [
+    "Sprint 6.5 task 5: RAG 检索确定性金标。",
+    "question_bank: backend JD 的典型考察主题 -> 期望关键词 (top-k 内任一题命中即 hit);",
+    "forbid 关键词命中 = 污染 (F6: AI/技能类派生题混入 backend 召回)。",
+    "documents: 针对固定 fixture 简历切片的检索查询 (自包含, 不依赖历史数据)。"
+  ],
+  "forbid_common": ["SKILL", "Skill", "skill", "Agent", "agent", "MCP", "大模型", "渐进式披露", "工具调用", "Prompt", "prompt"],
+  "question_bank": [
+    {"id": "qb-01", "category": "knowledge", "query": "高并发场景下的限流方案设计", "expect": ["限流", "令牌", "漏桶", "滑动窗口", "高并发"]},
+    {"id": "qb-02", "category": "knowledge", "query": "Redis 缓存击穿 穿透 雪崩 防护", "expect": ["缓存", "Redis", "击穿", "穿透", "雪崩"]},
+    {"id": "qb-03", "category": "knowledge", "query": "MySQL 事务隔离级别与加锁", "expect": ["事务", "隔离", "锁", "MVCC", "MySQL"]},
+    {"id": "qb-04", "category": "knowledge", "query": "TCP 连接建立与 HTTP 协议", "expect": ["TCP", "HTTP", "握手", "连接", "报文"]},
+    {"id": "qb-05", "category": "knowledge", "query": "操作系统进程线程与调度", "expect": ["进程", "线程", "调度", "内存", "死锁"]},
+    {"id": "qb-06", "category": "knowledge", "query": "消息队列的可靠投递与重复消费", "expect": ["消息", "队列", "Kafka", "MQ", "消费"]},
+    {"id": "qb-07", "category": "knowledge", "query": "分布式系统的数据一致性与幂等", "expect": ["一致", "幂等", "分布式", "事务", "CAP"]},
+    {"id": "qb-08", "category": "knowledge", "query": "数据库慢查询定位与索引优化", "expect": ["慢查询", "索引", "执行计划", "优化", "SQL"]},
+    {"id": "qb-09", "category": "scenario", "query": "线上接口延迟突增的应急处理", "expect": ["线上", "排查", "延迟", "P99", "监控", "告警", "超时"]},
+    {"id": "qb-10", "category": "scenario", "query": "大促秒杀系统的高可用设计", "expect": ["秒杀", "高可用", "峰值", "压测", "扩容", "降级", "限流"]}
+  ],
+  "documents_fixture_source_id": "sim-ragmetrics-fixture",
+  "documents_fixture_resume": "工作经历:\n- 负责内部报表系统: 设计定时任务跑批生成日报, 数据量千万级, 用分片跑批把耗时从 2 小时降到 20 分钟。\n- 负责 CRM 工单模块: 把工单流转改造成显式状态机, 减少了非法状态流转的线上问题。\n- 数据库优化: 治理过一批慢查询, 通过加复合索引和改写分页 SQL, 把列表页 P95 从 1.2s 降到 200ms。",
+  "documents": [
+    {"id": "doc-01", "query": "报表系统的定时跑批是怎么做的", "expect": ["报表", "跑批"]},
+    {"id": "doc-02", "query": "工单流转的状态机设计", "expect": ["工单", "状态机"]},
+    {"id": "doc-03", "query": "慢查询优化的具体手段", "expect": ["慢查询", "索引"]}
+  ]
+}

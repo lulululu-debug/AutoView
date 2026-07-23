@@ -170,6 +170,8 @@ class InterviewerCompletionPolicyTests(unittest.TestCase):
     """Interviewer.next_turn 跟 CompletionPolicy 的端到端: 在 plan 内驱动 session。"""
 
     def setUp(self):
+        # F9: pymilvus load_dotenv 会把 key 塞回, setUp 必须再 pop
+        os.environ.pop("OPENAI_API_KEY", None)
         from src.agents import planner
         self.job = JobContext(
             title="x", jd="x", track=Track.LATERAL,
@@ -177,6 +179,9 @@ class InterviewerCompletionPolicyTests(unittest.TestCase):
         self.candidate = CandidateProfile(
             job_id=self.job.job_id, resume="x", projects=[],
         )
+        # F9: import planner 会触发 pymilvus load_dotenv 把 key 塞回,
+        # pop 必须紧贴在调用前 (import 之后)
+        os.environ.pop("OPENAI_API_KEY", None)
         self.plan = planner.plan(self.job, self.candidate)
         self.session = InterviewSession(
             plan_id=self.plan.plan_id, job_id=self.job.job_id,
@@ -263,11 +268,16 @@ class EvaluatorEvidenceInsufficientTests(unittest.TestCase):
     """Evaluator 在 coverage 不达标时把 summary 前缀加'证据不充分'。"""
 
     def setUp(self):
+        # F9: pymilvus load_dotenv 会把 key 塞回, setUp 必须再 pop
+        os.environ.pop("OPENAI_API_KEY", None)
         from src.agents import planner
         self.job = JobContext(title="x", jd="x", track=Track.LATERAL)
         self.candidate = CandidateProfile(
             job_id=self.job.job_id, resume="x", projects=[],
         )
+        # F9: import planner 会触发 pymilvus load_dotenv 把 key 塞回,
+        # pop 必须紧贴在调用前 (import 之后)
+        os.environ.pop("OPENAI_API_KEY", None)
         self.plan = planner.plan(self.job, self.candidate)
         # 构造 session: 只对 tech 维度有高 assessment, comm 维度全空
         all_qs = [q for r in self.plan.rounds for q in r.questions]
