@@ -178,7 +178,7 @@ class SkeletonPlanTests(unittest.TestCase):
         self.assertEqual(len(self.plan.competencies), 2,
                          "顶层 competencies: 技术深度 + 沟通协作")
         total = sum(len(r.questions) for r in self.plan.rounds)
-        self.assertEqual(total, 22, "tech-lateral 配比 1+11+6+4")
+        self.assertEqual(total, 12, "tech-lateral 配比 1+6+3+2 (F5 收敛)")
 
     def test_question_category_distribution(self):
         """Sprint 5.9: 4 类题都出现, 数量与 tech-lateral 配比一致。"""
@@ -186,9 +186,9 @@ class SkeletonPlanTests(unittest.TestCase):
         from collections import Counter
         by_cat = Counter(q.category for q in questions)
         self.assertEqual(by_cat[QuestionCategory.SELF_INTRO], 1)
-        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 11)
-        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 6)
-        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 4)
+        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 6)
+        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 3)
+        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 2)
 
     def test_each_question_links_to_a_competency(self):
         """非 self_intro 题挂某个顶层 competency; self_intro 题 competency_id=None。"""
@@ -265,31 +265,31 @@ class SkeletonPlanTests(unittest.TestCase):
              patch.object(planner_mod, "_scenario_question", _spy_scenario):
             p = planner_mod.plan(job, cand)
 
-        # Knowledge: campus tech=11, comm=1, 调用顺序就是 slot 顺序。
+        # Knowledge: campus tech=5, comm=1 (F5 收敛), 调用顺序就是 slot 顺序。
         # 排除集 plan 全局: 每次 spy 返回唯一 seed id, 下一次调用应看到 +1
-        assert len(calls["knowledge"]) == 12, f"应当 12 次 knowledge, 实际 {len(calls['knowledge'])}"
+        assert len(calls["knowledge"]) == 6, f"应当 6 次 knowledge (F5 收敛), 实际 {len(calls['knowledge'])}"
         used_sizes = [u for u, _ in calls["knowledge"]]
         self.assertEqual(
-            used_sizes, list(range(12)),
-            f"knowledge 排除集应当逐题 +1 (0..11), 实际 {used_sizes}",
+            used_sizes, list(range(6)),
+            f"knowledge 排除集应当逐题 +1 (0..5), 实际 {used_sizes}",
         )
-        # prior_texts 长度 0..10 (上一题的 dummy text 应当被回灌);
+        # prior_texts 长度 0..4 (上一题的 dummy text 应当被回灌);
         # comm 那 1 道是 0 (不同 competency 不共享 priors)
-        tech_priors = [n for _, n in calls["knowledge"][:11]]
+        tech_priors = [n for _, n in calls["knowledge"][:5]]
         self.assertEqual(
-            tech_priors, list(range(11)),
-            f"tech knowledge prior_texts 长度应当 0..10, 实际 {tech_priors}",
+            tech_priors, list(range(5)),
+            f"tech knowledge prior_texts 长度应当 0..4, 实际 {tech_priors}",
         )
-        self.assertEqual(calls["knowledge"][11][1], 0)
+        self.assertEqual(calls["knowledge"][5][1], 0)
 
-        # Scenario: campus tech=3。排除集跨 stage 共享, 接着 knowledge 的
-        # 12 道继续变大 (12, 13, 14); prior_texts 是 stage 内的, 从 0 重新累积
-        self.assertEqual(len(calls["scenario"]), 3)
+        # Scenario: campus tech=2。排除集跨 stage 共享, 接着 knowledge 的
+        # 6 道继续变大 (6, 7); prior_texts 是 stage 内的, 从 0 重新累积
+        self.assertEqual(len(calls["scenario"]), 2)
         self.assertEqual(
-            [u for u, _ in calls["scenario"]], [12, 13, 14],
+            [u for u, _ in calls["scenario"]], [6, 7],
             "排除集应当跨 stage 共享",
         )
-        self.assertEqual([n for _, n in calls["scenario"]], [0, 1, 2])
+        self.assertEqual([n for _, n in calls["scenario"]], [0, 1])
 
 
 # ---------- Report 结构 ----------

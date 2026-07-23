@@ -195,8 +195,8 @@ class CreateCandidateTests(unittest.TestCase):
         # Sprint 5.5: 默认 lateral track 4 stage 7 题
         total = sum(len(r.questions) for r in plan_pg.rounds)
         self.assertEqual(len(plan_pg.rounds), 4, "lateral 4 stage 序列")
-        # Sprint 5.9: tech-lateral 配比 1+11+6+4=22
-        self.assertEqual(total, 22, "lateral 配比 1+11+6+4")
+        # Sprint 6.5 F5: tech-lateral 配比 1+6+3+2=12 (cap 15 预留 3 追问)
+        self.assertEqual(total, 12, "lateral 配比 1+6+3+2")
         # Redis
         plan_redis = cache.load_plan(plan_pg.plan_id)
         self.assertIsNotNone(plan_redis, "Planner 应当已写 Redis")
@@ -237,8 +237,8 @@ class CreateCandidateTests(unittest.TestCase):
         # Sprint 5.5: 默认 lateral track 4 stage 7 题
         self.assertEqual(len(plan["rounds"]), 4)
         total = sum(len(r["questions"]) for r in plan["rounds"])
-        # Sprint 5.9: tech-lateral 22 主问题
-        self.assertEqual(total, 22)
+        # Sprint 6.5 F5: tech-lateral 12 主问题
+        self.assertEqual(total, 12)
 
     def test_get_plan_404_when_candidate_not_in_job(self):
         """安全: candidate_id 不在该 job 下的, 不能跨 job 偷看 plan。"""

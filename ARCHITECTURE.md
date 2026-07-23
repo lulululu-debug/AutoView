@@ -60,9 +60,11 @@
 - **职责**：把岗位要求映射成可考察的能力维度，按 track 配置 stage 占比，为每
   stage 生成题目
 
-**Track-aware stage 配比**（Sprint 5.5 起）：
-- **校招**：self_intro(1) → knowledge(3) → project(2 占位) → scenario(1-2) = 7-8 题
-- **社招**：self_intro(1) → project(3-4 占位) → scenario(2-3) → knowledge(1) = 7-9 题
+**Track-aware stage 配比**（Sprint 5.5 起；Sprint 6.5 F5 收敛为主问题 12 +
+追问预留 3 = `CompletionPolicy.max_total_questions` 15，plan 必须能在 cap 内问完）：
+- **校招**：self_intro(1) → knowledge(6) → project(3 占位) → scenario(2) = 12 题
+- **社招**：self_intro(1) → project(6 占位) → scenario(3) → knowledge(2) = 12 题
+- 改配比或 cap 必须两边同看，并跑 sim 批次复验（见 EVALUATION.md）
 
 **懒生成（Lazy Generation）**：项目深挖题在 Planner 阶段先**占位**（text 为空，
 `lazy=True`），候选人答完 self_intro 后，Interviewer 在进入 project stage 时把

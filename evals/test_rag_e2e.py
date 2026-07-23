@@ -229,7 +229,7 @@ class RagE2EProvenanceTests(_RagE2EBase):
 
         # 4a) knowledge 题 (tech-lateral 4 道): source_question_id 必须指向真实
         # SeedQuestion, 且互不重复 (used_source_ids 排除机制)
-        self.assertEqual(len(knowledge_q), 4)
+        self.assertEqual(len(knowledge_q), 2)
         for q in knowledge_q:
             src_id = q.get("source_question_id")
             self.assertIsNotNone(src_id, f"knowledge 题缺 source_question_id: {q}")
@@ -249,7 +249,7 @@ class RagE2EProvenanceTests(_RagE2EBase):
         #     source_chunk_ids 非空, 且全部指向本 candidate 的 resume 切片。
         #     注: plan API 返回的是 cache.load_plan, start_session 之前未 resolve,
         #     所以这里 plan 阶段 project 题 chunk_ids 应当还是空 (lazy 占位)。
-        self.assertEqual(len(project_q), 11)
+        self.assertEqual(len(project_q), 6)
         for q in project_q:
             self.assertTrue(q.get("lazy"), "plan 阶段 project 题应当还是 lazy 占位")
             self.assertEqual(

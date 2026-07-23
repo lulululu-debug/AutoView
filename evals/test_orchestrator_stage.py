@@ -394,7 +394,7 @@ class CampusEndToEndTests(unittest.TestCase):
         stages = [r.stage.value for r in self.plan.rounds]
         self.assertEqual(stages, ["self_intro", "knowledge", "project", "scenario"])
         total = sum(len(r.questions) for r in self.plan.rounds)
-        self.assertEqual(total, 21, f"tech-campus 应当 21 题, 实际 {total}")
+        self.assertEqual(total, 12, f"tech-campus 应当 12 题 (F5 收敛), 实际 {total}")
 
     def test_full_campus_walk_to_done(self):
         """campus 走完 7 题 (1 self_intro + 6 其他), finalize 拿报告。"""
