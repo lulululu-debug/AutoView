@@ -25,6 +25,8 @@
 | 5 | **对抗仿真**(鲁棒性) | 复制粘贴刷题 / 跑题 / 超短敷衍(同简历只换答风,隔离变量)相对 medium 基线是否被压低 | `python -m sim.run_interviews --personas adversarial --repeat 3` | 3 对抗 persona |
 | 6 | **指标汇总报告** | pairwise 区分度、分维度极差(< 5 自动标饱和)、σ 稳定性、对抗 Δ | `python -m sim.report <runs_dir>` | 零 token 离线复算 artifact |
 | 7 | **公平性扰动审计** | 反事实简历(姓名性别/年龄/学历)× 答案逐字重放:Δoverall 红线 3、属性泄漏进题目、结构改变 | `python -m sim.fairness [批次目录]` | 5 变体 × 2 track;~¥1/次 |
+| 8 | **judge 金标校准** | 四 judge(相关性/追问针对/报告忠实/项目题溯源)对 20 条人工金标,每 judge ≤1 错 | `python -m sim.calibrate_judges` | 过校准审计结论才算数;改 judges.py 必重跑 |
+| 9 | **LLM-as-judge 批次审计** | 题目相关率(≥90%)/追问针对率(≥70%)/报告忠实率(不忠实≤20%)/项目题编造(=0 硬红线) | `python -m sim.judge [批次目录]` | judge=gpt-4o,r1 采样 + 去重;~¥5-10/次 |
 
 ### 已立项未落地(Sprint 6.5 余量)
 
@@ -126,6 +128,19 @@ f5b 定稿(全部修复栈,27 场):
 **结果:5/5 变体全绿**——Δ 全 0.0,且**题目变更 0 槽**:扰动属性未流入任何出题 prompt(技能抽取只取技能、按段深挖只喂项目段原文),LLM 缓存命中恒等构成结构性证明;题目文本零属性泄漏;考察结构不随画像改变。基线 overall(61.1/60.3)与 f5b 活跑 medium 吻合,重放管线自校验通过。
 
 已知边界:答案文本内自称的名字未随变体扰动(答案侧通道待扩展);summary 措辞偏差不进分数,归 task 4 报告忠实性 judge 管。
+
+### 2026-07-23 LLM-as-judge 套件(task 4 落地)+ f5b 首次质量审计
+
+judge 金标校准 **19/20 首跑通过**(四 judge 全过线)。f5b 审计结果:
+
+| 审计项 | 结果 | 判定 |
+|---|---|---|
+| 追问针对性 | **23/23 = 100%** | ✅ followup_goal 链路值回票价 |
+| 项目题溯源 | **45/45 编造 0** | ✅ 硬红线过——lazy gen「不瞎猜项目」的设计承诺经受住审计 |
+| 题目相关性 | 4/9(knowledge/scenario 去重) | ❌ → **F6**:5 道弱相关全来自知识管线派生题库(ai/软工 md 派生题被 backend JD 召回),归 task 5 量化+修复 |
+| 报告忠实性 | 5/9 | ❌ → **F7**:summary 系统性美化(53 分场被写「表现优异」)。第一轮修复(prompt 忠实性硬约束)已消掉溢美型伪造;残余为成色修饰/无据批评/judge 边界混合,立残余 task |
+
+方法论备忘:evidence 是逐字摘录天然忠实,忠实性审计对象 = LLM 写的 summary;「无具体指控不判不忠实」裁决规则;相关性只审 knowledge/scenario(project 题标准失配,归溯源 judge);artifact 需存 resolve 后 plan(runner 已修,老 artifact 由 judge 从 history 回捞)。
 
 ---
 
