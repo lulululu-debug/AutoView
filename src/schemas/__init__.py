@@ -376,7 +376,9 @@ class CompletionPolicy(BaseModel):
     25-30 题预算时一起翻 (min_total=25 / max_total=30 / min_richness=0.6);
     在那之前默认仍是 Sprint 5.7 的 7-题预算 (min_total=0 / max_total=15)
     以兼容老 e2e eval。"""
-    min_competency_coverage: float = Field(default=0.7, ge=0.0, le=1.0)
+    # Sprint 6.5 F5: 0.7 -> 0.6, 随 Assessor 量表重锚同步 (新量表下 0.6+ 即
+    # 有效证据; 0.7 会让 medium 档永远"不覆盖", insufficient flag 沦为全员噪声)。
+    min_competency_coverage: float = Field(default=0.6, ge=0.0, le=1.0)
     min_total_questions: int = Field(default=0, ge=0)
     max_total_questions: int = Field(default=15, gt=0)
     min_profile_richness: float = Field(default=0.0, ge=0.0, le=1.0)

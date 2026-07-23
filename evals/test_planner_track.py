@@ -65,18 +65,19 @@ class CampusTrackShapeTests(unittest.TestCase):
         ], "campus 顺序: 自我介绍 -> 知识 -> 项目 -> 场景")
 
     def test_question_counts_per_stage(self):
-        """Sprint 5.9: tech-campus 升级到 21 主问题 (1 + 12 + 5 + 3)。"""
+        """Sprint 6.5 F5: tech-campus 收敛到 12 主问题 (1 + 6 + 3 + 2),
+        cap 15 预留 3 追问 —— 改这里必须同看 CompletionPolicy 并跑 sim 复验。"""
         counts = {r.stage: len(r.questions) for r in self.plan.rounds}
         self.assertEqual(counts[InterviewStage.SELF_INTRO], 1)
-        self.assertEqual(counts[InterviewStage.KNOWLEDGE], 12)
-        self.assertEqual(counts[InterviewStage.PROJECT], 5)
-        self.assertEqual(counts[InterviewStage.SCENARIO], 3)
-        self.assertEqual(sum(counts.values()), 21)
+        self.assertEqual(counts[InterviewStage.KNOWLEDGE], 6)
+        self.assertEqual(counts[InterviewStage.PROJECT], 3)
+        self.assertEqual(counts[InterviewStage.SCENARIO], 2)
+        self.assertEqual(sum(counts.values()), 12)
 
 
 class LateralTrackShapeTests(unittest.TestCase):
-    """Sprint 5.9: tech-lateral 升级到 22 主问题: self_intro 1 + project 11 +
-    scenario 6 + knowledge 4. 项目重 + 场景重, knowledge 只 4 道核心知识点。"""
+    """Sprint 6.5 F5: tech-lateral 收敛到 12 主问题: self_intro 1 + project 6 +
+    scenario 3 + knowledge 2. 项目重 + 场景重, cap 15 预留 3 追问。"""
 
     @classmethod
     def setUpClass(cls):
@@ -94,10 +95,10 @@ class LateralTrackShapeTests(unittest.TestCase):
     def test_question_counts_per_stage(self):
         counts = {r.stage: len(r.questions) for r in self.plan.rounds}
         self.assertEqual(counts[InterviewStage.SELF_INTRO], 1)
-        self.assertEqual(counts[InterviewStage.PROJECT], 11)
-        self.assertEqual(counts[InterviewStage.SCENARIO], 6)
-        self.assertEqual(counts[InterviewStage.KNOWLEDGE], 4)
-        self.assertEqual(sum(counts.values()), 22)
+        self.assertEqual(counts[InterviewStage.PROJECT], 6)
+        self.assertEqual(counts[InterviewStage.SCENARIO], 3)
+        self.assertEqual(counts[InterviewStage.KNOWLEDGE], 2)
+        self.assertEqual(sum(counts.values()), 12)
 
 
 class LazyInvariantTests(unittest.TestCase):
@@ -236,18 +237,18 @@ class CategoryDistributionTests(unittest.TestCase):
         by_cat = Counter(q.category for r in p.rounds for q in r.questions)
         # Sprint 5.9 tech-campus 配比
         self.assertEqual(by_cat[QuestionCategory.SELF_INTRO], 1)
-        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 12)
-        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 5)
-        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 3)
+        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 6)
+        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 3)
+        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 2)
 
     def test_lateral_category_distribution(self):
         p = planner.plan(_job(Track.LATERAL), _CANDIDATE)
         by_cat = Counter(q.category for r in p.rounds for q in r.questions)
         # Sprint 5.9 tech-lateral 配比
         self.assertEqual(by_cat[QuestionCategory.SELF_INTRO], 1)
-        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 4)
-        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 11)
-        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 6)
+        self.assertEqual(by_cat[QuestionCategory.KNOWLEDGE], 2)
+        self.assertEqual(by_cat[QuestionCategory.PROJECT_EXPERIENCE], 6)
+        self.assertEqual(by_cat[QuestionCategory.SCENARIO], 3)
 
     def test_lateral_knowledge_less_than_project(self):
         """sprint 5.5 核心设计意图: lateral (社招) project 重于 knowledge,

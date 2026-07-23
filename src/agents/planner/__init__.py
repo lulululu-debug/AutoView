@@ -249,40 +249,43 @@ class _StageQuota:
 
 
 # ----- 4 个 stage 配比 (track × tech-or-not) -----
-# 设计意图:
-# - 总主问题 ~20-22 道, 含追问 max 25-30 由 CompletionPolicy 控制
+# 设计意图 (Sprint 6.5 F5 收敛):
+# - 总主问题 12 + 追问预留 3 = CompletionPolicy.max_total_questions 15。
+#   5.9 曾升到 ~20-22 并注释"含追问 max 25-30 由 CompletionPolicy 控制",
+#   但 cap 默认一直是 15 → plan 从未完整跑完 + 预算守卫恒拦截追问 (f1b 批次
+#   坐实)。plan 必须能在 cap 内问完, 追问只花预留盈余 —— 改配比或 cap 必须
+#   两边同看, 并跑 sim 批次复验 (EVALUATION.md)。
 # - 校招: knowledge 重 (考基本功), project 轻 (实习经历少)
 # - 社招: project + scenario 重 (考实战), knowledge 轻 (基本功默认有)
-# - 技术岗 comm: 校招 1 题, 社招 2 题 (用户原话)
-# - 非技术岗 comm: 占主体 (产品/HR 沟通能力是核心考察)
+# - 技术岗 comm 保底 1 题; 非技术岗 comm 占主体 (产品/HR 沟通是核心考察)
 
 _TECH_CAMPUS: list[_StageQuota] = [
     _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
-    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=11, comm_count=1),
-    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=5),
-    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, tech_count=3),
-]  # 1 + 12 + 5 + 3 = 21
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=5, comm_count=1),
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=3),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, tech_count=2),
+]  # 1 + 6 + 3 + 2 = 12
 
 _TECH_LATERAL: list[_StageQuota] = [
     _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
-    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=10, comm_count=1),
-    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, tech_count=5, comm_count=1),
-    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=4),
-]  # 1 + 11 + 6 + 4 = 22 (lateral 顺序与 Sprint 5.5 一致: project 先, knowledge 最后)
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=5, comm_count=1),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, tech_count=2, comm_count=1),
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=2),
+]  # 1 + 6 + 3 + 2 = 12 (lateral 顺序与 Sprint 5.5 一致: project 先, knowledge 最后)
 
 _NON_TECH_CAMPUS: list[_StageQuota] = [
     _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
-    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=3, comm_count=5),
-    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=2, comm_count=6),
-    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, comm_count=4),
-]  # 1 + 8 + 8 + 4 = 21
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=2, comm_count=3),
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=1, comm_count=3),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, comm_count=2),
+]  # 1 + 5 + 4 + 2 = 12
 
 _NON_TECH_LATERAL: list[_StageQuota] = [
     _StageQuota(InterviewStage.SELF_INTRO, QuestionCategory.SELF_INTRO, self_intro_count=1),
-    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=3, comm_count=8),
-    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, comm_count=6),
-    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=1, comm_count=3),
-]  # 1 + 11 + 6 + 4 = 22
+    _StageQuota(InterviewStage.PROJECT,   QuestionCategory.PROJECT_EXPERIENCE, tech_count=2, comm_count=4),
+    _StageQuota(InterviewStage.SCENARIO,  QuestionCategory.SCENARIO, comm_count=3),
+    _StageQuota(InterviewStage.KNOWLEDGE, QuestionCategory.KNOWLEDGE, tech_count=1, comm_count=1),
+]  # 1 + 6 + 3 + 2 = 12
 
 
 _TECH_ROLE_FAMILIES = frozenset({"backend", "frontend", "data_science"})
