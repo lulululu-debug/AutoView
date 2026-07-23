@@ -62,16 +62,42 @@ def compute_coverage(
     }
 
 
+def assessed_counts(
+    session: InterviewSession, plan: InterviewPlan,
+) -> dict[str, int]:
+    """每个 competency 已有多少道**不同的题**被评估过 (同题多次 assessment 记 1)。
+    Sprint 6.5 F5 第二轮: 提前结束的稳健性检查用。"""
+    if not plan.competencies:
+        return {}
+    q_to_comp: dict[str, str | None] = {}
+    for r in plan.rounds:
+        for q in r.questions:
+            q_to_comp[q.question_id] = q.competency_id
+    seen: dict[str, set[str]] = {c.competency_id: set() for c in plan.competencies}
+    for a in session.assessments:
+        cid = q_to_comp.get(a.question_id)
+        if cid in seen:
+            seen[cid].add(a.question_id)
+    return {cid: len(qids) for cid, qids in seen.items()}
+
+
 def mandatory_coverage_met(
     coverage: dict[str, float],
     policy: CompletionPolicy,
     plan: InterviewPlan,
+    counts: dict[str, int] | None = None,
 ) -> bool:
     """mandatory competency 是否全部达到 policy.min_competency_coverage。
     policy.mandatory_competencies 空 = plan.competencies 全部 mandatory (默认)。
 
     plan.competencies 空 (老 plan 短路): 返回 False, 让上游走"题答完就 done"
-    的旧路径, 不被 CompletionPolicy 影响。"""
+    的旧路径, 不被 CompletionPolicy 影响。
+
+    Sprint 6.5 F5 第二轮: counts (assessed_counts 的输出) 非 None 时, 每个
+    mandatory competency 还须有 >= policy.min_assessed_per_mandatory 道不同的
+    题被评估过 —— coverage 取 max() 对"单发幸运高分"敏感 (对抗批次坐实:
+    copy-paste 靠一道 knowledge 教科书答案 0.65+ 触发提前结束逃过追问),
+    这正是本文件顶部注释预留的稳健性升级点。counts=None 的老调用方行为不变。"""
     if not plan.competencies:
         return False
 
@@ -83,6 +109,11 @@ def mandatory_coverage_met(
 
     for cid in mandatory_ids:
         if coverage.get(cid, 0.0) < policy.min_competency_coverage:
+            return False
+        if (
+            counts is not None
+            and counts.get(cid, 0) < policy.min_assessed_per_mandatory
+        ):
             return False
     return True
 

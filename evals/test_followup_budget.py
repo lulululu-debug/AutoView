@@ -120,6 +120,58 @@ class BudgetGuardTests(_Base):
         self.assertIsInstance(nxt, FollowUp)
 
 
+class EarlyStopRobustnessTests(_Base):
+    """F5 第二轮: 提前结束需每个 mandatory ≥ min_assessed_per_mandatory 道
+    不同题被评估 —— 防单发幸运高分让对抗型逃过追问 (coverage max() 的
+    噪声敏感性兜底)。"""
+
+    def _high(self, qid: str) -> AnswerAssessment:
+        return AnswerAssessment(question_id=qid, sufficiency=0.9, confidence=0.9)
+
+    def test_single_lucky_answer_does_not_early_stop(self) -> None:
+        """q1 一发 0.9 让两维 coverage 之一达标也不许提前结束: 继续问 Q2。"""
+        self.session.assessments = [self._high(self.q1.question_id)]
+        nxt = next_turn(self.session, self.plan, job=_job(max_total=10))
+        self.assertIsInstance(nxt, Question)
+
+    def test_two_assessed_per_mandatory_allows_early_stop(self) -> None:
+        """每个 mandatory 都有 2 道不同题达标评估 -> 提前结束 (None)。
+        tech 有 q1/q2, comm 只有 q3 一道 —— 用 policy 把 comm 的门槛
+        降到可满足, 单测 tech 侧的 counts 逻辑。"""
+        from src.coverage import assessed_counts, mandatory_coverage_met
+
+        for q in (self.q1, self.q2, self.q3):
+            ans = CandidateAnswer(question_id=q.question_id, text="很具体的回答。")
+            self.session.history += [
+                Turn(role=TurnRole.INTERVIEWER, text=q.text, ref_id=q.question_id),
+                Turn(role=TurnRole.CANDIDATE, text=ans.text, ref_id=ans.answer_id),
+            ]
+            self.session.answers.append(ans)
+            self.session.assessments.append(self._high(q.question_id))
+        counts = assessed_counts(self.session, self.plan)
+        self.assertEqual(counts[self.tech.competency_id], 2)  # q1 + q2
+        self.assertEqual(counts[self.comm.competency_id], 1)  # q3
+        pol = CompletionPolicy(min_assessed_per_mandatory=1)
+        cov = {self.tech.competency_id: 0.9, self.comm.competency_id: 0.9}
+        self.assertTrue(mandatory_coverage_met(cov, pol, self.plan, counts=counts))
+        pol2 = CompletionPolicy(min_assessed_per_mandatory=2)
+        self.assertFalse(
+            mandatory_coverage_met(cov, pol2, self.plan, counts=counts),
+            "comm 只有 1 道被评估, min=2 时不许提前结束",
+        )
+
+    def test_same_question_repeat_assessments_count_once(self) -> None:
+        """同题多次 assessment (追问后再评) 只算 1 道题。"""
+        from src.coverage import assessed_counts
+
+        self.session.assessments = [
+            self._high(self.q1.question_id),
+            self._high(self.q1.question_id),
+        ]
+        counts = assessed_counts(self.session, self.plan)
+        self.assertEqual(counts[self.tech.competency_id], 1)
+
+
 class ThresholdRecalibrationTests(_Base):
     def test_default_threshold_is_recalibrated(self) -> None:
         """量表重锚后的新默认: 0.6。改这个值必须同步 Assessor 锚点 + sim 复验。"""
