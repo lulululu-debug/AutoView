@@ -127,6 +127,8 @@ def main() -> None:
     misses = _probe_embedding_cache(seeds)
     if misses and args.allow_api:
         print(f"[probe] {len(misses)} 道未命中缓存, --allow-api 已授权打 API 重建")
+        _reseed()
+        return
     elif misses:
         print(f"[probe] ❌ {len(misses)} 道未命中缓存 (重建会打 API), 中止重建。")
         print("        PG 已改标 (真理之源正确); 等 API 配额恢复后重跑本脚本"
