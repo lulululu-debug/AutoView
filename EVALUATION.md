@@ -80,15 +80,16 @@
 | 7 | **公平性扰动审计** | 反事实简历(姓名性别/年龄/学历)× 答案逐字重放:Δoverall 红线 3、属性泄漏进题目、结构改变 | `python -m sim.fairness [批次目录]` | 5 变体 × 2 track;~¥1/次 |
 | 8 | **judge 金标校准** | 四 judge(相关性/追问针对/报告忠实/项目题溯源)对 20 条人工金标,每 judge ≤1 错 | `python -m sim.calibrate_judges` | 过校准审计结论才算数;改 judges.py 必重跑 |
 | 9 | **LLM-as-judge 批次审计** | 题目相关率(≥90%)/追问针对率(≥70%)/报告忠实率(不忠实≤20%)/项目题编造(=0 硬红线) | `python -m sim.judge [批次目录]` | judge=gpt-4o,r1 采样 + 去重;~¥5-10/次 |
+| 10 | **RAG 检索指标** | 题库召回 hit@5(≥80%)/ 污染@5(=0,F6 验收线)/ 标签完整性 / documents fixture 召回 | `python -m sim.rag_metrics` | 确定性金标,只花 embedding(分厘级);破线 exit 1 |
+| 11 | **HR 复核回流统计** | 复核率 / 分数-决策同向性(recommend>borderline>reject 应单调)/ 改分率 + 维度 \|Δ\| / 证据不足×决策交叉 | `python -m scripts.review_stats` | 零 LLM 只读 PG;纯函数 + 7 条单元护栏;待真实复核数据 |
 
-### 已立项未落地(Sprint 6.5 余量)
+### 已立项未落地
 
 | # | 手段 | 测什么 | 状态 |
 |---|---|---|---|
-| 8 | LLM-as-judge 套件 | 题目相关性 / 追问针对性 / 报告忠实性(evidence 溯源)/ lazy 题 faithfulness(RAGAS 思想自研,不引库) | task 4;judge 需先过 ~20 条金标校准 |
-| 9 | RAG 检索指标 | 题库召回 precision/recall@k(seed 标签匹配,零 token)+ documents 召回标注集 | task 5 |
-| 10 | HR 复核回流统计 | ReviewRecord 采纳率 / 改分率 / needs_human_review 比例 | task 6 |
-| 11 | 真人对照试点 | AI 报告与真人面试官评价的相关性(criterion validity) | 待有真实候选人场景 |
+| 12 | 真人对照试点 | AI 报告与真人面试官评价的相关性(criterion validity) | 待有真实候选人场景 |
+
+(原 8/9/10 = judge 套件 / RAG 检索指标 / HR 回流统计,已随 task 4/5/6 落地并移入上表。)
 
 ---
 
