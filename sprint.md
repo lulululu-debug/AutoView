@@ -775,6 +775,59 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
 
 ---
 
+## Sprint 6.7 — 飞书文档源接入（知识管线扩展）
+
+> HR 在「上传 md 出题」流程之外, 直接从飞书 wiki/docx 导入内部文档出题。
+> 集成方式经拍板: **直连飞书 OpenAPI**(不经 MCP —— 后端要确定性 REST,
+> MCP 是 agent 工具协议; app 凭证与 lark-mcp 同源可复用)。范围: 单篇 +
+> wiki 目录批量。设计全部来自 2026-07-18 手工抓取的实战教训 (memory:
+> feishu-wiki-batch-ingest / corpus-md-conventions)。
+
+**关键设计决策**:
+- **权限分层**: 单篇文档 tenant_access_token 即可; **列 wiki 子节点必须
+  user OAuth**(个人 wiki 对 tenant 返 131006)。OAuth 走标准回调端点,
+  user/refresh token 只存 Redis(TTL 对齐飞书 2h/30d), 不落 PG。
+- **blocks API 替代 raw_content**: raw_content 丢标题层级(上次靠手工整理);
+  产品化改用 docx blocks 接口拿结构化 heading 直接生成合规 md
+  (H1 标题/H2 专题/H3 知识点), 切片器零改动。
+- **自动清洗 = 上次的手工活函数化**: 裸 uuid 图片行、公众号导流语、
+  《后续文章》导航行、拍平表格重建; 真实坑样本做金标 eval。
+- **未配置即隐藏**: FEISHU_APP_ID/SECRET 缺失 → /admin/feishu/status
+  报 unconfigured, HR UI 整个入口不渲染(/media/config 同款探测哲学);
+  连接器绝不成为知识管线硬依赖。
+- **复用不重造**: 导入 BG 任务把清洗后的 md 喂给 admin_upload 现有
+  _run_upload_pipeline(入库→派生→审核队列), 追加到已有 dataset 时
+  沿用 memory 约定(不 truncate、只对新 chunk 出题)。
+
+- [ ] **task 1 飞书 connector**(src/connectors/feishu.py):
+      tenant token 获取+进程内缓存至过期; OAuth authorize-url 生成 /
+      code 换 token / refresh; wiki get_node / list_child_nodes(user token,
+      递归拉子文档); docx blocks -> 结构化 md; URL 解析(wiki 链接/docx
+      链接 -> node_token/document_id); is_configured()/is_authorized();
+      全部调用带 timeout + 类型化异常, 未配置返 None/False
+
+- [ ] **task 2 清洗器 + 金标**(knowledge_pipeline/feishu_clean.py):
+      blocks->md 转换内嵌清洗(uuid 图片行/导流语/导航行/错位加粗/表格重建);
+      evals 金标用实战坑样本锁行为(纯函数, 零 infra)
+
+- [ ] **task 3 admin API + 后台导入**:
+      GET /admin/feishu/status(configured+authorized 探测);
+      GET /admin/feishu/authorize-url + GET /admin/feishu/oauth/callback;
+      POST /admin/feishu/preview(贴链接 -> 标题/子篇数/是否需授权);
+      POST /admin/feishu/import(dataset_id/topic/include_children ->
+      BackgroundTasks: 拉取->清洗->_run_upload_pipeline; 进度落 Redis 供轮询);
+      异常映射(未配置 409 / 未授权 401 / 飞书侧错误透传语义)
+
+- [ ] **task 4 HR UI**:
+      /hr/admin 加「从飞书导入」入口: 连接状态+授权按钮 -> 贴链接预览
+      (标题+子文档列表) -> 配 dataset_id/topic -> 导入 -> 轮询进度 ->
+      完成跳审核队列; 未配置时入口整体隐藏
+
+**完成标准**: HR 不出 Web 界面, 从飞书 wiki 目录批量导入一组文档并走完
+出题-审核-入库全流程; 单篇免授权可用; 未配置飞书时现有 md 上传流程零变化。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
