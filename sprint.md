@@ -799,12 +799,19 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
   _run_upload_pipeline(入库→派生→审核队列), 追加到已有 dataset 时
   沿用 memory 约定(不 truncate、只对新 chunk 出题)。
 
-- [ ] **task 1 飞书 connector**(src/connectors/feishu.py):
+- [x] **task 1 飞书 connector**(src/connectors/feishu.py):
       tenant token 获取+进程内缓存至过期; OAuth authorize-url 生成 /
       code 换 token / refresh; wiki get_node / list_child_nodes(user token,
       递归拉子文档); docx blocks -> 结构化 md; URL 解析(wiki 链接/docx
       链接 -> node_token/document_id); is_configured()/is_authorized();
       全部调用带 timeout + 类型化异常, 未配置返 None/False
+      实际落地: src/connectors/ 新包 (外部系统单一调用点约定); tenant token
+      进程缓存提前 60s 过期; user/refresh token 存 Redis (TTL 2h/30d);
+      _call 权限重试 (131006 等权限码 + 有 user token 自动切换重试一次,
+      无则 FeishuNotAuthorized); blocks 分页拉全; parse_url 域名白名单
+      (防 feishu.cn.evil.com 伪造); blocks->md 转换按纯函数归属挪到
+      task 2 清洗器文件。evals/test_feishu_connector.py 8 条 (URL 矩阵/
+      scope 显式断言/权限重试三分支/tenant 缓存), 全量 438 绿。
 
 - [ ] **task 2 清洗器 + 金标**(knowledge_pipeline/feishu_clean.py):
       blocks->md 转换内嵌清洗(uuid 图片行/导流语/导航行/错位加粗/表格重建);
