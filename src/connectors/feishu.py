@@ -53,8 +53,99 @@ class FeishuApiError(RuntimeError):
         self.msg = msg
 
 
+# ---- 凭证解析: env 优先 (部署钉死), DB 兜底 (HR 前端配置) ----
+# Sprint 6.7 task 5: app_secret 在 DB 中用 JWT_SECRET 派生密钥 Fernet 加密
+# (JWT_SECRET 本就是启动必配项, 不新增环境变量)。secret 永不回传前端。
+
+_cred_cache: dict = {"value": None, "at": 0.0}
+_CRED_CACHE_SECONDS = 60.0
+
+
+def _fernet():
+    secret = os.environ.get("JWT_SECRET")
+    if not secret:
+        return None
+    import base64
+    import hashlib
+
+    from cryptography.fernet import Fernet
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_secret(plain: str) -> str:
+    f = _fernet()
+    if f is None:
+        raise FeishuNotConfigured("JWT_SECRET 未配置, 无法加密存储飞书凭证")
+    return f.encrypt(plain.encode("utf-8")).decode("ascii")
+
+
+def _decrypt_secret(token: str) -> str | None:
+    f = _fernet()
+    if f is None:
+        return None
+    try:
+        return f.decrypt(token.encode("ascii")).decode("utf-8")
+    except Exception:
+        log.warning("飞书 app_secret 解密失败 (JWT_SECRET 变更?), 视为未配置")
+        return None
+
+
+def invalidate_credentials_cache() -> None:
+    _cred_cache["value"] = None
+    _cred_cache["at"] = 0.0
+
+
+def _credentials() -> tuple[str, str, str] | None:
+    """返回 (app_id, app_secret, source); source: "env" | "db"。无则 None。"""
+    env_id = os.environ.get("FEISHU_APP_ID")
+    env_secret = os.environ.get("FEISHU_APP_SECRET")
+    if env_id and env_secret:
+        return (env_id, env_secret, "env")
+
+    if _cred_cache["value"] is not None and time.time() - _cred_cache["at"] < _CRED_CACHE_SECONDS:
+        return _cred_cache["value"]
+
+    try:
+        from src import db
+        app_id = db.get_app_setting("feishu_app_id")
+        enc = db.get_app_setting("feishu_app_secret")
+    except Exception:
+        return None  # PG 未配置/不可用: 只认 env
+    if not app_id or not enc:
+        return None
+    secret = _decrypt_secret(enc)
+    if not secret:
+        return None
+    value = (app_id, secret, "db")
+    _cred_cache["value"] = value
+    _cred_cache["at"] = time.time()
+    return value
+
+
+def credential_source() -> str | None:
+    c = _credentials()
+    return c[2] if c else None
+
+
+def app_id_masked() -> str | None:
+    c = _credentials()
+    if not c:
+        return None
+    app_id = c[0]
+    return app_id[:8] + "***" if len(app_id) > 8 else app_id[:2] + "***"
+
+
 def is_configured() -> bool:
-    return bool(os.environ.get("FEISHU_APP_ID") and os.environ.get("FEISHU_APP_SECRET"))
+    return _credentials() is not None
+
+
+def test_credentials(app_id: str, app_secret: str) -> None:
+    """保存前的连通性测试: 直接换一次 tenant token, 失败抛 FeishuApiError。"""
+    _request(
+        "POST", "/auth/v3/tenant_access_token/internal",
+        body={"app_id": app_id, "app_secret": app_secret},
+    )
 
 
 # ---- 底层请求 ----
@@ -86,16 +177,14 @@ _tenant_cache: dict[str, Any] = {"token": None, "expire_at": 0.0}
 
 
 def _tenant_token() -> str:
-    if not is_configured():
-        raise FeishuNotConfigured("FEISHU_APP_ID / FEISHU_APP_SECRET 未配置")
+    creds = _credentials()
+    if creds is None:
+        raise FeishuNotConfigured("飞书凭证未配置 (env 或前端设置)")
     if _tenant_cache["token"] and time.time() < _tenant_cache["expire_at"]:
         return _tenant_cache["token"]
     payload = _request(
         "POST", "/auth/v3/tenant_access_token/internal",
-        body={
-            "app_id": os.environ["FEISHU_APP_ID"],
-            "app_secret": os.environ["FEISHU_APP_SECRET"],
-        },
+        body={"app_id": creds[0], "app_secret": creds[1]},
     )
     _tenant_cache["token"] = payload["tenant_access_token"]
     # 提前 60s 过期, 防边界撞线
@@ -107,14 +196,15 @@ def _tenant_token() -> str:
 
 def authorize_url(state: str = "feishu-import") -> str:
     """HR 点击的授权链接。scope 必须显式写进 URL(实战坑: 不写只给基础 scope)。"""
-    if not is_configured():
-        raise FeishuNotConfigured("FEISHU_APP_ID / FEISHU_APP_SECRET 未配置")
+    creds = _credentials()
+    if creds is None:
+        raise FeishuNotConfigured("飞书凭证未配置 (env 或前端设置)")
     redirect = os.environ.get(
         "FEISHU_OAUTH_REDIRECT",
         "http://localhost:8000/admin/feishu/oauth/callback",
     )
     q = urllib.parse.urlencode({
-        "app_id": os.environ["FEISHU_APP_ID"],
+        "app_id": creds[0],
         "redirect_uri": redirect,
         "scope": _OAUTH_SCOPES,
         "state": state,
@@ -128,12 +218,15 @@ def exchange_code(code: str) -> None:
         "FEISHU_OAUTH_REDIRECT",
         "http://localhost:8000/admin/feishu/oauth/callback",
     )
+    creds = _credentials()
+    if creds is None:
+        raise FeishuNotConfigured("飞书凭证未配置")
     payload = _request(
         "POST", "/authen/v2/oauth/token",
         body={
             "grant_type": "authorization_code",
-            "client_id": os.environ["FEISHU_APP_ID"],
-            "client_secret": os.environ["FEISHU_APP_SECRET"],
+            "client_id": creds[0],
+            "client_secret": creds[1],
             "code": code,
             "redirect_uri": redirect,
         },
@@ -171,8 +264,8 @@ def _user_token() -> str | None:
             "POST", "/authen/v2/oauth/token",
             body={
                 "grant_type": "refresh_token",
-                "client_id": os.environ["FEISHU_APP_ID"],
-                "client_secret": os.environ["FEISHU_APP_SECRET"],
+                "client_id": (_credentials() or ("", "", ""))[0],
+                "client_secret": (_credentials() or ("", "", ""))[1],
                 "refresh_token": refresh,
             },
         )
@@ -288,3 +381,4 @@ def reset_for_testing() -> None:
     """测试用: 清 tenant token 进程缓存。业务代码不要调。"""
     _tenant_cache["token"] = None
     _tenant_cache["expire_at"] = 0.0
+    invalidate_credentials_cache()

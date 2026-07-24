@@ -1173,3 +1173,26 @@ def load_report_by_session(session_id: str) -> Optional[EvaluationReport]:
                 "competency_coverage": row.competency_coverage,
             }
         )
+
+
+# ---------- AppSetting (Sprint 6.7 task 5) ----------
+
+def get_app_setting(key: str) -> Optional[str]:
+    from src.db.models import AppSettingORM
+    with session_scope() as s:
+        row = s.get(AppSettingORM, key)
+        return row.value if row is not None else None
+
+
+def set_app_setting(key: str, value: str) -> None:
+    from src.db.models import AppSettingORM
+    with session_scope() as s:
+        s.merge(AppSettingORM(key=key, value=value))
+
+
+def delete_app_setting(key: str) -> None:
+    from src.db.models import AppSettingORM
+    with session_scope() as s:
+        row = s.get(AppSettingORM, key)
+        if row is not None:
+            s.delete(row)

@@ -56,12 +56,52 @@ _PROGRESS_TTL = 3600
 
 @router.get("/status")
 def feishu_status(_user: HrUser) -> dict:
-    """前端据此决定入口显隐与"连接飞书"按钮。"""
+    """前端据此决定入口显隐与"连接飞书"按钮。
+    Sprint 6.7 task 5 扩展: source ("env"=部署钉死只读 / "db"=前端可改) +
+    app_id 掩码展示; secret 永不回传。"""
     configured = feishu.is_configured()
     return {
         "configured": configured,
         "authorized": feishu.is_authorized() if configured else False,
+        "source": feishu.credential_source(),
+        "app_id_masked": feishu.app_id_masked(),
     }
+
+
+class ConfigRequest(BaseModel):
+    app_id: str
+    app_secret: str
+
+
+@router.put("/config")
+def feishu_put_config(body: ConfigRequest, _user: HrUser) -> dict:
+    """前端配置飞书凭证 (Sprint 6.7 task 5)。
+    - env 已配置时 409 (部署钉死, UI 不许覆盖)
+    - 保存前先连通性测试 (换一次 tenant token), 失败 422 带飞书错误信息
+    - app_secret 用 JWT_SECRET 派生密钥加密后入 PG, 永不回传"""
+    if (os.environ.get("FEISHU_APP_ID") and os.environ.get("FEISHU_APP_SECRET")):
+        raise HTTPException(409, "飞书凭证由部署环境 (env) 固定, 不可在界面修改")
+    app_id, app_secret = body.app_id.strip(), body.app_secret.strip()
+    if not app_id or not app_secret:
+        raise HTTPException(422, "app_id / app_secret 不能为空")
+    try:
+        feishu.test_credentials(app_id, app_secret)
+    except feishu.FeishuApiError as e:
+        raise HTTPException(422, f"凭证无效: {e.msg} (code={e.code})")
+    db.set_app_setting("feishu_app_id", app_id)
+    db.set_app_setting("feishu_app_secret", feishu.encrypt_secret(app_secret))
+    feishu.invalidate_credentials_cache()
+    return {"ok": True, "app_id_masked": feishu.app_id_masked()}
+
+
+@router.delete("/config")
+def feishu_delete_config(_user: HrUser) -> dict:
+    if (os.environ.get("FEISHU_APP_ID") and os.environ.get("FEISHU_APP_SECRET")):
+        raise HTTPException(409, "飞书凭证由部署环境 (env) 固定, 不可在界面清除")
+    db.delete_app_setting("feishu_app_id")
+    db.delete_app_setting("feishu_app_secret")
+    feishu.invalidate_credentials_cache()
+    return {"ok": True}
 
 
 @router.get("/authorize-url")

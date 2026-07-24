@@ -856,8 +856,20 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       error (setState-in-effect ×3 挪微任务 / 未转义引号 / unused import),
       eslint 全绿 + build 过。
 
+- [x] **task 5 前端凭证配置**(用户追加需求: 不改 .env 不重启):
+      实际落地: app_settings 键值表 (PG) + get/set/delete repository;
+      凭证解析 **env 优先 (部署钉死, UI 409 拒改) -> DB 兜底 (前端配置)**,
+      60s 进程缓存; app_secret 用 JWT_SECRET 派生密钥 Fernet 加密入库
+      (JWT_SECRET 本就必配, 零新增 env), **secret 永不回传前端**;
+      PUT /admin/feishu/config 保存前先换一次 tenant token 做连通性测试
+      (无效凭证 422 带飞书错误码); status 扩展 source + app_id 掩码;
+      前端: 未配置态直接渲染配置表单 (验证并保存), 已配置显示掩码+来源芯片,
+      db 来源可清除重配。evals +7 (加密往返/优先级/无 JWT_SECRET 降级/
+      env 锁 409/无效凭证 422/加密入库不回显), 全量 466 绿。
+
 **完成标准**: HR 不出 Web 界面, 从飞书 wiki 目录批量导入一组文档并走完
-出题-审核-入库全流程; 单篇免授权可用; 未配置飞书时现有 md 上传流程零变化。
+出题-审核-入库全流程; 单篇免授权可用; 未配置飞书时现有 md 上传流程零变化;
+凭证可全程在前端配置 (env 部署则界面只读)。
 
 ---
 
