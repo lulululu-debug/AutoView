@@ -17,6 +17,11 @@ from fastapi.responses import JSONResponse
 from src.auth import AuthenticationError, AuthorizationError, JwtNotConfigured
 from src.cache import RedisNotConfigured
 from src.db import DatabaseNotConfigured
+from src.connectors.feishu import (
+    FeishuApiError,
+    FeishuNotAuthorized,
+    FeishuNotConfigured,
+)
 from src.orchestrator import SessionInvalidState, SessionNotFound, TurnNotFound
 
 
@@ -67,6 +72,37 @@ def register_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=404,
             content={"detail": "题目引用不存在", "error": str(exc)},
+        )
+
+    @app.exception_handler(FeishuNotConfigured)
+    async def _feishu_not_configured(
+        _req: Request, exc: FeishuNotConfigured,
+    ) -> JSONResponse:
+        # Sprint 6.7: 部署未配飞书凭证; 前端应先查 /admin/feishu/status
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "飞书未配置", "error": str(exc)},
+        )
+
+    @app.exception_handler(FeishuNotAuthorized)
+    async def _feishu_not_authorized(
+        _req: Request, exc: FeishuNotAuthorized,
+    ) -> JSONResponse:
+        # 需要 user OAuth (如列个人 wiki 子节点); 409 + 明确指引, 不用 401
+        # (401 语义已被 HR 登录占用, 前端会误跳登录页)
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "需要飞书授权, 请先连接飞书", "error": str(exc)},
+        )
+
+    @app.exception_handler(FeishuApiError)
+    async def _feishu_api_error(
+        _req: Request, exc: FeishuApiError,
+    ) -> JSONResponse:
+        # 飞书上游错误透传语义 (502 Bad Gateway)
+        return JSONResponse(
+            status_code=502,
+            content={"detail": "飞书接口返回错误", "error": str(exc)},
         )
 
     @app.exception_handler(AuthenticationError)
