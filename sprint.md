@@ -873,6 +873,42 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
 
 ---
 
+## Sprint 6.8 — HR 自助注册 + 数据隔离
+
+> 拍板 (2026-07-24): 注册只给 HR, 开放自助注册; **每个 HR 各管各的**
+> (方案 B) —— 只见自己创建的岗位/候选人/报告, 题库与知识管线仍是共享
+> 公共资产。隔离到位后开放注册无数据泄露顾虑; 保留可选邀请码
+> (REGISTER_INVITE_CODE 配了就要求, 不配 = 完全开放)。
+> 候选人保持免账号链接直达 (刻意设计, 不动)。
+
+**关键设计决策**:
+- 归属落在 job 上 (`jobs.owner_user_id`): 候选人/plan/session/report 都
+  经 job 派生归属, 不必逐表加 owner 列。
+- **admin 角色看全部** (后台语义); hr 只见 own。存量无主数据用
+  scripts/backfill_job_owner.py 归到指定账号, 不留"无主可见"的模糊态。
+- 顺手封存量洞: POST /jobs 此前**无鉴权** (dev 遗留), 隔离要求创建时
+  必有归属人 → 挂 require_hr_user; 受影响的 e2e evals 用 dependency
+  override 补登录态。
+- 越权访问一律 404 (不泄露资源存在性), 与既有 401 同文案防枚举哲学一致。
+
+- [ ] **task 1 注册端点 + 页面**:
+      POST /auth/register (username 3-32 字符校验/重名 409/密码最短 8 位/
+      可选邀请码; bcrypt; 注册即登录 set cookie, role=hr);
+      /hr/register 页 + 登录页互链; evals (重名/弱密码/邀请码三态/开放注册)
+
+- [ ] **task 2 按 owner 隔离**:
+      jobs.owner_user_id 列 (ALTER dev/test) + schema/repository 贯通;
+      POST /jobs 挂鉴权并写 owner; /hr/* 全部端点归属校验 (job 直查 /
+      candidate·plan·session·report 经 job 派生), 越权 404;
+      GET /hr/jobs 按 owner 过滤 (admin 全量);
+      scripts/backfill_job_owner.py 迁移存量; 受影响 evals 补 override;
+      双账号隔离 eval (互不可见/越权 404/admin 全量)
+
+**完成标准**: 新 HR 注册后独立走完建岗到复核全流程, 且看不到其他 HR 的
+任何岗位/候选人/报告; admin 可见全部; 存量数据完成归属迁移。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
