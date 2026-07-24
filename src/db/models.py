@@ -167,6 +167,12 @@ class JobORM(Base):
     aspects: Mapped[list] = mapped_column(
         JSONB, nullable=False, default=list, server_default="[]",
     )
+    # Sprint 6.8: 归属 HR (数据隔离的单点); NULL = 存量无主数据, 仅 admin 可见,
+    # 用 scripts/backfill_job_owner.py 迁移。候选人/plan/session/report 都经
+    # job 派生归属, 不逐表加列。
+    owner_user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

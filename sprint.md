@@ -903,13 +903,24 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       顺手清 hr/ 整树剩余存量 lint error 6 处 (layout/page/candidates 详情
       的 setState-in-effect + 引号), hr/ 从此 eslint 全绿。
 
-- [ ] **task 2 按 owner 隔离**:
+- [x] **task 2 按 owner 隔离**:
       jobs.owner_user_id 列 (ALTER dev/test) + schema/repository 贯通;
       POST /jobs 挂鉴权并写 owner; /hr/* 全部端点归属校验 (job 直查 /
       candidate·plan·session·report 经 job 派生), 越权 404;
       GET /hr/jobs 按 owner 过滤 (admin 全量);
       scripts/backfill_job_owner.py 迁移存量; 受影响 evals 补 override;
       双账号隔离 eval (互不可见/越权 404/admin 全量)
+      实际落地: hr.py 统一走 _require_{job,candidate,report}_access 三个
+      helper (18 处端点全覆盖, 候选人列表越权返 [] 不泄存在性);
+      owner_user_id 只落 job 一张表, agent 内核不消费该字段 (schema 注释
+      写明); 隔离 eval 踩了 5.8 "cookie 优先 Bearer 兜底" 的坑 —— 共享
+      TestClient 三连登录后 cookie 停在 admin, 所有 Bearer 请求被顶掉,
+      登录后 cookies.clear() 才让 Bearer 生效 (eval 内注释记录);
+      test_api/test_rag_e2e/test_parse_resume 用 dependency override 注入
+      固定 HR 身份 (流程测试不掺权限, 真实鉴权归 test_auth/test_owner_
+      isolation 守); test_hr_api 的 hr2 改 admin 角色保住 "reviewer_id
+      取自 JWT" 的测试意图; dev 库 15 个存量岗位已 backfill 归 hr1;
+      全量 480 绿 (472+8)。
 
 **完成标准**: 新 HR 注册后独立走完建岗到复核全流程, 且看不到其他 HR 的
 任何岗位/候选人/报告; admin 可见全部; 存量数据完成归属迁移。

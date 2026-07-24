@@ -221,9 +221,16 @@ class ParseResumeEndpointTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from api.main import create_app
+
         from src import db
         db.init_db()
         cls.app = create_app()
+        # Sprint 6.8: POST /jobs 挂鉴权, 注入固定 HR 身份 (真实鉴权归 test_auth 守)
+        from src import auth as _auth
+        from src.schemas import User as _User
+        cls.app.dependency_overrides[_auth.require_hr_user] = lambda: _User(
+            user_id="eval-hr", username="eval-hr", role="hr",
+        )
         cls.client = TestClient(cls.app)
         # 用真 job_id (load_job 会校验), 每个 TestCase 用一个干净 job
         cls.job_id = cls._create_test_job(cls.client)

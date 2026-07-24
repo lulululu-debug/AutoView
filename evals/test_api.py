@@ -21,6 +21,19 @@ from fastapi.testclient import TestClient
 
 from api.main import API_TITLE, API_VERSION, create_app
 
+
+def _hr_client():
+    """Sprint 6.8: POST /jobs 挂了鉴权 (数据隔离), 本文件测的是候选人/管线
+    流程而非 HR 权限, 用 dependency override 注入固定 HR 身份。
+    真实鉴权由 test_auth / test_owner_isolation 守。"""
+    from src import auth as _auth
+    from src.schemas import User as _User
+    app = create_app()
+    app.dependency_overrides[_auth.require_hr_user] = lambda: _User(
+        user_id="eval-hr", username="eval-hr", role="hr",
+    )
+    return TestClient(app)
+
 # Sprint 5.9 patch: 防 .env 里 ASSESSOR_ENABLED=true + pymilvus.settings.load_dotenv()
 # 让 e2e walk 因 Assessor fallback (confidence=0.3 < 0.5 阈值) 触发追问失控。
 # set, not pop, 防 dotenv 把 .env 值加回。
@@ -59,7 +72,7 @@ _PROVEN_ANSWERS = [
 class HealthEndpointTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.client = TestClient(create_app())
+        cls.client = _hr_client()
 
     def test_health_returns_200(self):
         r = self.client.get("/health")
@@ -88,7 +101,7 @@ class CreateJobTests(unittest.TestCase):
     def setUpClass(cls):
         from src.db import init_db
         init_db()
-        cls.client = TestClient(create_app())
+        cls.client = _hr_client()
 
     def test_create_job_returns_201_and_persists(self):
         from src.db import load_job
@@ -153,7 +166,7 @@ class CreateCandidateTests(unittest.TestCase):
         from src.db import init_db, save_job
         from src.schemas import JobContext
         init_db()
-        cls.client = TestClient(create_app())
+        cls.client = _hr_client()
         cls.job = JobContext(title="后端工程师", jd="负责交易系统", requirements=["分布式"])
         save_job(cls.job)
 
@@ -279,7 +292,7 @@ class InterviewSessionTests(unittest.TestCase):
         from src.agents.planner import plan as run_planner
         from src.schemas import CandidateProfile, CompletionPolicy, JobContext
         init_db()
-        cls.client = TestClient(create_app())
+        cls.client = _hr_client()
         # 准备: 1 个 job + 1 个 candidate + 1 个 plan
         # Sprint 5.9: tech-lateral plan 现在 22 主问题, _PROVEN_ANSWERS 10 条
         # 答案池. completion_policy.max_total=10 让 walk 命中 hard cap done.
@@ -500,7 +513,7 @@ class GetJobTests(unittest.TestCase):
     def setUpClass(cls):
         from src.db import init_db
         init_db()
-        cls.client = TestClient(create_app())
+        cls.client = _hr_client()
 
     def test_get_job_returns_persisted_fields(self):
         r = self.client.post("/jobs", json={
@@ -535,7 +548,7 @@ class GetCandidateTests(unittest.TestCase):
     def setUpClass(cls):
         from src.db import init_db
         init_db()
-        cls.client = TestClient(create_app())
+        cls.client = _hr_client()
 
     def test_get_candidate_after_post(self):
         from src.db import save_job
@@ -573,7 +586,7 @@ class CorsTests(unittest.TestCase):
     """CORS preflight 应当允许 Next.js dev server (localhost:3000)。"""
 
     def setUp(self):
-        self.client = TestClient(create_app())
+        self.client = _hr_client()
 
     def test_preflight_from_localhost_3000_allowed(self):
         r = self.client.options(
@@ -625,7 +638,7 @@ class ExceptionMappingTests(unittest.TestCase):
             "src.db.save_job",
             side_effect=DatabaseNotConfigured("无 POSTGRES_URL"),
         ):
-            client = TestClient(create_app())
+            client = _hr_client()
             r = client.post("/jobs", json={"title": "t", "jd": "j"})
         self.assertEqual(r.status_code, 503)
         body = r.json()
