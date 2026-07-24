@@ -453,6 +453,36 @@ export type ApproveBody = {
 /** Sprint 6-3: 过渡语音句数, 与后端 orchestrator.FILLER_TEXTS 保持同步。 */
 export const FILLER_COUNT = 3;
 
+/** Sprint 6.7: 飞书导入 (知识管线扩展)。 */
+export type FeishuStatus = { configured: boolean; authorized: boolean };
+export type FeishuChild = {
+  node_token: string;
+  title: string;
+  obj_type: string;
+  has_child: boolean;
+};
+export type FeishuPreview = {
+  kind: "wiki" | "docx";
+  token: string;
+  title: string | null;
+  obj_type?: string;
+  has_child: boolean;
+  children: FeishuChild[] | null;
+  needs_authorization: boolean;
+};
+export type FeishuImportProgress = {
+  status: "queued" | "fetching" | "pipeline_running" | "done" | "failed";
+  total?: number;
+  done?: number;
+  current?: string;
+  skipped_dup?: number;
+  n_files?: number;
+  chunks?: number;
+  drafts?: number;
+  error?: string;
+  dataset_id?: string;
+};
+
 /** Sprint 6-4/6-5: GET /media/config —— 部署级媒体能力开关。 */
 export type MediaConfig = {
   stt_enabled: boolean;
@@ -544,6 +574,32 @@ export const api = {
     fetchAudioBlob(`/interviews/${sessionId}/fillers/${idx}/audio`),
   /** Sprint 6-4: 媒体能力探测; 失败按全关处理 (调用方 catch)。 */
   getMediaConfig: () => request<MediaConfig>("/media/config"),
+  // Sprint 6.7: 飞书导入
+  feishuStatus: () => request<FeishuStatus>("/admin/feishu/status"),
+  feishuAuthorizeUrl: () =>
+    request<{ url: string }>("/admin/feishu/authorize-url"),
+  feishuPreview: (url: string) =>
+    request<FeishuPreview>("/admin/feishu/preview", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+  feishuImport: (body: {
+    url: string;
+    dataset_id: string;
+    topic: string;
+    description?: string;
+    category?: string;
+    role_family?: string;
+    competency_id?: string;
+    auto_approve?: boolean;
+    include_children?: boolean;
+  }) =>
+    request<{ scheduled: boolean; job_id: string }>("/admin/feishu/import", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  feishuImportProgress: (jobId: string) =>
+    request<FeishuImportProgress>(`/admin/feishu/import/${jobId}`),
   /**
    * Sprint 6-5: 上传一个录像分片。返回是否成功 —— 失败由 RecordingUploader
    * 停止整条录制 (保住已上传前缀是合法 webm), 不打断面试。

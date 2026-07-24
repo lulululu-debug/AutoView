@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useState } from "react";
 
 import {
   ApiError,
@@ -82,7 +82,8 @@ export default function ChunkReviewPage({
   }
 
   useEffect(() => {
-    fetchChunk();
+    // react-hooks/set-state-in-effect: 经 microtask 再触发
+    void Promise.resolve().then(fetchChunk);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chunkId]);
 
