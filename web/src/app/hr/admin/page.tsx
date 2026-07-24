@@ -87,15 +87,13 @@ export default function AdminDatasetsPage() {
           </p>
         </div>
         <div className="shrink-0 flex gap-2">
-          {/* Sprint 6.7: 配了飞书才显示导入入口 */}
-          {feishuConfigured && (
-            <Link
-              href="/hr/admin/feishu"
-              className="rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              从飞书导入
-            </Link>
-          )}
+          {/* Sprint 6.7 task 5: 入口常显 —— 配置本身就在该页 (未配置时文案引导) */}
+          <Link
+            href="/hr/admin/feishu"
+            className="rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            {feishuConfigured ? "从飞书导入" : "配置飞书导入"}
+          </Link>
           <Link
             href="/hr/admin/upload"
             className="rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black px-3 py-2 text-sm font-medium hover:opacity-90"
