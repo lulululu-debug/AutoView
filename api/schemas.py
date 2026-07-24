@@ -122,6 +122,15 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
+class RegisterRequest(BaseModel):
+    """POST /auth/register 请求体 (Sprint 6.8)。
+    username 限 3-32 位 字母/数字/下划线/连字符; 密码最短 8 位;
+    invite_code 在服务端配置 REGISTER_INVITE_CODE 时必填匹配。"""
+    username: str = Field(..., min_length=3, max_length=32, pattern=r"^[\w-]+$")
+    password: str = Field(..., min_length=8)
+    invite_code: str = ""
+
+
 class TokenResponse(BaseModel):
     """POST /auth/login 响应体, 兼容 OAuth2 Bearer 约定。
     expires_in 单位是秒, 让前端 SDK 直接拿去算续约时机。

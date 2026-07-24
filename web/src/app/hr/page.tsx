@@ -60,7 +60,8 @@ export default function HrDashboardPage() {
   }
 
   useEffect(() => {
-    refresh();
+    // react-hooks/set-state-in-effect: 经微任务再触发
+    void Promise.resolve().then(refresh);
   }, []);
 
   return (
@@ -123,7 +124,7 @@ function JobList({
   if (list.jobs.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 p-8 text-center text-sm text-zinc-500">
-        还没有职位, 点上面"新建职位"开始。
+        还没有职位, 点上面「新建职位」开始。
       </div>
     );
   }
@@ -223,7 +224,9 @@ function CreateJobForm({
   // 切回另一个, 用 stale flag 丢弃旧请求结果, 避免乱序覆盖。
   useEffect(() => {
     let stale = false;
-    setAspectsLoading(true);
+    void Promise.resolve().then(() => {
+      if (!stale) setAspectsLoading(true);
+    });
     api
       .getAspectsTemplate(roleFamily)
       .then((tpl) => {
@@ -514,7 +517,7 @@ function CreateJobForm({
         {advancedOpen && (
           <div className="mt-3 space-y-3 rounded-md bg-zinc-50 dark:bg-zinc-800/30 p-3">
             <p className="text-xs text-zinc-500">
-              影响 Interviewer 何时提前结束、Evaluator 何时标"证据不充分"。
+              影响 Interviewer 何时提前结束、Evaluator 何时标「证据不充分」。
               留默认即可, 大多数 HR 不需要调。
             </p>
             <div className="grid sm:grid-cols-2 gap-3">

@@ -23,7 +23,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from api.schemas import LoginRequest, TokenResponse, UserMe
+from api.schemas import LoginRequest, RegisterRequest, TokenResponse, UserMe
 from src import auth, db
 from src.schemas import User
 
@@ -83,6 +83,47 @@ def login(body: LoginRequest, response: Response) -> TokenResponse:
         token_type="bearer",
         expires_in=expires_minutes * 60,
         role=user.role,
+    )
+
+
+@router.post("/register", response_model=TokenResponse, status_code=201)
+def register(body: RegisterRequest, response: Response) -> TokenResponse:
+    """Sprint 6.8: HR 自助注册, 成功即登录 (set cookie)。
+
+    - REGISTER_INVITE_CODE 配置时邀请码必须匹配 (403); 未配置 = 开放注册
+    - 重名 409 —— 注册场景要明确告知"名字被占", 与登录 401 防枚举语义不同:
+      注册接口本身就会暴露占用信息, 无枚举增益
+    - 永远注册为 role=hr; admin 只能种子脚本创建
+    - Sprint 6.8 task 2 起, 新账号的数据与他人隔离 (owner 落在 job 上)
+    """
+    invite = os.environ.get("REGISTER_INVITE_CODE")
+    if invite and body.invite_code != invite:
+        raise HTTPException(status_code=403, detail="邀请码错误")
+    if db.load_user_by_username(body.username) is not None:
+        raise HTTPException(status_code=409, detail="用户名已被占用")
+
+    import uuid
+
+    user_id = uuid.uuid4().hex
+    try:
+        db.save_user(
+            user_id=user_id,
+            username=body.username,
+            hashed_password=auth.hash_password(body.password),
+            role="hr",
+        )
+    except Exception:
+        # 并发重名撞 unique 约束等: 统一按占用处理
+        raise HTTPException(status_code=409, detail="用户名已被占用")
+
+    expires_minutes = _expires_minutes()
+    token = auth.create_access_token(user_id=user_id, role="hr")
+    _set_auth_cookie(response, token, expires_minutes * 60)
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=expires_minutes * 60,
+        role="hr",
     )
 
 

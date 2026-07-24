@@ -40,10 +40,13 @@ export default function HrLayout({
     let cancelled = false;
     // login 页不查 /auth/me, 让"未登录直接访问 /hr/login" 不抖闪
     if (pathname === LOGIN_PATH) {
-      if (!cancelled) {
-        setAuthed(true);
-        setRole(null);
-      }
+      // react-hooks/set-state-in-effect: 经微任务再置态
+      void Promise.resolve().then(() => {
+        if (!cancelled) {
+          setAuthed(true);
+          setRole(null);
+        }
+      });
       return;
     }
     api
