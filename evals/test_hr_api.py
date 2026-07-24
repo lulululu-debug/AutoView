@@ -45,6 +45,9 @@ class _HrApiBase(unittest.TestCase):
         from scripts.seed_users import seed_user
         seed_user(username="hr1", password="pw", role="hr")
         self.hr_token = self._login("hr1", "pw")
+        # Sprint 6.8: 数据隔离后, 种的 job 必须归属 hr1 才可见
+        from src.db import load_user_by_username
+        self.hr1_uid = load_user_by_username("hr1")[0].user_id
         # Sprint 5.8: login 把 cookie set 进 TestClient.cookies, 后续 tests 用
         # explicit Authorization: Bearer 头, 不应被这个 cookie 影响 ——
         # 否则 "无 Bearer 应当 401" 测试会被 cookie 误命中。
@@ -76,7 +79,7 @@ class _HrApiBase(unittest.TestCase):
     def _seed_job(self, title: str = "后端") -> str:
         from src.db import save_job
         from src.schemas import JobContext
-        job = JobContext(title=title, jd="x")
+        job = JobContext(title=title, jd="x", owner_user_id=self.hr1_uid)
         save_job(job)
         return job.job_id
 
@@ -334,7 +337,9 @@ class SubmitReviewTests(_HrApiBase):
 
     def test_reviewer_id_taken_from_jwt(self):
         from scripts.seed_users import seed_user
-        seed_user(username="hr2", password="pw", role="hr")
+        # Sprint 6.8: 隔离后 hr2 (普通 hr) 无权碰 hr1 的报告;
+        # 本测试意图是"reviewer_id 取自 JWT", 换 admin 角色保留意图
+        seed_user(username="hr2", password="pw", role="admin")
         token2 = self._login("hr2", "pw")
         r = self.client.patch(
             f"/hr/reports/{self.report_id}/review",

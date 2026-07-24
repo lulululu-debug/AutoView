@@ -42,10 +42,54 @@ router = APIRouter(prefix="/hr", tags=["hr"])
 HrUser = Annotated[User, Depends(auth.require_hr_user)]
 
 
+def _can_access(job: JobContext | None, user: User) -> bool:
+    """Sprint 6.8 数据隔离: admin 全量; hr 只见自己的; NULL 归属 (存量未迁移)
+    仅 admin 可见。"""
+    if job is None:
+        return False
+    if user.role == "admin":
+        return True
+    return job.owner_user_id == user.user_id
+
+
+def _require_job_access(job_id: str, user: User) -> JobContext:
+    """越权与不存在统一 404 (不泄资源存在性)。"""
+    job = db.load_job(job_id)
+    if not _can_access(job, user):
+        raise HTTPException(status_code=404, detail=f"job {job_id} 不存在")
+    return job
+
+
+def _require_candidate_access(candidate_id: str, user: User):
+    cand = db.load_candidate(candidate_id)
+    if cand is None:
+        raise HTTPException(
+            status_code=404, detail=f"candidate {candidate_id} 不存在",
+        )
+    _require_job_access(cand.job_id, user)
+    return cand
+
+
+def _require_report_access(report_id: str, user: User):
+    """report -> session -> job 派生归属。"""
+    report = db.load_report(report_id)
+    if report is None:
+        raise HTTPException(
+            status_code=404, detail=f"report {report_id} 不存在",
+        )
+    session = db.load_session(report.session_id)
+    if session is None or not _can_access(db.load_job(session.job_id), user):
+        raise HTTPException(
+            status_code=404, detail=f"report {report_id} 不存在",
+        )
+    return report
+
+
 @router.get("/jobs", response_model=list[JobContext])
-def list_jobs(_user: HrUser) -> list[JobContext]:
-    """列所有职位 (created_at 倒序)。"""
-    return db.list_jobs()
+def list_jobs(user: HrUser) -> list[JobContext]:
+    """列职位 (created_at 倒序)。Sprint 6.8: hr 只见自己的, admin 全量。"""
+    owner = None if user.role == "admin" else user.user_id
+    return db.list_jobs(owner_user_id=owner)
 
 
 @router.get(
@@ -53,11 +97,13 @@ def list_jobs(_user: HrUser) -> list[JobContext]:
     response_model=list[CandidateWithStatus],
 )
 def list_candidates_for_job(
-    job_id: str, _user: HrUser,
+    job_id: str, user: HrUser,
 ) -> list[CandidateWithStatus]:
     """列某职位的候选人 + 当前状态 (plan_pending / ready / completed / reviewed)。
     job 不存在时也返空列表 (无意义的 job_id 不算错), HR 端 UI 应当先调
     GET /hr/jobs 选择已知 job。"""
+    if not _can_access(db.load_job(job_id), user):
+        return []  # 无权/不存在统一返空 (旧契约 + 不泄存在性)
     rows = db.list_candidates_with_status_for_job(job_id)
     return [CandidateWithStatus.model_validate(r) for r in rows]
 
@@ -66,10 +112,11 @@ def list_candidates_for_job(
     "/jobs/{job_id}/candidates/{candidate_id}/plan",
     response_model=InterviewPlan,
 )
-def get_hr_plan(job_id: str, candidate_id: str, _user: HrUser) -> InterviewPlan:
+def get_hr_plan(job_id: str, candidate_id: str, user: HrUser) -> InterviewPlan:
     """HR 视角的 plan: 与候选人端同一份数据, 但**保留 trace**
     (出题过程审计: topic 匹配明细 + 每题来源路径)。候选人端接口剥 trace,
     这里不剥 —— HR 是 trace 的目标读者 (Sprint E)。"""
+    _require_job_access(job_id, user)
     candidate = db.load_candidate(candidate_id)
     if candidate is None or candidate.job_id != job_id:
         raise HTTPException(
@@ -91,7 +138,7 @@ def _dev_plan_preview_enabled() -> bool:
     response_model=InterviewPlan,
 )
 def get_plan_preview(
-    job_id: str, candidate_id: str, _user: HrUser,
+    job_id: str, candidate_id: str, user: HrUser,
 ) -> InterviewPlan:
     """开发者测试端点: 不答题预览全部题目 (含 lazy project 题)。
 
@@ -111,6 +158,7 @@ def get_plan_preview(
             detail="plan 预览未开启 (需要环境变量 DEV_PLAN_PREVIEW=true)",
         )
 
+    _require_job_access(job_id, user)
     candidate = db.load_candidate(candidate_id)
     if candidate is None or candidate.job_id != job_id:
         raise HTTPException(
@@ -131,14 +179,11 @@ def get_plan_preview(
     "/candidates/{candidate_id}/resume-chunks",
     response_model=list[ResumeChunk],
 )
-def list_resume_chunks(candidate_id: str, _user: HrUser) -> list[ResumeChunk]:
+def list_resume_chunks(candidate_id: str, user: HrUser) -> list[ResumeChunk]:
     """Sprint E 出题过程视图: 该候选人 Resume 在 Milvus 里的全部切片。
     project 题的 source_chunk_ids 指向这些 document_id, HR 端对照展示
     「哪段简历催生了哪道深挖题」。Milvus 未配置 / 无切片时返空列表。"""
-    if db.load_candidate(candidate_id) is None:
-        raise HTTPException(
-            status_code=404, detail=f"candidate {candidate_id} 不存在",
-        )
+    _require_candidate_access(candidate_id, user)
     try:
         rows = vector_store.list_documents(
             kind=vector_store.DOC_KIND_RESUME, source_id=candidate_id,
@@ -163,11 +208,12 @@ def list_resume_chunks(candidate_id: str, _user: HrUser) -> list[ResumeChunk]:
     response_model=CandidateWithStatus,
 )
 def get_candidate(
-    job_id: str, candidate_id: str, _user: HrUser,
+    job_id: str, candidate_id: str, user: HrUser,
 ) -> CandidateWithStatus:
     """HR 单候选人详情 + 进度状态. Sprint 5-5 详情页用。
     校验 candidate 确实在该 job 下, 防跨 job 偷看 (与候选人端
     GET /jobs/{j}/candidates/{c} 同款护栏)。"""
+    _require_job_access(job_id, user)
     row = db.get_candidate_with_status(candidate_id)
     if row is None or row["job_id"] != job_id:
         raise HTTPException(
@@ -178,7 +224,7 @@ def get_candidate(
 
 
 @router.get("/sessions/{session_id}", response_model=InterviewSession)
-def get_session(session_id: str, _user: HrUser) -> InterviewSession:
+def get_session(session_id: str, user: HrUser) -> InterviewSession:
     """HR 视角的完整 session: 含 history / answers / intro_text / assessments。
     Sprint 5.7: HR 阶段视图 "面试过程" 区域用 assessments 字段展示每题的
     missing_signals / strengths / concerns / followup_goal。
@@ -192,27 +238,27 @@ def get_session(session_id: str, _user: HrUser) -> InterviewSession:
         raise HTTPException(
             status_code=404, detail=f"session {session_id} 不存在",
         )
+    if not _can_access(db.load_job(session.job_id), user):  # Sprint 6.8
+        raise HTTPException(
+            status_code=404, detail=f"session {session_id} 不存在",
+        )
     return session
 
 
 @router.get("/reports/{report_id}", response_model=EvaluationReport)
-def get_report(report_id: str, _user: HrUser) -> EvaluationReport:
+def get_report(report_id: str, user: HrUser) -> EvaluationReport:
     """HR 视角的报告详情。
     与候选人端 GET /interviews/{id}/report 区别:
     - 该端点 by session_id, 隐式触发 finalize, 任何人可调
     - 本端点 by report_id, 不触发 finalize, 仅 HR 可调
     HR 拿 report_id 来源是 GET /hr/jobs/{j}/candidates 的列表 (含 report_id)。"""
-    report = db.load_report(report_id)
-    if report is None:
-        raise HTTPException(
-            status_code=404, detail=f"report {report_id} 不存在",
-        )
-    return report
+    return _require_report_access(report_id, user)
 
 
 @router.get("/reports/{report_id}/review", response_model=ReviewRecord | None)
-def get_review(report_id: str, _user: HrUser) -> ReviewRecord | None:
+def get_review(report_id: str, user: HrUser) -> ReviewRecord | None:
     """查询当前复核记录 (null 表示还没复核过)。"""
+    _require_report_access(report_id, user)
     return db.load_review_for_report(report_id)
 
 
@@ -225,11 +271,8 @@ def submit_review(
 ) -> ReviewRecord:
     """HR 提交复核结论。reviewer_id 由 server 从 JWT 取, 客户端不传。
     重复 PATCH 同 report_id 会"覆盖"为新 reviewer + 新结论 (MVP 不做版本历史)。"""
-    # 1) report 必须存在
-    if db.load_report(report_id) is None:
-        raise HTTPException(
-            status_code=404, detail=f"report {report_id} 不存在, 无法复核",
-        )
+    # 1) report 必须存在且归属当前 HR (Sprint 6.8)
+    _require_report_access(report_id, user)
     # 2) decision 必须是合法 enum 值
     try:
         decision = ReviewDecision(body.decision)

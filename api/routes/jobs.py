@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from api.schemas import JobCreate
-from src import db, ingestion
+from src import auth, db, ingestion
 from src.agents import planner
-from src.schemas import JobContext, ProfileAspect
+from src.schemas import JobContext, ProfileAspect, User
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -49,7 +51,11 @@ def get_aspects_template(role_family: str) -> list[ProfileAspect]:
 
 
 @router.post("", response_model=JobContext, status_code=201)
-def create_job(body: JobCreate, background_tasks: BackgroundTasks) -> JobContext:
+def create_job(
+    body: JobCreate,
+    background_tasks: BackgroundTasks,
+    user: Annotated[User, Depends(auth.require_hr_user)],
+) -> JobContext:
     """创建职位: server 生成 job_id, 持久化到 PG, 回 JobContext。
     JD + 公司资料的向量化在后台跑, 不阻塞响应。
     Sprint 5.9: role_family + aspects 也透传; aspects 空时 Planner 用
@@ -67,6 +73,9 @@ def create_job(body: JobCreate, background_tasks: BackgroundTasks) -> JobContext
         followup_policy=body.followup_policy,
         completion_policy=body.completion_policy,
         aspects=[ProfileAspect.model_validate(a) for a in aspects_in],
+        # Sprint 6.8: 归属创建者 (数据隔离单点)。本端点此前无鉴权 (dev 遗留洞),
+        # 隔离要求创建必有归属人, 顺手封上。
+        owner_user_id=user.user_id,
     )
     db.save_job(job)
     background_tasks.add_task(

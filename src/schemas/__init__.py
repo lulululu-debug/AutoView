@@ -64,6 +64,9 @@ class JobContext(BaseModel):
     # None 表示用 stage 默认 / schema 默认值, 让 HR 不动也能用。
     followup_policy: "FollowUpPolicy | None" = None
     completion_policy: "CompletionPolicy | None" = None
+    # Sprint 6.8: 归属 HR (数据隔离); None = 存量无主 (仅 admin 可见)。
+    # agent 内核不消费本字段, 只在 API 层做访问控制。
+    owner_user_id: str | None = None
     # Sprint 5.9: HR 定义本岗位考察的 aspect 列表 (per competency 分组);
     # 空列表时 Planner 用 role_family 默认模板; 非空时 HR 配置生效。
     # Assessor 在每 turn 看着这个列表标 covered_aspects, 整轮算 richness。

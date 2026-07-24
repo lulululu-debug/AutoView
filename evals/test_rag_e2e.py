@@ -107,7 +107,15 @@ class _RagE2EBase(unittest.TestCase):
         init_db()           # 含增量迁移加 rag_context_chunk_ids 列
         init_collections()
         from api.main import create_app
-        cls.client = TestClient(create_app())
+
+        app = create_app()
+        # Sprint 6.8: POST /jobs 挂鉴权, 注入固定 HR 身份
+        from src import auth as _auth
+        from src.schemas import User as _User
+        app.dependency_overrides[_auth.require_hr_user] = lambda: _User(
+            user_id="eval-hr", username="eval-hr", role="hr",
+        )
+        cls.client = TestClient(app)
 
     @classmethod
     def tearDownClass(cls):
