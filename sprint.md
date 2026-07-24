@@ -825,13 +825,24 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       导航、错位 ** 修复、连续空行折叠 —— 全部真实坑样本进金标。
       evals/test_feishu_clean.py 11 条, 全量 449 绿。
 
-- [ ] **task 3 admin API + 后台导入**:
+- [x] **task 3 admin API + 后台导入**:
       GET /admin/feishu/status(configured+authorized 探测);
       GET /admin/feishu/authorize-url + GET /admin/feishu/oauth/callback;
       POST /admin/feishu/preview(贴链接 -> 标题/子篇数/是否需授权);
       POST /admin/feishu/import(dataset_id/topic/include_children ->
       BackgroundTasks: 拉取->清洗->_run_upload_pipeline; 进度落 Redis 供轮询);
       异常映射(未配置 409 / 未授权 401 / 飞书侧错误透传语义)
+      实际落地: api/routes/admin_feishu.py 六端点; OAuth 回调不挂 HR 鉴权
+      (飞书浏览器跳转), 一次性 state nonce (Redis TTL 10min) 防 CSRF,
+      完成 302 回 HR admin; 进度 Redis (feishu:import:{job}, TTL 1h) 前端
+      轮询; BG 任务: 拉 blocks -> blocks_to_md -> 同批内容哈希去重 (实战坑:
+      同名不同 token 整篇重复) -> 落临时目录 -> 复用 _run_upload_pipeline
+      (入库+派生+可选批准, tmpdir 由它清理); source_commit 记
+      <节点token>@<日期> 溯源约定; dataset 冲突 409 与 md 上传口径一致
+      (追加已有 dataset 留后续)。异常映射: NotConfigured/NotAuthorized 都走
+      409 (401 语义被 HR 登录占用, 防前端误跳登录), FeishuApiError -> 502。
+      evals/test_feishu_admin.py 10 条 (dependency override 绕 JWT +
+      connector 全 mock), 全量 459 绿。
 
 - [ ] **task 4 HR UI**:
       /hr/admin 加「从飞书导入」入口: 连接状态+授权按钮 -> 贴链接预览

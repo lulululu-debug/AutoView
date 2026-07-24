@@ -39,6 +39,7 @@ from api.routes import candidates as candidates_routes
 from api.routes import hr as hr_routes
 from api.routes import interviews as interviews_routes
 from api.routes import jobs as jobs_routes
+from api.routes import admin_feishu as admin_feishu_routes
 from api.routes import media as media_routes
 
 API_TITLE = "AI Interview Platform API"
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(hr_routes.router)
     app.include_router(admin_drafts_routes.router)
     app.include_router(admin_upload_routes.router)
+    app.include_router(admin_feishu_routes.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
