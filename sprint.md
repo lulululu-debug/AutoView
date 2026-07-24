@@ -813,9 +813,17 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       task 2 清洗器文件。evals/test_feishu_connector.py 8 条 (URL 矩阵/
       scope 显式断言/权限重试三分支/tenant 缓存), 全量 438 绿。
 
-- [ ] **task 2 清洗器 + 金标**(knowledge_pipeline/feishu_clean.py):
+- [x] **task 2 清洗器 + 金标**(knowledge_pipeline/feishu_clean.py):
       blocks->md 转换内嵌清洗(uuid 图片行/导流语/导航行/错位加粗/表格重建);
       evals 金标用实战坑样本锁行为(纯函数, 零 infra)
+      实际落地: blocks_to_md 层级映射 page->H1 / heading1->H2 / heading2->H3
+      (切片器契约), heading4+ 降加粗行; 图片/分割线 block 源头跳过 ("裸 uuid
+      行"在 blocks 路径天然消失, clean_md 保留 uuid/图片行清理兜底
+      raw_content 形态输入); 表格按 (row_size,column_size)+cell 树重建 md
+      表格, cell 子块防重复渲染; 有序列表断段重新编号; 加粗 style 输出即
+      修复内侧空格。clean_md: uuid/裸图片文件名行、公众号导流、《后续文章》
+      导航、错位 ** 修复、连续空行折叠 —— 全部真实坑样本进金标。
+      evals/test_feishu_clean.py 11 条, 全量 449 绿。
 
 - [ ] **task 3 admin API + 后台导入**:
       GET /admin/feishu/status(configured+authorized 探测);
