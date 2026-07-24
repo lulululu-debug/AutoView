@@ -23,6 +23,9 @@ from src.db.base import (
     session_scope,
 )
 from src.db.repository import (
+    get_app_setting,
+    set_app_setting,
+    delete_app_setting,
     approve_question_draft,
     bulk_approve_chunk,
     count_knowledge_chunks,
@@ -74,6 +77,9 @@ from src.db.repository import (
 )
 
 __all__ = [
+    "get_app_setting",
+    "set_app_setting",
+    "delete_app_setting",
     "DatabaseNotConfigured",
     "get_engine",
     "init_db",

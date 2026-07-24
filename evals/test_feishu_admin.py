@@ -54,7 +54,11 @@ class StatusTests(_Base):
     def test_unconfigured(self) -> None:
         r = self.client.get("/admin/feishu/status")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json(), {"configured": False, "authorized": False})
+        body = r.json()
+        self.assertFalse(body["configured"])
+        self.assertFalse(body["authorized"])
+        self.assertIsNone(body["source"])
+        self.assertIsNone(body["app_id_masked"])
 
 
 class PreviewTests(_Base):
@@ -149,6 +153,47 @@ class ImportValidationTests(_Base):
             r = self.client.post("/admin/feishu/import", json=self._BODY)
         self.assertEqual(r.status_code, 409)
         self.assertIn("飞书未配置", r.json()["detail"])
+
+
+class ConfigApiTests(_Base):
+    """Sprint 6.7 task 5: 前端凭证配置端点。"""
+
+    def test_env_locked_409(self) -> None:
+        self._configure()
+        r = self.client.put(
+            "/admin/feishu/config", json={"app_id": "a", "app_secret": "b"},
+        )
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("部署环境", r.json()["detail"])
+
+    def test_invalid_credentials_422(self) -> None:
+        with mock.patch.object(
+            admin_feishu.feishu, "test_credentials",
+            side_effect=admin_feishu.feishu.FeishuApiError(10003, "invalid app"),
+        ):
+            r = self.client.put(
+                "/admin/feishu/config", json={"app_id": "a", "app_secret": "b"},
+            )
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("凭证无效", r.json()["detail"])
+
+    def test_save_encrypts_and_never_echoes_secret(self) -> None:
+        os.environ["JWT_SECRET"] = os.environ.get("JWT_SECRET") or "test-jwt-32ch-secret-abcdefgh"
+        saved = {}
+        with mock.patch.object(
+            admin_feishu.feishu, "test_credentials", return_value=None,
+        ), mock.patch.object(
+            admin_feishu.db, "set_app_setting",
+            side_effect=lambda k, v: saved.__setitem__(k, v),
+        ):
+            r = self.client.put(
+                "/admin/feishu/config",
+                json={"app_id": "cli_new", "app_secret": "topsecret"},
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("topsecret", r.text)               # 不回显
+        self.assertEqual(saved["feishu_app_id"], "cli_new")
+        self.assertNotIn("topsecret", saved["feishu_app_secret"])  # 加密入库
 
 
 class OAuthCallbackTests(_Base):

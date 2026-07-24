@@ -454,7 +454,12 @@ export type ApproveBody = {
 export const FILLER_COUNT = 3;
 
 /** Sprint 6.7: 飞书导入 (知识管线扩展)。 */
-export type FeishuStatus = { configured: boolean; authorized: boolean };
+export type FeishuStatus = {
+  configured: boolean;
+  authorized: boolean;
+  source: "env" | "db" | null;
+  app_id_masked: string | null;
+};
 export type FeishuChild = {
   node_token: string;
   title: string;
@@ -600,6 +605,14 @@ export const api = {
     }),
   feishuImportProgress: (jobId: string) =>
     request<FeishuImportProgress>(`/admin/feishu/import/${jobId}`),
+  /** Sprint 6.7 task 5: 前端配置凭证 (保存前后端会先连通性测试)。 */
+  feishuPutConfig: (app_id: string, app_secret: string) =>
+    request<{ ok: boolean; app_id_masked: string | null }>(
+      "/admin/feishu/config",
+      { method: "PUT", body: JSON.stringify({ app_id, app_secret }) },
+    ),
+  feishuDeleteConfig: () =>
+    request<{ ok: boolean }>("/admin/feishu/config", { method: "DELETE" }),
   /**
    * Sprint 6-5: 上传一个录像分片。返回是否成功 —— 失败由 RecordingUploader
    * 停止整条录制 (保住已上传前缀是合法 webm), 不打断面试。

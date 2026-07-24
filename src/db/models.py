@@ -464,3 +464,19 @@ class QuestionDraftORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class AppSettingORM(Base):
+    """键值型应用设置 —— Sprint 6.7 task 5 (前端配置飞书凭证)。
+    敏感值 (如 feishu_app_secret_enc) 由调用方用 JWT_SECRET 派生密钥
+    Fernet 加密后再存, 本表不感知明文。"""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )

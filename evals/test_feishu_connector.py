@@ -129,6 +129,59 @@ class CallRetryTests(_EnvCase):
             self.assertEqual(ctx.exception.code, 99999)
 
 
+class CredentialPrecedenceTests(_EnvCase):
+    """Sprint 6.7 task 5: env 优先, DB 兜底; secret 加密往返。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._jwt_saved = os.environ.get("JWT_SECRET")
+        os.environ["JWT_SECRET"] = "test-jwt-secret-for-fernet-32ch"
+
+    def tearDown(self) -> None:
+        if self._jwt_saved is None:
+            os.environ.pop("JWT_SECRET", None)
+        else:
+            os.environ["JWT_SECRET"] = self._jwt_saved
+        super().tearDown()
+
+    def test_encrypt_roundtrip(self) -> None:
+        enc = feishu.encrypt_secret("s3cret")
+        self.assertNotIn("s3cret", enc)
+        self.assertEqual(feishu._decrypt_secret(enc), "s3cret")
+
+    def test_env_wins_over_db(self) -> None:
+        self._configure()  # env 配置
+        with mock.patch("src.db.get_app_setting", return_value="db-should-lose"):
+            creds = feishu._credentials()
+        assert creds is not None
+        self.assertEqual(creds[2], "env")
+        self.assertEqual(creds[0], "cli_test")
+
+    def test_db_fallback_when_no_env(self) -> None:
+        enc = feishu.encrypt_secret("db-secret")
+
+        def fake_get(key):
+            return {"feishu_app_id": "cli_db", "feishu_app_secret": enc}.get(key)
+
+        with mock.patch("src.db.get_app_setting", side_effect=fake_get):
+            feishu.invalidate_credentials_cache()
+            creds = feishu._credentials()
+        assert creds is not None
+        self.assertEqual(creds, ("cli_db", "db-secret", "db"))
+
+    def test_db_unusable_without_jwt_secret(self) -> None:
+        """JWT_SECRET 缺失 -> DB 凭证解不开 -> 视为未配置 (不炸)。"""
+        enc = feishu.encrypt_secret("x")
+        os.environ.pop("JWT_SECRET", None)
+
+        def fake_get(key):
+            return {"feishu_app_id": "cli_db", "feishu_app_secret": enc}.get(key)
+
+        with mock.patch("src.db.get_app_setting", side_effect=fake_get):
+            feishu.invalidate_credentials_cache()
+            self.assertIsNone(feishu._credentials())
+
+
 class TenantCacheTests(_EnvCase):
     def test_cached_until_expiry(self) -> None:
         self._configure()

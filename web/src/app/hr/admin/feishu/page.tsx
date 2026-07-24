@@ -22,13 +22,22 @@ import {
 type Status =
   | { kind: "loading" }
   | { kind: "unconfigured" }
-  | { kind: "ready"; authorized: boolean }
+  | {
+      kind: "ready";
+      authorized: boolean;
+      source: "env" | "db" | null;
+      appIdMasked: string | null;
+    }
   | { kind: "error"; message: string };
 
 const POLL_MS = 2000;
 
 export default function FeishuImportPage() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
+  // Sprint 6.7 task 5: 前端凭证配置表单
+  const [cfgAppId, setCfgAppId] = useState("");
+  const [cfgSecret, setCfgSecret] = useState("");
+  const [cfgSaving, setCfgSaving] = useState(false);
   const [url, setUrl] = useState("");
   const [preview, setPreview] = useState<FeishuPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -47,18 +56,43 @@ export default function FeishuImportPage() {
   const [progress, setProgress] = useState<FeishuImportProgress | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  async function refreshStatus() {
+    try {
+      const s = await api.feishuStatus();
+      setStatus(
+        s.configured
+          ? {
+              kind: "ready",
+              authorized: s.authorized,
+              source: s.source,
+              appIdMasked: s.app_id_masked,
+            }
+          : { kind: "unconfigured" },
+      );
+    } catch (e) {
+      setStatus({ kind: "error", message: errMessage(e) });
+    }
+  }
+
   useEffect(() => {
-    api
-      .feishuStatus()
-      .then((s) =>
-        setStatus(
-          s.configured
-            ? { kind: "ready", authorized: s.authorized }
-            : { kind: "unconfigured" },
-        ),
-      )
-      .catch((e) => setStatus({ kind: "error", message: errMessage(e) }));
+    void Promise.resolve().then(refreshStatus);
   }, []);
+
+  async function saveConfig() {
+    if (!cfgAppId.trim() || !cfgSecret.trim()) return;
+    setCfgSaving(true);
+    setNotice(null);
+    try {
+      await api.feishuPutConfig(cfgAppId.trim(), cfgSecret.trim());
+      setCfgSecret("");
+      await refreshStatus();
+      setNotice("✅ 凭证有效, 已保存 (secret 加密存储, 不会回显)");
+    } catch (e) {
+      setNotice(errMessage(e));
+    } finally {
+      setCfgSaving(false);
+    }
+  }
 
   // 进度轮询; done/failed 停
   useEffect(() => {
@@ -143,9 +177,35 @@ export default function FeishuImportPage() {
         )}
 
         {status.kind === "unconfigured" && (
-          <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 p-5 text-sm text-amber-800 dark:text-amber-300">
-            飞书未配置。请在服务端 .env 填入 FEISHU_APP_ID / FEISHU_APP_SECRET
-            (开放平台自建应用, 需开通 wiki/docx 只读权限) 后重启 API。
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 text-sm space-y-3">
+            <p className="font-medium">配置飞书应用凭证</p>
+            <p className="text-zinc-500 text-xs">
+              开放平台自建应用的 App ID / App Secret (需开通 wiki 与 docx
+              只读权限, 并把回调地址加入白名单)。保存前会自动验证凭证有效性;
+              Secret 加密存储, 保存后不再回显。
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                value={cfgAppId}
+                onChange={(e) => setCfgAppId(e.target.value)}
+                placeholder="App ID (cli_...)"
+                className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2"
+              />
+              <input
+                value={cfgSecret}
+                onChange={(e) => setCfgSecret(e.target.value)}
+                type="password"
+                placeholder="App Secret"
+                className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2"
+              />
+            </div>
+            <button
+              onClick={saveConfig}
+              disabled={cfgSaving || !cfgAppId.trim() || !cfgSecret.trim()}
+              className="rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black px-4 py-2 font-medium hover:opacity-90 disabled:opacity-50"
+            >
+              {cfgSaving ? "验证并保存中..." : "验证并保存"}
+            </button>
           </div>
         )}
 
@@ -155,6 +215,25 @@ export default function FeishuImportPage() {
 
         {status.kind === "ready" && (
           <>
+            {/* 凭证信息条 */}
+            <div className="flex items-center gap-2 mb-2 text-xs text-zinc-500">
+              <span>
+                凭证 {status.appIdMasked}
+                {status.source === "env" ? " (部署环境固定)" : " (界面配置)"}
+              </span>
+              {status.source === "db" && (
+                <button
+                  onClick={async () => {
+                    await api.feishuDeleteConfig().catch(() => {});
+                    await refreshStatus();
+                  }}
+                  className="underline hover:text-zinc-700"
+                >
+                  清除重配
+                </button>
+              )}
+            </div>
+
             {/* 连接状态条 */}
             <div className="flex items-center gap-3 mb-5 text-sm">
               <span
