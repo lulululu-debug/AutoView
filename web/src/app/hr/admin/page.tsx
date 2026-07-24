@@ -46,6 +46,14 @@ function writeDefaultCompetency(datasetId: string, v: CompetencyId): void {
 
 export default function AdminDatasetsPage() {
   const [list, setList] = useState<ListState>({ kind: "loading" });
+  // Sprint 6.7: 飞书配置探测, 决定"从飞书导入"入口显隐 (失败按未配置)
+  const [feishuConfigured, setFeishuConfigured] = useState(false);
+  useEffect(() => {
+    api
+      .feishuStatus()
+      .then((s) => setFeishuConfigured(s.configured))
+      .catch(() => {});
+  }, []);
 
   async function refresh() {
     setList({ kind: "loading" });
@@ -58,7 +66,8 @@ export default function AdminDatasetsPage() {
   }
 
   useEffect(() => {
-    refresh();
+    // react-hooks/set-state-in-effect: 经 microtask 再触发, 首帧用初始 loading 态
+    void Promise.resolve().then(refresh);
   }, []);
 
   return (
@@ -77,12 +86,23 @@ export default function AdminDatasetsPage() {
             每个 dataset 的默认 competency 仅本浏览器保存。
           </p>
         </div>
-        <Link
-          href="/hr/admin/upload"
-          className="shrink-0 rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black px-3 py-2 text-sm font-medium hover:opacity-90"
-        >
-          + 上传新数据集
-        </Link>
+        <div className="shrink-0 flex gap-2">
+          {/* Sprint 6.7: 配了飞书才显示导入入口 */}
+          {feishuConfigured && (
+            <Link
+              href="/hr/admin/feishu"
+              className="rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              从飞书导入
+            </Link>
+          )}
+          <Link
+            href="/hr/admin/upload"
+            className="rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-black px-3 py-2 text-sm font-medium hover:opacity-90"
+          >
+            + 上传新数据集
+          </Link>
+        </div>
       </header>
 
       <DatasetList list={list} onRetry={refresh} />

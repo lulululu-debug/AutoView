@@ -844,10 +844,17 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       evals/test_feishu_admin.py 10 条 (dependency override 绕 JWT +
       connector 全 mock), 全量 459 绿。
 
-- [ ] **task 4 HR UI**:
+- [x] **task 4 HR UI**:
       /hr/admin 加「从飞书导入」入口: 连接状态+授权按钮 -> 贴链接预览
       (标题+子文档列表) -> 配 dataset_id/topic -> 导入 -> 轮询进度 ->
       完成跳审核队列; 未配置时入口整体隐藏
+      实际落地: /hr/admin/feishu 新页 (状态探测 -> 授权条 [单篇免授权文案] ->
+      预览 [子文档列表/需授权提示/非 docx 标跳过] -> 表单 [dataset/topic/
+      category/维度/含子文档/自动批准] -> 2s 轮询进度 -> done 展示
+      chunks/drafts/去重数 + 跳审核); topic 自动带入预览标题; 主页入口
+      按 feishuStatus.configured 显隐。顺手清了 hr/admin 三页的存量 lint
+      error (setState-in-effect ×3 挪微任务 / 未转义引号 / unused import),
+      eslint 全绿 + build 过。
 
 **完成标准**: HR 不出 Web 界面, 从飞书 wiki 目录批量导入一组文档并走完
 出题-审核-入库全流程; 单篇免授权可用; 未配置飞书时现有 md 上传流程零变化。

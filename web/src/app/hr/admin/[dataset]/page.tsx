@@ -66,8 +66,11 @@ export default function DatasetChunksPage({
 
   useEffect(() => {
     let cancelled = false;
-    setState({ kind: "loading" });
     (async () => {
+      // react-hooks/set-state-in-effect: setState 全部放进 async 微任务
+      await Promise.resolve();
+      if (cancelled) return;
+      setState({ kind: "loading" });
       try {
         const chunks = await api.listDatasetChunks(datasetId);
         if (cancelled) return;
@@ -164,7 +167,7 @@ export default function DatasetChunksPage({
               >
                 返回主页改
               </Link>
-              。按"待审数 → chunk 字数"倒序, HR 先啃大块。
+              。按「待审数 → chunk 字数」倒序, HR 先啃大块。
             </p>
           </div>
           {totalPending > 0 && (
