@@ -891,10 +891,17 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
   override 补登录态。
 - 越权访问一律 404 (不泄露资源存在性), 与既有 401 同文案防枚举哲学一致。
 
-- [ ] **task 1 注册端点 + 页面**:
+- [x] **task 1 注册端点 + 页面**:
       POST /auth/register (username 3-32 字符校验/重名 409/密码最短 8 位/
       可选邀请码; bcrypt; 注册即登录 set cookie, role=hr);
       /hr/register 页 + 登录页互链; evals (重名/弱密码/邀请码三态/开放注册)
+      实际落地: 重名 409 明确提示 (注册场景无枚举增益, 与登录 401 防枚举
+      语义区分, 注释写明); 并发撞 unique 约束统一按 409; 永远 role=hr
+      (admin 只能种子脚本); 注册页双密码确认 + 按错误码文案映射;
+      evals/test_auth_register.py 6 条 (校验 422 ×3 / 邀请码 403 ×2 /
+      PG-gated e2e: 注册即登录 me 通 + 重名 + login 复验), 全量 472 绿。
+      顺手清 hr/ 整树剩余存量 lint error 6 处 (layout/page/candidates 详情
+      的 setState-in-effect + 引号), hr/ 从此 eslint 全绿。
 
 - [ ] **task 2 按 owner 隔离**:
       jobs.owner_user_id 列 (ALTER dev/test) + schema/repository 贯通;

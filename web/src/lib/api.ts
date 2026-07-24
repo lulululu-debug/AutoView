@@ -637,6 +637,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+  /** Sprint 6.8: HR 自助注册, 成功即登录 (server set cookie)。 */
+  register: (username: string, password: string, invite_code = "") =>
+    request<LoginResponse>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username, password, invite_code }),
+    }),
   // Sprint 5.8: 鉴权工具端点
   getMe: () =>
     request<{ user_id: string; username: string; role: string }>("/auth/me"),

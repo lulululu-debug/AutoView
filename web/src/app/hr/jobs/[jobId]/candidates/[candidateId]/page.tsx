@@ -110,7 +110,8 @@ export default function CandidateDetailPage({
   }
 
   useEffect(() => {
-    loadAll();
+    // react-hooks/set-state-in-effect: 经微任务再触发
+    void Promise.resolve().then(loadAll);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, candidateId]);
 

@@ -107,6 +107,13 @@ export default function HrLoginPage() {
             {state.kind === "submitting" ? "登录中..." : "登录"}
           </button>
         </form>
+
+        <p className="text-sm text-zinc-500 mt-4">
+          没有账号?{" "}
+          <a href="/hr/register" className="underline hover:text-zinc-700">
+            注册一个
+          </a>
+        </p>
       </div>
     </main>
   );
