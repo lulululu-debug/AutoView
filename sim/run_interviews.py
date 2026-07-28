@@ -28,6 +28,10 @@ def main() -> None:
         "--run-dir", default=None,
         help="精确输出目录 (分批合并 / 断点续跑用); 缺省 = <out>/<时间戳>",
     )
+    ap.add_argument(
+        "--frozen", action="store_true",
+        help="Sprint 8.3.1: 候选人端复放冻结答案 (回归基线批次), 零候选人 LLM",
+    )
     args = ap.parse_args()
 
     bootstrap()
@@ -39,8 +43,9 @@ def main() -> None:
 
     personas = select(args.personas)
     n_runs = len(personas) * args.repeat
+    mode = " [frozen 候选人答案复放]" if args.frozen else ""
     print(
-        f"[sim] 计划 {n_runs} 场仿真 ({len(personas)} persona × {args.repeat}); "
+        f"[sim] 计划 {n_runs} 场仿真 ({len(personas)} persona × {args.repeat}){mode}; "
         f"预估 {n_runs * 30}-{n_runs * 60} 次 gpt-4o-mini 调用, "
         f"约 ¥{n_runs * 0.1:.1f}-{n_runs * 0.5:.1f}"
     )
@@ -58,7 +63,7 @@ def main() -> None:
             run_id = f"r{i + 1}"
             print(f"[sim] ▶ {p.persona_id} {run_id} ...", flush=True)
             try:
-                row = run_one(p, run_id, out_dir)
+                row = run_one(p, run_id, out_dir, frozen=args.frozen)
             except Exception as e:  # 单场失败不挡整批
                 print(f"[sim] ✗ {p.persona_id} {run_id} 失败: {e}")
                 rows.append({
