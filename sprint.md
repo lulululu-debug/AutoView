@@ -1212,6 +1212,50 @@ panel 代码就绪但默认关,门禁脚手架可跑;标注工作量清晰记账
 
 ---
 
+## Sprint 9 — 异步任务队列 + 高并发承载(部署前置)
+
+> 2026-07-28 立项。目标:公网部署前让系统扛得住多人同时面试。
+> **核心取舍:不做全链路 async/await 重写** —— 同步内核跑在 FastAPI
+> threadpool 里,并发容量 = worker 数 × 线程数,对面试类负载(单 turn
+> 秒级、非毫秒级)足够;而重写要动全部 agent/orchestrator/db/cache 签名,
+> 577 个 eval + golden/frozen 体系全在同步假设上,风险收益不成比。
+> 真并发瓶颈按序拆解:
+> 1. **Milvus Lite 单进程锁**(跑批都要停 uvicorn 的根源)→ 独立
+>    Milvus standalone(docker),多 worker 才可能
+> 2. **BackgroundTasks 假异步**(串行、进程内、无重试)→ RQ 任务队列
+>    (Redis broker + 独立 worker 进程;RQ 不可用退回 BackgroundTasks,
+>    降级铁律)
+> 3. **会话读改写竞态**(并发 submit 同一 session 会互相覆盖)→
+>    per-session Redis 锁
+> 4. **连接池/线程池默认值**(PG pool 5、threadpool 40)→ env 可调
+> 全链路 async 重写留账:若实测 >500 并发会话再评估,先改 llm 调用层。
+
+- [ ] **task 1 Milvus 独立部署解耦**:
+      vector_store 支持 MILVUS_URI(http:// 服务端)与 MILVUS_LITE_URI
+      (本地文件)二选一,server 优先;docker-compose.yml 起 milvus
+      standalone;本机 docker 实测两种模式行为一致(collections/插入/
+      检索/删除);evals 保持 lite(CI 零依赖);「跑批停 uvicorn」纪律
+      在 server 模式下解除(文档更新)
+- [ ] **task 2 RQ 任务队列**:
+      pyproject 加 rq;src/jobs/(enqueue 封装 + worker 入口
+      python -m src.jobs.worker);候选人上传路径(ingest_resume +
+      run_planner)改走队列,带重试;RQ 未装/Redis 不可用/未起 worker 时
+      **自动退回 BackgroundTasks**(降级铁律,eval 钉死);candidate 的
+      plan_pending 轮询语义不变,前端零改动
+- [ ] **task 3 会话锁 + 池容量 + 压测**:
+      submit_answer/finalize 挂 per-session Redis 锁(SET NX,拿不到返
+      409,候选人端提示重试);PG engine pool_size/max_overflow env 化
+      (默认 20/30);FastAPI startup 把 threadpool tokens 提到
+      THREADPOOL_TOKENS(默认 100);scripts/load_test.py(stub 模式 N 路
+      并发完整面试,验证无跨会话串扰 + 容量数字);eval:锁互斥/降级/池配置
+
+**完成标准**:docker milvus + 多 worker uvicorn + RQ worker 架构本机跑通;
+压测 N≥30 路并发面试零串扰零 5xx;所有降级路径(无 server milvus 退 lite /
+无 RQ 退 BackgroundTasks / 锁冲突 409)有 eval;全量 evals 绿(CI 零外部
+依赖)。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
