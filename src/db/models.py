@@ -286,6 +286,12 @@ class InterviewSessionORM(Base):
     integrity_flags: Mapped[list] = mapped_column(
         JSONB, nullable=False, default=list, server_default="[]",
     )
+    # Sprint 8.3: competency 信念状态 (内部审计, 不进 HR UI)。已有库需手动补列:
+    #   ALTER TABLE interview_sessions ADD COLUMN IF NOT EXISTS beliefs
+    #   JSONB NOT NULL DEFAULT '{}'::jsonb;
+    beliefs: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

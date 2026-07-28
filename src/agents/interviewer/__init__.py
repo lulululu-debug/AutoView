@@ -19,6 +19,7 @@ Orchestrator 负责将返回值写入 session.history, 并补上候选人答复�
 """
 from __future__ import annotations
 
+from src import beliefs as beliefs_mod
 from src import llm, trace
 from src.llm import sanitize
 from src.coverage import (
@@ -31,6 +32,7 @@ from src.coverage import (
 from src.schemas import (
     AnswerAssessment,
     CandidateAnswer,
+    CompetencyBelief,
     CompletionPolicy,
     FollowUp,
     FollowUpPolicy,
@@ -81,28 +83,40 @@ def _decide_followup(
     assessment: AnswerAssessment | None,
     policy: FollowUpPolicy,
     followups_since: int,
+    *,
+    belief: CompetencyBelief | None = None,
+    total_followups: int = 0,
 ) -> bool:
     """Sprint 5.6 三步决策的中间步 (assess 是 orchestrator 调的, 这里只 decide)。
 
     顺序:
     1) max_followups_per_question 硬上限 (含 self_intro=0): 命中即停
     2) self_intro 类别二次保护 (即使 policy max 被改成 >0, 这里也兜底)
-    3) 有 assessment: sufficiency 与 confidence 双阈值过才停; 否则追问
-    4) 无 assessment: 退到 Sprint 0 启发式 _needs_followup
+    3) 有校准分 (真 LLM 路径, Sprint 8.3): 概率阈值 + 全局预算 + 信念方差门
+       —— 证据已足的 competency 不再消耗预算, 预算流向高方差维度
+    4) 有 assessment 无校准分 (启发式/复制粘贴路径): raw 双阈值, 行为与
+       8.3 之前逐字节一致
+    5) 无 assessment: 退到 Sprint 0 启发式 _needs_followup
     """
     if followups_since >= policy.max_followups_per_question:
         return False
     if question.category is QuestionCategory.SELF_INTRO:
         return False
     if assessment is not None:
-        # Sprint 8.3 Step 1: 有校准分 (真 LLM 路径) 时在概率空间判 stop,
-        # 默认阈值精确等效 raw 0.6 (换单位不换行为, 见 FollowUpPolicy 注)。
-        # 启发式/复制粘贴路径 calibrated 恒 None -> 走下面 raw 分支, 行为不变。
         if assessment.calibrated_sufficiency is not None:
             if (
                 assessment.calibrated_sufficiency >= policy.min_calibrated_to_stop
                 and assessment.confidence >= policy.min_confidence_to_stop
             ):
+                return False
+            # Sprint 8.3 Step 2: 分数不达标 ≠ 一定追问 —— 先过预算与信念门
+            if total_followups >= policy.total_followup_budget:
+                return False
+            if (
+                belief is not None
+                and belief.variance < policy.min_variance_to_probe
+            ):
+                # 该维度证据已足 (方差低), 追问价值 ≈ 方差削减 ≈ 0
                 return False
             return True
         if (
@@ -245,6 +259,18 @@ def next_turn(
         }
         remaining_q = len(question_ids) - len(asked_ids)
         budget_left = completion.max_total_questions - total_questions_asked(session)
+        # Sprint 8.3 Step 2: 全局追问预算 + 该题 competency 的信念
+        # (两者只在校准路径起作用, 见 _decide_followup)
+        total_followups = sum(
+            1 for t in session.history
+            if t.role == TurnRole.INTERVIEWER
+            and t.ref_id is not None
+            and t.ref_id not in question_ids
+        )
+        belief = (
+            session.beliefs.get(current_q.competency_id)
+            if current_q.competency_id else None
+        )
         # Sprint 8.2: 拆出布尔量以便录依据; 语义与原短路表达式完全一致
         budget_ok = budget_left > remaining_q
         wants_followup = (
@@ -252,6 +278,7 @@ def next_turn(
             and latest is not None
             and _decide_followup(
                 current_q, latest, assessment, policy, followups_since,
+                belief=belief, total_followups=total_followups,
             )
         )
         trace.record_decision(
@@ -271,6 +298,12 @@ def next_turn(
             min_sufficiency_to_stop=policy.min_sufficiency_to_stop,
             min_confidence_to_stop=policy.min_confidence_to_stop,
             min_calibrated_to_stop=policy.min_calibrated_to_stop,
+            total_followups=total_followups,
+            total_followup_budget=policy.total_followup_budget,
+            belief_mean=belief.mean if belief else None,
+            belief_variance=belief.variance if belief else None,
+            belief_n=belief.n_observations if belief else None,
+            min_variance_to_probe=policy.min_variance_to_probe,
             via="assessment" if assessment is not None else "heuristic",
         )
         if wants_followup:
@@ -307,12 +340,27 @@ def next_turn(
     #    min_assessed_per_mandatory 道不同题被评估过才许提前结束, 防单发
     #    幸运高分让对抗型候选人逃过追问 (对抗批次坐实的泄漏)。
     coverage = compute_coverage(session, plan)
+    coverage_mode = "max_sufficiency"
+    if completion.use_belief_lcb and session.beliefs:
+        # Sprint 8.3 (灰度开关, 默认关): 置信下界替代裸 max —— 单发幸运分
+        # 拉不高下界。beliefs 只在校准路径产生, stub 环境本分支永不触发。
+        coverage = {
+            c.competency_id: (
+                beliefs_mod.lcb(
+                    session.beliefs[c.competency_id], completion.belief_lcb_k,
+                )
+                if c.competency_id in session.beliefs else 0.0
+            )
+            for c in plan.competencies
+        }
+        coverage_mode = "belief_lcb"
     counts = assessed_counts(session, plan)
     if mandatory_coverage_met(coverage, completion, plan, counts=counts):
         trace.record_decision(
             "completion_check", reason="mandatory_coverage_met",
             coverage=coverage, assessed_counts=counts,
             min_competency_coverage=completion.min_competency_coverage,
+            coverage_mode=coverage_mode,
         )
         return None
 

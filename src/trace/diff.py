@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from src.schemas import DecisionSpan, DecisionTrace
 
-_DROP_ATTRS = {"plan_id"}
+_DROP_ATTRS = {"plan_id", "competency_id"}
 _ID_KEYED_DICT_ATTRS = {"coverage", "assessed_counts"}
 
 

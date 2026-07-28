@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 
+from src import beliefs as beliefs_mod
 from src import cache, db, media_store, trace, tts
 from src.llm import sanitize
 
@@ -61,6 +62,36 @@ def _assessment_anomaly(a: AnswerAssessment) -> bool:
         a.sufficiency >= _ANOMALY_SUFFICIENCY
         and not a.missing_signals
         and not a.concerns
+    )
+
+
+def _update_belief_for(
+    session: InterviewSession,
+    question: Question,
+    assessment: AnswerAssessment,
+) -> None:
+    """Sprint 8.3: 校准路径的 assessment 落地 -> 更新该题 competency 信念。
+
+    只吃 calibrated_sufficiency (真 LLM 路径); 启发式/复制粘贴 assessment
+    恒 None -> 不更新 (stub 环境 beliefs 恒空, golden 不受扰)。
+    orchestrator 独家写 (blackboard); 纯数值, 不加 LLM 调用。
+    """
+    cal = assessment.calibrated_sufficiency
+    if cal is None or not question.competency_id:
+        return
+    updated = beliefs_mod.update_belief(
+        session.beliefs.get(question.competency_id),
+        question.competency_id,
+        cal,
+    )
+    session.beliefs[question.competency_id] = updated
+    trace.record_decision(
+        "belief_update", question_id=question.question_id,
+        competency_id=question.competency_id,
+        observation=cal,
+        mean=updated.mean,
+        variance=updated.variance,
+        n_observations=updated.n_observations,
     )
 
 
@@ -283,6 +314,7 @@ def _submit_answer_inner(session_id: str, answer_text: str) -> TurnResult:
                 via=assessment.via,
                 anomaly=_assessment_anomaly(assessment),
             )
+            _update_belief_for(session, answered_q, assessment)  # Sprint 8.3
             # Sprint 8.1 task 3: 输出侧异常模式 —— 满分且零缺失/零担忧是注入
             # 拉分的典型形状 (真实好回答极少三者同时)。只记 flag 供人工复核,
             # 不改追问/终止决策。

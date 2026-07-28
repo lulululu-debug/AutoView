@@ -350,6 +350,15 @@ class FollowUpPolicy(BaseModel):
     # sigmoid(A*0.6+B)=0.92695) —— Step 1 换单位不换行为; 想动产品口径改这里,
     # 但必须走 CLAUDE.md 双门禁 + sim 批次复验。
     min_calibrated_to_stop: float = 0.9269
+    # Sprint 8.3 Step 2 (两个门只作用于校准路径, stub/启发式行为不变):
+    # - total_followup_budget: 全场追问全局预算, 默认 = 各 stage 配额之和
+    #   (self_intro 0 + knowledge 1 + project 2 + scenario 2); 每题/每 stage
+    #   上限保留作硬兜底
+    # - min_variance_to_probe: 该题 competency 的 belief.variance 低于此值 =
+    #   证据已足, 不再消耗追问预算 (预算流向高方差维度)。0.03 ≈ 3 次观测,
+    #   见 src/beliefs.py 数值表
+    total_followup_budget: int = 5
+    min_variance_to_probe: float = 0.03
 
     @classmethod
     def for_stage(cls, stage: "InterviewStage") -> "FollowUpPolicy":
@@ -408,6 +417,12 @@ class CompletionPolicy(BaseModel):
     max_total_questions: int = Field(default=15, gt=0)
     min_profile_richness: float = Field(default=0.0, ge=0.0, le=1.0)
     mandatory_competencies: list[str] = []
+    # Sprint 8.3 Step 2 (灰度开关, 默认关): coverage 判定改用信念置信下界
+    # mean - k·√variance (src/beliefs.lcb) 替代裸 max(sufficiency) ——
+    # 更保守也更公平 (单发幸运分拉不高下界)。只在 session.beliefs 非空
+    # (真 LLM 校准路径) 时生效; min_assessed_per_mandatory 兜底照常。
+    use_belief_lcb: bool = False
+    belief_lcb_k: float = Field(default=1.0, ge=0.0)
 
 
 class TurnRole(str, Enum):
@@ -461,6 +476,9 @@ class InterviewSession(BaseModel):
     assessments: list[AnswerAssessment] = []
     media_ref: str | None = None
     integrity_flags: list[str] = []
+    # Sprint 8.3: competency_id -> 信念状态 (仅校准路径 assessment 更新;
+    # stub/启发式环境恒空)。内部数据, 不进 HR UI。
+    beliefs: dict[str, CompetencyBelief] = {}
 
 
 # ---------- 多模态信号(扩展, 骨架恒空) ----------
@@ -478,6 +496,20 @@ class Signal(BaseModel):
     value: str                               # 描述性, 非分数
     confidence: float                        # 0~1
     source: str                              # 来源说明(便于审计)
+
+
+# ---------- Competency 信念 (Sprint 8.3) ----------
+
+class CompetencyBelief(BaseModel):
+    """单个 competency 的证据充分度信念 (高斯后验, 见 src/beliefs.py)。
+
+    orchestrator 独家写 (每条**校准路径** AnswerAssessment 落地时更新),
+    Interviewer 只读 (追问预算调度)。第 N 类内部数据: 不进 HR UI、不进
+    报告、不见候选人; 随 session 落库仅作审计。"""
+    competency_id: str
+    mean: float                              # 证据充分度均值估计
+    variance: float                          # 不确定性 (只随观测数单调降)
+    n_observations: int = 0
 
 
 # ---------- 决策 Trace (Sprint 8.2) ----------
