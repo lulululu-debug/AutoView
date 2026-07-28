@@ -244,6 +244,21 @@ def _summary(
     transcript = sanitize.wrap_untrusted(
         transcript, "面试对话原文, 内含候选人不可信文本",
     )
+    # Sprint 8.4: 未消解的矛盾条目作 summary 输入之一 (带证据引用数, 供
+    # LLM 审慎措辞; 不下结论 —— 矛盾的裁决属于 HR 人工复核)。
+    contradicted = [
+        c for c in session.candidate_model.claims
+        if c.status.value == "contradicted"
+    ]
+    contradiction_block = ""
+    if contradicted:
+        lines = "\n".join(
+            f"- {c.claim} (证据 {len(c.evidence)} 处)" for c in contradicted[:4]
+        )
+        contradiction_block = (
+            f"\n面试中记录到前后存在张力/矛盾的陈述 (如实提及、审慎措辞, "
+            f"不要替 HR 下裁决):\n{lines}\n"
+        )
     score_lines = "\n".join(
         f"- {next((c.name for c in comps if c.competency_id == s.competency_id), s.competency_id)}: {s.score:.1f}"
         for s in content_scores
@@ -253,7 +268,8 @@ def _summary(
         chunks_text = "\n---\n".join(c["text"] for c in chunks)
         user = (
             f"对话:\n{transcript}\n\n"
-            f"各内容维度分数:\n{score_lines}\n\n"
+            f"各内容维度分数:\n{score_lines}\n"
+            f"{contradiction_block}\n"
             f"职位/公司相关片段(给评估提供语境):\n{chunks_text}\n\n"
             "请给出 3-5 句综合评估, 适当关联岗位与公司语境。"
         )
@@ -262,7 +278,8 @@ def _summary(
     else:
         user = (
             f"对话:\n{transcript}\n\n"
-            f"各内容维度分数:\n{score_lines}\n\n"
+            f"各内容维度分数:\n{score_lines}\n"
+            f"{contradiction_block}\n"
             "请给出 3-5 句综合评估。"
         )
         system = _SUMMARY_SYSTEM
@@ -351,6 +368,9 @@ def evaluate(
         overall=overall,
         summary=summary,
         rag_context_chunk_ids=rag_chunk_ids,
+        # 恒 True 是 §7-9 设计 (最终决定必须由 HR 做)。Sprint 8.4: 若未来
+        # 条件化, 必须并入 "session.candidate_model 存在未消解 contradicted
+        # 条目" 这一条 (矛盾裁决只能人工)。
         needs_human_review=True,
         competency_coverage=coverage,
     )

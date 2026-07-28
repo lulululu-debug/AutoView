@@ -515,6 +515,17 @@ def _retrieve_seed_question(
     return None
 
 
+def _format_doubt_block(doubted_claims: list[str] | None) -> str:
+    """Sprint 8.4: CandidateModel 存疑条目 -> lazy 出题 prompt 块。
+    项目深挖题优先围绕存疑点出 —— 面试是澄清疑点最好的机会。最多 3 条控 token。"""
+    if not doubted_claims:
+        return ""
+    lines = "\n".join(f"- {d}" for d in doubted_claims[:3])
+    return (
+        f"此前面试阶段记录的存疑点 (可优先围绕它们深挖):\n{lines}\n"
+    )
+
+
 def _format_prior_block(prior_texts: list[str] | None) -> str:
     """把已生成题文本拼成 prompt 块, 让 LLM 知道"别再出这些"。
     返回空串当没有 prior. 截顶 120 字防 prompt 爆 + 只拿非空。"""
@@ -754,6 +765,7 @@ def _project_question(
     *,
     intro_text: str = "",
     prior_texts: list[str] | None = None,
+    doubted_claims: list[str] | None = None,
 ) -> tuple[str, list[str], str]:
     """生成一道项目深挖题。返回 (文本, chunk_ids, path)。
     path ∈ resume_rag / resume_llm / fallback_template (Sprint E trace 用)。
@@ -770,6 +782,7 @@ def _project_question(
         else ""
     )
     prior_block = _format_prior_block(prior_texts)
+    doubt_block = _format_doubt_block(doubted_claims)  # Sprint 8.4
 
     if chunks:
         chunk_ids = [c["document_id"] for c in chunks]
@@ -780,7 +793,7 @@ def _project_question(
             f"考察维度: {comp.name} - {comp.description}\n"
             f"{intro_block}"
             f"候选人 Resume 相关片段:\n{sanitize.wrap_untrusted(chunks_text, '简历片段')}\n"
-            f"{prior_block}"
+            f"{prior_block}{doubt_block}"
             "请围绕这些具体内容生成一道项目深挖题。"
         )
         text = llm.complete(_PROJECT_RAG_SYSTEM, prompt, max_tokens=260)
@@ -799,7 +812,7 @@ def _project_question(
         f"{intro_block}"
         f"候选人简历摘要:\n{sanitize.wrap_untrusted(candidate.resume[:800], '简历摘要')}\n"
         f"候选人已识别项目要点:\n{projects_hint}\n"
-        f"{prior_block}"
+        f"{prior_block}{doubt_block}"
         "请围绕该考察维度, 生成一道针对其具体项目/实习经历的深挖题。"
     )
     text = llm.complete(_PROJECT_SYSTEM, prompt, max_tokens=220)
@@ -848,6 +861,7 @@ def _project_question_for_section(
     *,
     intro_text: str = "",
     prior_texts: list[str] | None = None,
+    doubted_claims: list[str] | None = None,
 ) -> tuple[str, str]:
     """针对单个简历段定向生成一道深挖题。返回 (文本, path)。
     path ∈ resume_section / fallback_template。
@@ -859,6 +873,7 @@ def _project_question_for_section(
         if intro_text.strip() else ""
     )
     prior_block = _format_prior_block(prior_texts)
+    doubt_block = _format_doubt_block(doubted_claims)  # Sprint 8.4
     label = {"project": "项目", "internship": "实习", "work": "工作"}.get(
         section.type, "经历",
     )
@@ -869,7 +884,7 @@ def _project_question_for_section(
         f"{intro_block}"
         f"该段{label}经历 ({section.title}):\n"
         f"{sanitize.wrap_untrusted(section.text[:1500], '简历经历段')}\n"
-        f"{prior_block}"
+        f"{prior_block}{doubt_block}"
         "请只针对这段经历生成一道项目深挖题。"
     )
     text = llm.complete(_PROJECT_SECTION_SYSTEM, prompt, max_tokens=260)
@@ -1305,6 +1320,7 @@ def resolve_lazy_questions(
     candidate: CandidateProfile,
     *,
     intro_text: str = "",
+    doubted_claims: list[str] | None = None,
 ) -> InterviewPlan:
     """回灌 plan 里所有 lazy 且未生成 (text=="") 的 project 题。
     Sprint 5.5 task 3: 简单沿用 _project_question 现有 RAG 路径;
@@ -1369,6 +1385,7 @@ def resolve_lazy_questions(
                     fallback=_project_fallback(comp, used=len(priors)),
                     intro_text=intro_text,
                     prior_texts=list(priors),
+                    doubted_claims=doubted_claims,
                 )
                 chunk_ids = []
                 if path == "resume_section":
@@ -1379,6 +1396,7 @@ def resolve_lazy_questions(
                     fallback=_project_fallback(comp, used=len(priors)),
                     intro_text=intro_text,
                     prior_texts=list(priors),
+                    doubted_claims=doubted_claims,
                 )
             if text:
                 priors.append(text)

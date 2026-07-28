@@ -249,6 +249,92 @@ class ClarificationTests(unittest.TestCase):
         self.assertIn("项目角色存疑", out)
 
 
+class ConsumptionTests(unittest.TestCase):
+    """task 3: doubted -> lazy 出题 prompt; contradicted -> summary 输入。"""
+
+    def setUp(self) -> None:
+        os.environ.pop("OPENAI_API_KEY", None)
+
+    def test_doubt_block_format(self) -> None:
+        from src.agents.planner import _format_doubt_block
+        self.assertEqual(_format_doubt_block(None), "")
+        self.assertEqual(_format_doubt_block([]), "")
+        block = _format_doubt_block(["a", "b", "c", "d"])
+        self.assertIn("存疑点", block)
+        self.assertIn("- c", block)
+        self.assertNotIn("- d", block)  # 最多 3 条
+
+    def test_lazy_gen_prompt_injects_doubts(self) -> None:
+        from src import llm
+        from src.agents import planner
+        from src.schemas import (
+            CandidateProfile, Competency, InterviewPlan, InterviewRound,
+            JobContext, Question,
+        )
+        captured = {}
+
+        def spy(system, user, **kw):
+            captured.setdefault("users", []).append(user)
+            return "针对该存疑点: 你在项目中的具体角色是什么?"
+
+        comp = Competency(competency_id="c1", name="技术深度", description="x")
+        lazy_q = Question(
+            competency_id="c1", text="", lazy=True,
+            category=QuestionCategory.PROJECT_EXPERIENCE,
+        )
+        plan = InterviewPlan(
+            job_id="j",
+            rounds=[InterviewRound(
+                index=0, title="t", competencies=[comp], questions=[lazy_q],
+            )],
+            competencies=[comp],
+        )
+        job = JobContext(title="后端", jd="x")
+        cand = CandidateProfile(resume="李强, 4 年后端, CRM 系统开发。")
+        orig = llm.complete
+        llm.complete = spy
+        try:
+            planner.resolve_lazy_questions(
+                plan, job, cand, intro_text="",
+                doubted_claims=["项目参与深度存疑"],
+            )
+        finally:
+            llm.complete = orig
+        self.assertTrue(
+            any("项目参与深度存疑" in u for u in captured.get("users", [])),
+            "lazy 出题 prompt 应包含存疑点",
+        )
+
+    def test_summary_input_includes_contradictions(self) -> None:
+        from src import llm
+        from src.agents import evaluator
+        from src.schemas import SkillClaim
+        q = _q()
+        session = InterviewSession(plan_id="p", job_id="j")
+        session.candidate_model = CandidateModel(claims=[
+            SkillClaim(
+                competency_id="c1", claim="主导过分库分表",
+                status=ClaimStatus.CONTRADICTED, evidence=["a1", "a2"],
+            ),
+        ])
+        captured = {}
+
+        def spy(system, user, **kw):
+            captured["user"] = user
+            return "综合评估: 候选人陈述存在需澄清之处。"
+
+        orig = llm.complete
+        llm.complete = spy
+        try:
+            out = evaluator._summary(session, [], [])
+        finally:
+            llm.complete = orig
+        self.assertIn("矛盾", captured["user"])
+        self.assertIn("主导过分库分表", captured["user"])
+        self.assertIn("证据 2 处", captured["user"])
+        self.assertTrue(out)
+
+
 class OrchestratorWiringTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ.pop("OPENAI_API_KEY", None)  # pymilvus 回填 (F9)

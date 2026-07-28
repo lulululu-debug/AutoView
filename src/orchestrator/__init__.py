@@ -423,6 +423,10 @@ def _resolve_lazy_now(plan: InterviewPlan, session: InterviewSession) -> Intervi
         )
     return planner.resolve_lazy_questions(
         plan, job, candidate, intro_text=session.intro_text,
+        # Sprint 8.4: 项目题优先深挖存疑点 (第四类数据只进 prompt, 不进展示)
+        doubted_claims=[
+            c.claim for c in cm_mod.doubted_claims(session.candidate_model)
+        ],
     )
 
 
