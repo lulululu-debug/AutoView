@@ -19,7 +19,7 @@ Orchestrator 负责将返回值写入 session.history, 并补上候选人答复�
 """
 from __future__ import annotations
 
-from src import llm
+from src import llm, trace
 from src.llm import sanitize
 from src.coverage import (
     compute_coverage,
@@ -199,6 +199,12 @@ def next_turn(
     # 追问 → 返 FollowUp → 候选人答完 11 turn 才停, 比 cap 多 1。
     completion = _completion_policy(job)
     if total_questions_asked(session) >= completion.max_total_questions:
+        # Sprint 8.2: 决策 span 纯旁路, 不影响控制流
+        trace.record_decision(
+            "completion_check", reason="max_total_questions",
+            asked=total_questions_asked(session),
+            max_total_questions=completion.max_total_questions,
+        )
         return None
 
     # 找到"当前问题"以及其后已经发过的追问数
@@ -229,16 +235,36 @@ def next_turn(
         }
         remaining_q = len(question_ids) - len(asked_ids)
         budget_left = completion.max_total_questions - total_questions_asked(session)
-        if (
-            budget_left > remaining_q
+        # Sprint 8.2: 拆出布尔量以便录依据; 语义与原短路表达式完全一致
+        budget_ok = budget_left > remaining_q
+        wants_followup = (
+            budget_ok
             and latest is not None
             and _decide_followup(
                 current_q, latest, assessment, policy, followups_since,
             )
-        ):
+        )
+        trace.record_decision(
+            "followup_decision",
+            question_id=current_q.question_id,
+            decided=wants_followup,
+            budget_ok=budget_ok,
+            budget_left=budget_left,
+            remaining_questions=remaining_q,
+            followups_since=followups_since,
+            max_followups_per_question=policy.max_followups_per_question,
+            sufficiency=assessment.sufficiency if assessment else None,
+            confidence=assessment.confidence if assessment else None,
+            min_sufficiency_to_stop=policy.min_sufficiency_to_stop,
+            min_confidence_to_stop=policy.min_confidence_to_stop,
+            via="assessment" if assessment is not None else "heuristic",
+        )
+        if wants_followup:
+            with trace.span_label("followup_text"):
+                text = _followup_text(current_q, latest, assessment)
             return FollowUp(
                 parent_question_id=current_q.question_id,
-                text=_followup_text(current_q, latest, assessment),
+                text=text,
                 reason=_followup_reason(assessment),
             )
 
@@ -252,6 +278,13 @@ def next_turn(
     if asked_count >= completion.min_total_questions:
         richness = compute_richness(session, job)
         if richness >= completion.min_profile_richness > 0.0:
+            trace.record_decision(
+                "completion_check", reason="richness_early_stop",
+                asked=asked_count,
+                min_total_questions=completion.min_total_questions,
+                richness=richness,
+                min_profile_richness=completion.min_profile_richness,
+            )
             return None
 
     # 3) mandatory coverage 达标 -> 提前 done
@@ -262,6 +295,11 @@ def next_turn(
     coverage = compute_coverage(session, plan)
     counts = assessed_counts(session, plan)
     if mandatory_coverage_met(coverage, completion, plan, counts=counts):
+        trace.record_decision(
+            "completion_check", reason="mandatory_coverage_met",
+            coverage=coverage, assessed_counts=counts,
+            min_competency_coverage=completion.min_competency_coverage,
+        )
         return None
 
     # 3) 还有未答的 plan 题 -> 继续
@@ -271,9 +309,19 @@ def next_turn(
     ]
     next_idx = len(asked)
     if next_idx < len(questions):
+        trace.record_decision(
+            "completion_check", reason="continue",
+            question_id=questions[next_idx].question_id,
+            next_index=next_idx, total_questions=len(questions),
+        )
         return questions[next_idx]
 
     # 4) 题答完了 + coverage 不达标 -> done, Evaluator 标 evidence_insufficient
+    trace.record_decision(
+        "completion_check", reason="questions_exhausted_coverage_insufficient",
+        coverage=coverage,
+        min_competency_coverage=completion.min_competency_coverage,
+    )
     return None
 
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 
-from src import cache, db, media_store, tts
+from src import cache, db, media_store, trace, tts
 from src.llm import sanitize
 
 log = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ from src.schemas import (
     AnswerAssessment,
     CandidateAnswer,
     CandidateProfile,
+    DecisionTrace,
     EvaluationReport,
     FollowUp,
     InterviewPlan,
@@ -61,6 +62,26 @@ def _assessment_anomaly(a: AnswerAssessment) -> bool:
         and not a.missing_signals
         and not a.concerns
     )
+
+
+# ---------- Sprint 8.2: 决策 trace 存取 (旁路观测, 任何失败不阻塞面试) ----------
+
+def _load_trace_or_new(session_id: str) -> DecisionTrace:
+    """Redis 缺失/异常时退内存新 trace —— trace 丢了 ≠ 面试失败。"""
+    try:
+        loaded = cache.load_trace(session_id)
+        if loaded is not None:
+            return loaded
+    except Exception:
+        pass
+    return DecisionTrace(session_id=session_id)
+
+
+def _save_trace_safe(trace_obj: DecisionTrace) -> None:
+    try:
+        cache.save_trace(trace_obj)
+    except Exception:
+        log.debug("trace 保存失败 (旁路观测, 忽略)", exc_info=True)
 
 
 class SessionNotFound(LookupError):
@@ -134,20 +155,35 @@ def start_session(
     if candidate.injection_suspected:
         session.integrity_flags.append("resume_invisible_chars")
 
-    first = interviewer.next_turn(session, plan, job=job)
-    if first is None:
-        # 退化情况: 计划没有任何题目, 直接完结
-        session.status = SessionStatus.COMPLETED
+    # Sprint 8.2: 从 session 诞生起挂 trace (plan 生成在 session 之前, 不在
+    # trace 范围 —— trace 的对象是"这场面试的决策", plan 可复现性由 planner
+    # eval 体系守)
+    trace_obj = DecisionTrace(session_id=session.session_id)
+    token = trace.activate(trace_obj)
+    try:
+        trace.record_decision(
+            "session_start", plan_id=plan.plan_id,
+            question_count=sum(len(r.questions) for r in plan.rounds),
+            assessor_enabled=_assessor_enabled(),
+        )
+        first = interviewer.next_turn(session, plan, job=job)
+        if first is None:
+            # 退化情况: 计划没有任何题目, 直接完结
+            session.status = SessionStatus.COMPLETED
+            cache.save_plan(plan)
+            cache.save_session(session)
+            return TurnResult(session_id=session.session_id, done=True)
+
+        ref_id = _append_interviewer_turn(session, first)
         cache.save_plan(plan)
         cache.save_session(session)
-        return TurnResult(session_id=session.session_id, done=True)
-
-    ref_id = _append_interviewer_turn(session, first)
-    cache.save_plan(plan)
-    cache.save_session(session)
-    return TurnResult(
-        session_id=session.session_id, done=False, prompt=first.text, ref_id=ref_id,
-    )
+        return TurnResult(
+            session_id=session.session_id, done=False,
+            prompt=first.text, ref_id=ref_id,
+        )
+    finally:
+        trace.deactivate(token)
+        _save_trace_safe(trace_obj)
 
 
 def submit_answer(session_id: str, answer_text: str) -> TurnResult:
@@ -161,7 +197,21 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
       再用 question_id 找到回灌后的题给出 prompt。
       一次性回灌整 plan 比"逐题回灌"省 LLM round; project stage 多道题用同一份
       intro_text + 同一次 Resume RAG 调用, 也保证主题一致性。
+
+    Sprint 8.2: 全程挂决策 trace (Redis 与 session 同 TTL); 链路异常时
+    trace 不落盘 —— 面试失败优先, trace 是旁路。
     """
+    trace_obj = _load_trace_or_new(session_id)
+    token = trace.activate(trace_obj)
+    try:
+        result = _submit_answer_inner(session_id, answer_text)
+    finally:
+        trace.deactivate(token)
+    _save_trace_safe(trace_obj)
+    return result
+
+
+def _submit_answer_inner(session_id: str, answer_text: str) -> TurnResult:
     session = cache.load_session(session_id)
     if session is None:
         raise SessionNotFound(
@@ -213,10 +263,18 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
     # 用 followup_goal 拼追问 prompt. ASSESSOR_ENABLED=false 时跳过, 走原启发式。
     if _assessor_enabled() and answered_q is not None:
         try:
-            assessment = assessor.assess(
-                answered_q, answer, session, plan, job=job_for_decision,
-            )
+            with trace.span_label("assess"):
+                assessment = assessor.assess(
+                    answered_q, answer, session, plan, job=job_for_decision,
+                )
             session.assessments.append(assessment)
+            trace.record_decision(
+                "assess", question_id=answered_q.question_id,
+                sufficiency=assessment.sufficiency,
+                confidence=assessment.confidence,
+                via=assessment.via,
+                anomaly=_assessment_anomaly(assessment),
+            )
             # Sprint 8.1 task 3: 输出侧异常模式 —— 满分且零缺失/零担忧是注入
             # 拉分的典型形状 (真实好回答极少三者同时)。只记 flag 供人工复核,
             # 不改追问/终止决策。
@@ -240,7 +298,14 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
 
     # 若下一题是 lazy 占位, 现场 resolve 整 plan, 写回 cache + PG, 找到回灌后的题。
     if isinstance(nxt, Question) and nxt.lazy and not nxt.text:
-        plan = _resolve_lazy_now(plan, session)
+        with trace.span_label("lazy_gen"):
+            plan = _resolve_lazy_now(plan, session)
+        trace.record_decision(
+            "lazy_gen", question_id=nxt.question_id,
+            resolved_count=sum(
+                1 for r in plan.rounds for q in r.questions if q.lazy and q.text
+            ),
+        )
         cache.save_plan(plan)
         # Sprint 5.8 patch: 同步把 resolve 后的 plan 写回 PG, 让 HR 端 StageView
         # (走 GET /jobs/{j}/candidates/{c}/plan 拉 PG) 显示已生成的项目题 text;
@@ -424,11 +489,24 @@ def finalize(session_id: str) -> EvaluationReport:
     if ref:
         session.media_ref = ref
 
-    signals = analyzer.analyze(session)
-    # Sprint 5.7: 让 Evaluator 看到 job.completion_policy 决定 evidence_insufficient
-    # 阈值; PG 缺 job (内存路径) 时 None -> 用 schema 默认。
-    job_for_eval = db.load_job(session.job_id)
-    report = evaluator.evaluate(session, plan, signals, job=job_for_eval)
+    # Sprint 8.2: finalize 阶段的 evaluate LLM 调用也进 trace
+    trace_obj = _load_trace_or_new(session_id)
+    token = trace.activate(trace_obj)
+    try:
+        signals = analyzer.analyze(session)
+        # Sprint 5.7: 让 Evaluator 看到 job.completion_policy 决定
+        # evidence_insufficient 阈值; PG 缺 job (内存路径) 时 None -> schema 默认。
+        job_for_eval = db.load_job(session.job_id)
+        with trace.span_label("evaluate"):
+            report = evaluator.evaluate(session, plan, signals, job=job_for_eval)
+        trace.record_decision(
+            "finalize",
+            needs_human_review=report.needs_human_review,
+            integrity_flags=list(session.integrity_flags),
+        )
+    finally:
+        trace.deactivate(token)
+    _save_trace_safe(trace_obj)
 
     db.save_session(session)
     db.save_report(report)
