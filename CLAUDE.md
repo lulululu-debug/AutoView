@@ -32,7 +32,7 @@ AGENT_UPGRADES.md）；Sprint 7(多模态分析) 未开。详见 sprint.md。
 - **openai**（LLM chat + embedding，单一 provider；Sprint 3 起从 anthropic 切过来 consolidate key/计费）
 - SQLAlchemy 2.0 + psycopg3（Postgres，Sprint 1）
 - redis-py（Redis 热存储，Sprint 1）
-- pymilvus + milvus-lite（向量存储，Sprint 3）
+- pymilvus + milvus-lite（向量存储，Sprint 3;dev/eval 单进程）;Sprint 9 起部署态用 Milvus standalone（docker,MILVUS_SERVER_URI,多进程安全）
 - FastAPI（HTTP API，Sprint 2）
 - Next.js 16 + React 19 + Tailwind 4（`web/` 候选人端 + HR 端，Sprint 4/5）
 - websockets（Sprint 6：火山流式 ASR 的 WS 客户端）；TTS/STT 走 HTTP/WS 自研调用点，
@@ -50,6 +50,8 @@ uvicorn api.main:app --reload    # Sprint 2 起：HTTP API，热重载；/docs �
 
 brew services start postgresql   # 本机外部服务（macOS）
 brew services start redis
+docker compose up -d milvus   # Sprint 9: 独立 Milvus (多进程/高并发); 不起则用 milvus-lite
+python -m src.jobs.worker     # Sprint 9: RQ worker (JOBS_QUEUE_ENABLED=1 时需要)
 brew services stop redis         # 停 Redis
 ```
 环境变量见 `.env.example`：`OPENAI_API_KEY` / `OPENAI_CHAT_MODEL` /

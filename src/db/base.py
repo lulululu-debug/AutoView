@@ -35,8 +35,16 @@ def _build_engine() -> Engine:
             "POSTGRES_URL 未配置, 无法连接 Postgres。"
             "参考 .env.example 设置例如 postgresql+psycopg://user:pass@host:5432/db"
         )
-    # future=True 是 SA 2.0 默认行为, 显式写出便于阅读
-    return create_engine(url, future=True, pool_pre_ping=True)
+    # future=True 是 SA 2.0 默认行为, 显式写出便于阅读。
+    # Sprint 9: 连接池 env 化 —— 默认 pool_size 5 在高并发 threadpool 下
+    # 会排队等连接; 默认提到 20/30, 部署按 worker 数 × 并发调。
+    return create_engine(
+        url,
+        future=True,
+        pool_pre_ping=True,
+        pool_size=int(os.environ.get("POSTGRES_POOL_SIZE", "20")),
+        max_overflow=int(os.environ.get("POSTGRES_MAX_OVERFLOW", "30")),
+    )
 
 
 def get_engine() -> Engine:

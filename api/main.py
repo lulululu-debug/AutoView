@@ -60,6 +60,17 @@ def _cors_origins() -> list[str]:
 def create_app() -> FastAPI:
     app = FastAPI(title=API_TITLE, version=API_VERSION)
 
+    # Sprint 9: 同步端点全部跑在 anyio threadpool 里, 默认 40 tokens 是
+    # 并发天花板 (一场面试 turn 占一个线程数秒)。提到 THREADPOOL_TOKENS
+    # (默认 100), 总并发容量 = uvicorn worker 进程数 × tokens。
+    @app.on_event("startup")
+    async def _boost_threadpool() -> None:
+        from anyio import to_thread
+
+        to_thread.current_default_thread_limiter().total_tokens = int(
+            os.environ.get("THREADPOOL_TOKENS", "100"),
+        )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),

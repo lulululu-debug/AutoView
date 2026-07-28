@@ -30,6 +30,10 @@ from src.cache.session_store import (
     load_session,
     save_session,
 )
+from src.cache.locks import (
+    acquire_session_lock,
+    release_session_lock,
+)
 from src.cache.trace_store import (
     delete_trace,
     load_trace,
@@ -50,4 +54,6 @@ __all__ = [
     "delete_trace",
     "load_trace",
     "save_trace",
+    "acquire_session_lock",
+    "release_session_lock",
 ]

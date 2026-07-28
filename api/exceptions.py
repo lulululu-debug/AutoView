@@ -22,7 +22,12 @@ from src.connectors.feishu import (
     FeishuNotAuthorized,
     FeishuNotConfigured,
 )
-from src.orchestrator import SessionInvalidState, SessionNotFound, TurnNotFound
+from src.orchestrator import (
+    SessionBusy,
+    SessionInvalidState,
+    SessionNotFound,
+    TurnNotFound,
+)
 
 
 def register_handlers(app: FastAPI) -> None:
@@ -62,6 +67,16 @@ def register_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=409,
             content={"detail": "面试会话当前状态不允许此操作", "error": str(exc)},
+        )
+
+    @app.exception_handler(SessionBusy)
+    async def _session_busy(
+        _req: Request, exc: SessionBusy,
+    ) -> JSONResponse:
+        # Sprint 9: 并发同会话请求 (双击/重试) 被 per-session 锁拒; 409
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "上一条请求还在处理, 请稍候片刻重试", "error": str(exc)},
         )
 
     @app.exception_handler(TurnNotFound)
