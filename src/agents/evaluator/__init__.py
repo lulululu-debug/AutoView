@@ -65,6 +65,10 @@ _SUMMARY_RAG_SYSTEM = (
 
 _SPECIFICITY_KEYWORDS = ("例如", "比如", "当时", "结果", "我们", "用了", "选择", "%")
 
+# Sprint 8.5: rubric 命中率在题级质量里的权重 (sufficiency 占 1-w)。
+# 初始 0.3 偏保守; 调整 = 评估端变更, 必须 frozen 复验 + 区分度不塌。
+RUBRIC_WEIGHT = 0.3
+
 # 召回 JD + 公司资料的 top-K, 拼起来当 LLM 总结的上下文
 _RAG_TOP_K = 4
 
@@ -121,12 +125,21 @@ def _assessment_score(
     }
     if not comp_q_ids:
         return None
+    has_rubric = {
+        q.question_id for q in questions
+        if q.competency_id == comp.competency_id and q.rubric
+    }
 
-    best: dict[str, float] = {}  # 只收被问过的题
+    best: dict[str, float] = {}       # 只收被问过的题
+    best_hit: dict[str, float] = {}   # Sprint 8.5: 题级最佳 rubric 命中率
     for a in session.assessments:
         if a.question_id in comp_q_ids:
             if a.sufficiency > best.get(a.question_id, -1.0):
                 best[a.question_id] = a.sufficiency
+            if a.rubric_hits and a.question_id in has_rubric:
+                rate = sum(a.rubric_hits) / len(a.rubric_hits)
+                if rate > best_hit.get(a.question_id, -1.0):
+                    best_hit[a.question_id] = rate
 
     if not best:
         return DimensionScore(
@@ -135,7 +148,18 @@ def _assessment_score(
             evidence=["未收集到该维度的有效回答"],
         )
 
-    score = round(100.0 * sum(best.values()) / len(best), 1)
+    # Sprint 8.5: 题级质量 = (1-w)×best_sufficiency + w×best_rubric命中率
+    # (CheckEval/TICK: 二元 checklist 抗趋中/分数膨胀)。该题无 rubric 或
+    # LLM 未返有效 hits (含启发式路径) -> 纯 sufficiency, 老 plan 兼容。
+    # 初始权重 0.3 偏保守, 调整须 frozen 复验 + 区分度门禁。
+    per_q = {
+        qid: (
+            (1.0 - RUBRIC_WEIGHT) * suf + RUBRIC_WEIGHT * best_hit[qid]
+            if qid in best_hit else suf
+        )
+        for qid, suf in best.items()
+    }
+    score = round(100.0 * sum(per_q.values()) / len(per_q), 1)
     answers = [a for a in session.answers if a.question_id in best]
     evidence = (
         _evidence(answers) if answers else ["未收集到该维度的有效回答"]

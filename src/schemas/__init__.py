@@ -188,6 +188,10 @@ class Question(BaseModel):
     # Sprint 3-6 溯源 (project 题): 从 Resume 切片召回时, 记录用到的 document_id 列表;
     # 空列表表示走的是 fallback / 现场生成路径, 没有 RAG 切片来源。
     source_chunk_ids: list[str] = []
+    # Sprint 8.5: 二元评审 checklist (3-6 条), plan 阶段生成一次随 plan 固定,
+    # 面试中绝不改 (改的是评分依据不是题, 不违反"不动态补题")。
+    # self_intro 恒空; 老 plan 缺省 [] -> 评分退回纯 sufficiency 路径。
+    rubric: list[str] = []
 
 
 class InterviewRound(BaseModel):
@@ -321,6 +325,9 @@ class AnswerAssessment(BaseModel):
     # **仅 LLM 路径填**; 启发式/复制粘贴恒 None -> 决策退回 raw 阈值。
     # 与 sufficiency/confidence 同待遇: 不进 HR UI, 不见候选人。
     calibrated_sufficiency: float | None = None
+    # Sprint 8.5: 与 Question.rubric 同序的逐项判定。仅 LLM 路径填;
+    # 长度与 rubric 不匹配时弃用 (存 [], 不猜)。启发式路径恒 []。
+    rubric_hits: list[bool] = []
 
 
 class FollowUpPolicy(BaseModel):
