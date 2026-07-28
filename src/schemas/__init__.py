@@ -317,6 +317,10 @@ class AnswerAssessment(BaseModel):
     # "rule_duplicate" (复制粘贴硬规则短路)。纯审计标注 (进 trace 的 assess
     # span), 不参与任何决策; 老数据缺省空串。
     via: str = ""
+    # Sprint 8.3: Platt 校准分 = P(信号充分), 见 assessor/calibration.py。
+    # **仅 LLM 路径填**; 启发式/复制粘贴恒 None -> 决策退回 raw 阈值。
+    # 与 sufficiency/confidence 同待遇: 不进 HR UI, 不见候选人。
+    calibrated_sufficiency: float | None = None
 
 
 class FollowUpPolicy(BaseModel):
@@ -341,6 +345,11 @@ class FollowUpPolicy(BaseModel):
     max_followups_per_question: int = 1
     min_sufficiency_to_stop: float = 0.6
     min_confidence_to_stop: float = 0.5
+    # Sprint 8.3 Step 1: 校准路径 (calibrated_sufficiency 非 None, 即真 LLM)
+    # 的 stop 阈值, 概率空间。默认 0.9269 = **精确等效 raw 0.6** (Platt 单调,
+    # sigmoid(A*0.6+B)=0.92695) —— Step 1 换单位不换行为; 想动产品口径改这里,
+    # 但必须走 CLAUDE.md 双门禁 + sim 批次复验。
+    min_calibrated_to_stop: float = 0.9269
 
     @classmethod
     def for_stage(cls, stage: "InterviewStage") -> "FollowUpPolicy":

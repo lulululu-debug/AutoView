@@ -279,6 +279,7 @@ def _submit_answer_inner(session_id: str, answer_text: str) -> TurnResult:
                 "assess", question_id=answered_q.question_id,
                 sufficiency=assessment.sufficiency,
                 confidence=assessment.confidence,
+                calibrated_sufficiency=assessment.calibrated_sufficiency,
                 via=assessment.via,
                 anomaly=_assessment_anomaly(assessment),
             )

@@ -95,6 +95,16 @@ def _decide_followup(
     if question.category is QuestionCategory.SELF_INTRO:
         return False
     if assessment is not None:
+        # Sprint 8.3 Step 1: 有校准分 (真 LLM 路径) 时在概率空间判 stop,
+        # 默认阈值精确等效 raw 0.6 (换单位不换行为, 见 FollowUpPolicy 注)。
+        # 启发式/复制粘贴路径 calibrated 恒 None -> 走下面 raw 分支, 行为不变。
+        if assessment.calibrated_sufficiency is not None:
+            if (
+                assessment.calibrated_sufficiency >= policy.min_calibrated_to_stop
+                and assessment.confidence >= policy.min_confidence_to_stop
+            ):
+                return False
+            return True
         if (
             assessment.sufficiency >= policy.min_sufficiency_to_stop
             and assessment.confidence >= policy.min_confidence_to_stop
@@ -255,8 +265,12 @@ def next_turn(
             max_followups_per_question=policy.max_followups_per_question,
             sufficiency=assessment.sufficiency if assessment else None,
             confidence=assessment.confidence if assessment else None,
+            calibrated_sufficiency=(
+                assessment.calibrated_sufficiency if assessment else None
+            ),
             min_sufficiency_to_stop=policy.min_sufficiency_to_stop,
             min_confidence_to_stop=policy.min_confidence_to_stop,
+            min_calibrated_to_stop=policy.min_calibrated_to_stop,
             via="assessment" if assessment is not None else "heuristic",
         )
         if wants_followup:
