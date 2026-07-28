@@ -106,6 +106,9 @@ class CandidateProfile(BaseModel):
     resume: str                              # Resume 原文(后期可结构化解析)
     projects: list[str] = []                 # 已识别的项目/实习要点(可由 resume 解析填充)
     sections: list[ResumeSection] = []       # Sprint F: 语义分段, ingest 后台回填
+    # Sprint 8.1: 简历净化时剥离的不可见字符超阈值 -> 疑似隐藏注入。
+    # 只标记不拦截 (over-defense 防线), 进 session.integrity_flags 审计。
+    injection_suspected: bool = False
 
 
 # ---------- 面试计划 ----------
@@ -427,7 +430,13 @@ class InterviewSession(BaseModel):
 
     Sprint 6-5 起加 media_ref: 面试录像归档引用 (本地路径 / 未来对象存储 URI)。
     finalize 时单点写入 (避免与 submit_answer 竞争 Redis 读改写), 仅作 HR
-    复核素材溯源 —— **绝不**被任何打分路径消费 (§7 只录不判)。"""
+    复核素材溯源 —— **绝不**被任何打分路径消费 (§7 只录不判)。
+
+    Sprint 8.1 起加 integrity_flags: 输入/输出异常标记 (如
+    "resume_invisible_chars" / "answer_invisible_chars:<qid>" /
+    "assessment_anomaly:<qid>")。内部审计数据: 不进 HR UI 明细、不进报告
+    展示、不参与任何打分与决策 —— 只随 session 落库, HR 侧的唯一体现是
+    needs_human_review (当前恒 True, 未来条件化时必须并入该条件)。"""
     session_id: str = Field(default_factory=_new_id)
     plan_id: str
     job_id: str
@@ -438,6 +447,7 @@ class InterviewSession(BaseModel):
     intro_text: str = ""
     assessments: list[AnswerAssessment] = []
     media_ref: str | None = None
+    integrity_flags: list[str] = []
 
 
 # ---------- 多模态信号(扩展, 骨架恒空) ----------
