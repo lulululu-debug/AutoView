@@ -1105,6 +1105,49 @@ belief/校准数字对 HR 与候选人不可见。
 
 ---
 
+## Sprint 8.4 — CandidateModel:跨 stage 结构化候选人记忆
+
+> 2026-07-28 立项。出处 AGENT_UPGRADES.md 8.4 + 评审修正 1(covered_aspects
+> 已被 coverage/richness 消费,真正闲置的是 strengths/concerns —— 本 sprint
+> 的原料就是它们)。定位:**第四类数据**(继 AnswerAssessment 之后)——
+> 不进总分、不见 HR UI 明细、不见候选人,仅内部决策 + 落库审计。
+> 结构化与原文双轨(Verbatim beats Extracted 教训):每条 claim 挂
+> evidence(answer_id 列表),结论可溯源到原文。
+> 矛盾消解**不让 LLM 仲裁**:确定性规则 = 同 competency 下 verified 与
+> doubted 条目文本相似度过阈 → 双方标 contradicted 留双方证据;
+> 澄清走既有追问配额(followup_goal 注入),追问后仍矛盾 → 人工兜底。
+> 与 CLAUDE.md 红线逐条对齐:不动态补题 / 启发式 fallback 不动 /
+> 新 LLM 调用仅 stage reflection 一处(timeout + 失败跳过)。
+
+- [ ] **task 1 schema + 题目级更新(纯规则,零新 LLM)**:
+      SkillClaim(status: claimed/verified/doubted/contradicted + evidence
+      原文双轨 + source_stage)+ CandidateModel(claims + contradictions
+      对,list[list[str]] 不用 tuple —— JSON round-trip);
+      InterviewSession.candidate_model(JSONB 落库,ALTER dev/test);
+      src/candidate_model.py 纯规则模块(coverage 同级):每份 assessment
+      落地时 strengths→verified/claimed(按分高低)、concerns→doubted,
+      Mem0 式 ADD/UPDATE/NOOP(同 competency + 字符 2-gram Jaccard 粗判;
+      任何异常退化为只追加 —— 降级铁律);矛盾确定性标记;
+      orchestrator 独家写 + trace span;eval:幂等/合并/矛盾确定性/退化
+- [ ] **task 2 stage reflection(唯一新 LLM 调用)+ 澄清接入**:
+      stage 切换时一次 reflection(10s timeout,失败跳过,prompt 进 eval
+      管辖):本 stage 条目蒸馏合并(改写 claim 文本、并 evidence,
+      不许发明记录外结论);追问 focus 与 8.3 打通:同等条件下该题
+      competency 有 doubted claim → followup_goal 前缀注入澄清目标
+      (走既有配额,不加问数);eval:reflection 失败退化 / 澄清注入结构
+- [ ] **task 3 消费点 + frozen 复验**:
+      lazy project 生成 prompt 注入 doubted/contradicted 条目(优先深挖
+      存疑点);Evaluator:未消解 contradicted → needs_human_review=True
+      (现恒 True,先接线)+ contradicted 条目(带 evidence)进 summary
+      输入;**frozen 批次复验**(8.3.1 首次实战):prompt 变更对分数的
+      影响在固定输入下测量;golden 重录(span 变);EVALUATION.md 记录
+
+**完成标准**:claims 全程可溯源(evidence→原文);矛盾标记确定性(同输入
+同输出);stub 环境 reflection 跳过、其余纯规则路径全绿;frozen 复验分差
+可解释;第四类数据红线(不进总分/不见 HR 明细/不见候选人)eval 钉死。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
