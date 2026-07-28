@@ -151,6 +151,104 @@ class IntegrateTests(unittest.TestCase):
         self.assertEqual(len(cm.doubted_claims(m, competency_id="c2")), 0)
 
 
+class ReflectionTests(unittest.TestCase):
+    """task 2: stage reflection —— LLM 只判分组, 合并动作确定性; 失败跳过。"""
+
+    def setUp(self) -> None:
+        os.environ.pop("OPENAI_API_KEY", None)
+        from src import llm
+        self.llm = llm
+
+    def _model_two_similar(self) -> CandidateModel:
+        q = _q()
+        m = cm.integrate_assessment(
+            CandidateModel(), q, _ans(q), _aa(q, 0.8, strengths=["掌握分库分表"]),
+        )
+        # 与首条相似度低于合并阈值 -> integrate 保持两条, 留给 reflection 分组
+        return cm.integrate_assessment(
+            m, q, _ans(q), _aa(q, 0.8, strengths=["对数据水平拆分有落地经验"]),
+        )
+
+    def _patch(self, response: str):
+        orig = self.llm.complete
+        self.llm.complete = lambda *a, **k: response
+        self.addCleanup(lambda: setattr(self.llm, "complete", orig))
+
+    def test_stub_skips(self) -> None:
+        m = self._model_two_similar()
+        out = cm.reflect_stage(m, "project_experience")
+        self.assertEqual(len(out.claims), len(m.claims))  # stub -> 原样
+
+    def test_valid_group_merges_deterministically(self) -> None:
+        m = self._model_two_similar()
+        ids = ["1", "2"]
+        self._patch(
+            '{"groups": [{"ids": ["%s", "%s"], "text": "掌握并落地过分库分表"}]}'
+            % (ids[0], ids[1]),
+        )
+        out = cm.reflect_stage(m, "project_experience")
+        self.assertEqual(len(out.claims), 1)
+        self.assertEqual(out.claims[0].claim, "掌握并落地过分库分表")
+        self.assertEqual(len(out.claims[0].evidence), 2)  # evidence 并集
+
+    def test_mixed_direction_group_rejected(self) -> None:
+        q = _q()
+        m = cm.integrate_assessment(
+            CandidateModel(), q, _ans(q), _aa(q, 0.8, strengths=["沟通清晰有条理"]),
+        )
+        m = cm.integrate_assessment(
+            m, q, _ans(q), _aa(q, 0.3, concerns=["项目参与度不高"]),
+        )
+        ids = ["1", "2"]
+        self._patch(
+            '{"groups": [{"ids": ["%s", "%s"], "text": "非法混合"}]}'
+            % (ids[0], ids[1]),
+        )
+        out = cm.reflect_stage(m, "project_experience")
+        self.assertEqual(len(out.claims), 2)  # 方向不同, 确定性守卫拒绝
+
+    def test_garbage_json_skips(self) -> None:
+        m = self._model_two_similar()
+        self._patch("这不是 JSON")
+        out = cm.reflect_stage(m, "project_experience")
+        self.assertEqual(len(out.claims), len(m.claims))
+
+
+class ClarificationTests(unittest.TestCase):
+    """task 2: doubted 条目 -> 追问澄清注入 (走既有配额, 不加问数)。"""
+
+    def setUp(self) -> None:
+        os.environ.pop("OPENAI_API_KEY", None)
+
+    def test_prompt_injection(self) -> None:
+        from src import llm
+        from src.agents.interviewer import _followup_text
+        captured = {}
+
+        def spy(system, user, **kw):
+            captured["user"] = user
+            return "那这段经历里你个人负责哪部分?"
+
+        orig = llm.complete
+        llm.complete = spy
+        try:
+            q = _q()
+            _followup_text(
+                q, _ans(q), None, doubted=["分库分表经验存疑"],
+            )
+        finally:
+            llm.complete = orig
+        self.assertIn("存疑点", captured["user"])
+        self.assertIn("分库分表经验存疑", captured["user"])
+
+    def test_fallback_uses_doubted(self) -> None:
+        from src.agents.interviewer import _followup_text
+        q = _q()
+        out = _followup_text(q, _ans(q), None, doubted=["项目角色存疑"])
+        self.assertIn("澄清", out)
+        self.assertIn("项目角色存疑", out)
+
+
 class OrchestratorWiringTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ.pop("OPENAI_API_KEY", None)  # pymilvus 回填 (F9)
