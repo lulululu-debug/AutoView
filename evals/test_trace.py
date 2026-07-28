@@ -192,8 +192,11 @@ class TraceE2ETests(unittest.TestCase):
             os.environ["ASSESSOR_ENABLED"] = self._assessor_env
 
     def test_full_interview_trace(self) -> None:
+        from src import db
         from src.schemas import CandidateProfile, JobContext
         job = JobContext(title="后端工程师", jd="高并发服务", track="campus")
+        # 审计导出走 session->job 归属校验, job 要真在 PG (无归属=仅 admin 可见)
+        db.save_job(job)
         candidate = CandidateProfile(resume="张三, 做过订单系统优化。" * 10)
         answers = ["我是张三, 做后端。"] + ["加了缓存, 效果还行。"] * 20
 
@@ -219,11 +222,43 @@ class TraceE2ETests(unittest.TestCase):
         self.assertTrue(all(c.path == "stub" for c in t.llm_calls))
 
         report = self.orchestrator.finalize(session_id)
-        t2 = self.cache.load_trace(session_id)
-        self.assertIsNotNone(t2)
-        self.assertIn("finalize", {s.name for s in t2.spans})
         self.assertEqual(report.session_id, session_id)
-        self.cache.delete_trace(session_id)
+
+        # task 2: finalize 归档 PG + 删 Redis 副本
+        from src import db
+        archived = db.load_decision_trace(session_id)
+        self.assertIsNotNone(archived, "finalize 应把 trace 归档 PG")
+        self.assertIn("finalize", {s.name for s in archived.spans})
+        self.assertIn("session_start", {s.name for s in archived.spans})
+        self.assertIsNone(
+            self.cache.load_trace(session_id), "归档成功后 Redis 副本应删",
+        )
+
+        # task 2: 审计导出 API —— 权限同 review (admin 可看; 无 trace 的 404)
+        from fastapi.testclient import TestClient
+        from api.main import create_app
+        from src import auth as _auth
+        from src.schemas import User as _User
+        app = create_app()
+        app.dependency_overrides[_auth.require_hr_user] = lambda: _User(
+            user_id="eval-admin", username="eval-admin", role="admin",
+        )
+        client = TestClient(app)
+        r = client.get(f"/hr/sessions/{session_id}/trace")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["session_id"], session_id)
+        self.assertTrue(body["spans"])
+        self.assertEqual(
+            client.get("/hr/sessions/ghost/trace").status_code, 404,
+        )
+        # 非 owner hr (job 无归属) -> 404 防枚举
+        app.dependency_overrides[_auth.require_hr_user] = lambda: _User(
+            user_id="eval-hr-x", username="eval-hr-x", role="hr",
+        )
+        self.assertEqual(
+            client.get(f"/hr/sessions/{session_id}/trace").status_code, 404,
+        )
 
 
 if __name__ == "__main__":

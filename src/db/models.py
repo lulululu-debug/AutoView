@@ -302,6 +302,23 @@ class InterviewSessionORM(Base):
     )
 
 
+class DecisionTraceORM(Base):
+    """Sprint 8.2: 一场面试的决策 trace 归档 (session_id 1:1)。
+
+    不设 FK: trace 是旁路观测, 归档顺序/失败都不该反过来约束 session 落库;
+    孤儿 trace 无害且仍可审计。内部审计数据, 不进 HR UI 页面, 仅
+    GET /hr/sessions/{id}/trace 审计导出 (权限同 review 流程)。"""
+    __tablename__ = "decision_traces"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    spans: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    llm_calls: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class EvaluationReportORM(Base):
     """对应 schemas.EvaluationReport。一行 = 一次面试的最终评估结果。"""
     __tablename__ = "evaluation_reports"

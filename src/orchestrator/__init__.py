@@ -506,10 +506,20 @@ def finalize(session_id: str) -> EvaluationReport:
         )
     finally:
         trace.deactivate(token)
-    _save_trace_safe(trace_obj)
+    _save_trace_safe(trace_obj)  # Redis 兜底: PG 归档失败时 TTL 内仍可救
 
     db.save_session(session)
     db.save_report(report)
+
+    # Sprint 8.2 task 2: trace 归档 PG, 成功才删 Redis 副本; 失败不阻塞 finalize
+    try:
+        db.save_decision_trace(trace_obj)
+        cache.delete_trace(session_id)
+    except Exception:
+        log.exception(
+            "decision trace 归档 PG 失败 (session_id=%s), Redis 副本保留至 TTL",
+            session_id,
+        )
 
     cache.delete_session(session_id)
     cache.delete_plan(session.plan_id)
