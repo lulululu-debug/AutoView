@@ -45,7 +45,12 @@ def _search_with_load_retry(
     expr: str,
     output_fields: list[str],
 ) -> Any:
-    """单次 client.search, 失败时若是 reloadable 类错误则 load_collection 重试一次。"""
+    """单次 client.search, 失败时若是 reloadable 类错误则 load_collection 重试一次。
+
+    Sprint 9: consistency_level=Strong —— server 模式默认 Bounded 一致性下,
+    "ingest 简历切片后立刻 RAG 检索"会读不到自己刚写的数据 (lite 是即时的,
+    server 冒烟坐实约 1s 窗口)。面试链路是典型 read-own-write, 用 Strong
+    换正确性; 题库检索也统一走 Strong (离线种子, 差异无感, 少一个分叉)。"""
     client = get_client()
     try:
         return client.search(
@@ -54,6 +59,7 @@ def _search_with_load_retry(
             limit=top_k,
             filter=expr,
             output_fields=output_fields,
+            consistency_level="Strong",
         )
     except Exception as e:
         msg = str(e).lower()
@@ -75,6 +81,7 @@ def _search_with_load_retry(
             limit=top_k,
             filter=expr,
             output_fields=output_fields,
+            consistency_level="Strong",
         )
 
 
