@@ -135,6 +135,7 @@ class PromptIntegrationTests(unittest.TestCase):
     """候选人文本进 LLM prompt 前确实被包裹; system 带指令无效声明。"""
 
     def _patch(self, spy: _SpyLLM) -> None:
+        os.environ.pop("OPENAI_API_KEY", None)  # 防前序类 import pymilvus 回填
         self._orig = llm.complete
         llm.complete = spy
         self.addCleanup(self._restore)
@@ -169,6 +170,11 @@ class PromptIntegrationTests(unittest.TestCase):
 
 class StubPathUnchangedTests(unittest.TestCase):
     """无 key 时注入样本照走启发式 fallback: 不炸、输出合法、不因注入得满分。"""
+
+    def setUp(self) -> None:
+        # AssessmentAnomalyTests 先跑且 import 了 orchestrator -> pymilvus
+        # load_dotenv 会把 key 塞回 env (CLAUDE.md 坑), 必须在这里再 pop
+        os.environ.pop("OPENAI_API_KEY", None)
 
     def test_injected_answer_heuristic_ok(self) -> None:
         q, a, session, plan = _fixture(_INJECTION)
@@ -232,6 +238,37 @@ class IntakeSanitizeTests(unittest.TestCase):
         """老 session JSON 缺 integrity_flags 字段 -> 默认 []。"""
         s = InterviewSession.model_validate({"plan_id": "p", "job_id": "j"})
         self.assertEqual(s.integrity_flags, [])
+
+
+class AssessmentAnomalyTests(unittest.TestCase):
+    """task 3: 输出侧异常形状 —— 满分 + 零缺失 + 零担忧才标, 不误伤正常高分。"""
+
+    @staticmethod
+    def _a(sufficiency: float, missing: list, concerns: list) -> AnswerAssessment:
+        return AnswerAssessment(
+            question_id="q",
+            sufficiency=sufficiency,
+            confidence=0.8,
+            missing_signals=missing,
+            strengths=[],
+            concerns=concerns,
+            followup_goal="",
+            stop_reason="sufficient_signals",
+            covered_aspects=[],
+        )
+
+    def test_perfect_and_empty_flags(self) -> None:
+        from src.orchestrator import _assessment_anomaly
+        self.assertTrue(_assessment_anomaly(self._a(0.97, [], [])))
+
+    def test_high_score_with_signals_not_flagged(self) -> None:
+        from src.orchestrator import _assessment_anomaly
+        self.assertFalse(_assessment_anomaly(self._a(0.97, ["缺量化"], [])))
+        self.assertFalse(_assessment_anomaly(self._a(0.97, [], ["深度存疑"])))
+
+    def test_normal_score_not_flagged(self) -> None:
+        from src.orchestrator import _assessment_anomaly
+        self.assertFalse(_assessment_anomaly(self._a(0.85, [], [])))
 
 
 if __name__ == "__main__":
