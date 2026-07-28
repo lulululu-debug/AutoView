@@ -29,6 +29,7 @@ import logging
 import re
 
 from src import llm
+from src.agents.assessor import calibration
 from src.llm import sanitize
 from src.schemas import (
     AnswerAssessment,
@@ -152,9 +153,15 @@ def assess(
     # 一律 fallback 到启发式, 让 Interviewer 始终能拿到一个有效 AnswerAssessment。
     try:
         # Sprint 8.2: via 标注走的路径 (纯审计, 进 trace 的 assess span)
-        return _assess_via_llm(
-            question, answer, relevant_aspects,
-        ).model_copy(update={"via": "llm"})
+        # Sprint 8.3: LLM 路径附 Platt 校准分 (P(信号充分)); 启发式/复制粘贴
+        # 路径恒 None -> 决策层自动退回 raw 阈值
+        result = _assess_via_llm(question, answer, relevant_aspects)
+        return result.model_copy(update={
+            "via": "llm",
+            "calibrated_sufficiency": calibration.calibrate_sufficiency(
+                result.sufficiency,
+            ),
+        })
     except _LLMStubFallback:
         # 期望中的 stub 路径 (dev / eval), 不写 log.exception 防噪
         pass

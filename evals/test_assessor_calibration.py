@@ -86,6 +86,65 @@ def _run_assessor(sample: dict) -> float:
     return _run_assessor_full(sample).sufficiency
 
 
+class PlattMappingTests(unittest.TestCase):
+    """Sprint 8.3 Step 1: Platt 校准映射的结构性护栏 (纯函数, 零 token)。
+
+    真 LLM 上的拟合质量由 sim/calibrate_platt.py 人工跑; 这里钉死:
+    映射单调 / 值域 / 默认阈值与 raw 0.6 的精确等效关系 (换单位不换行为)。
+    """
+
+    def test_monotonic_and_bounded(self):
+        from src.agents.assessor.calibration import calibrate_sufficiency
+        grid = [i / 100 for i in range(101)]
+        vals = [calibrate_sufficiency(x) for x in grid]
+        for lo, hi in zip(vals, vals[1:]):
+            self.assertLess(lo, hi, "映射必须严格单调增")
+        self.assertTrue(all(0.0 < v < 1.0 for v in vals))
+
+    def test_default_threshold_equivalent_to_raw_06(self):
+        """min_calibrated_to_stop 默认值 = raw 0.6 的等效点:
+        raw 0.6 应 stop, raw 0.59 不应 —— 边界与旧行为一致。"""
+        from src.agents.assessor.calibration import calibrate_sufficiency
+        from src.schemas import FollowUpPolicy
+        thr = FollowUpPolicy().min_calibrated_to_stop
+        self.assertGreaterEqual(calibrate_sufficiency(0.60), thr)
+        self.assertLess(calibrate_sufficiency(0.59), thr)
+
+    def test_heuristic_path_leaves_calibrated_none(self):
+        """stub 环境 assess() 走启发式 -> calibrated 恒 None (校准只属 LLM 路径)。"""
+        out = _run_assessor_full({
+            "category": "project_experience",
+            "question": "讲讲你最有挑战的项目。",
+            "answer": "做过一个系统。",
+        })
+        self.assertIsNone(out.calibrated_sufficiency)
+        self.assertEqual(out.via, "heuristic")
+
+    def test_decide_followup_uses_calibrated_when_present(self):
+        """决策层双路径: 有校准分走概率阈值, 无校准分走 raw 阈值 (行为不变)。"""
+        from src.agents.interviewer import _decide_followup
+        from src.schemas import (
+            AnswerAssessment as AA,
+            CandidateAnswer as CA,
+            FollowUpPolicy,
+        )
+        q = Question(competency_id="c", text="性能优化?",
+                     category=QuestionCategory.PROJECT_EXPERIENCE)
+        a = CA(question_id=q.question_id, text="x")
+        policy = FollowUpPolicy(max_followups_per_question=2)
+
+        def aa(raw, cal):
+            return AA(question_id=q.question_id, sufficiency=raw,
+                      confidence=0.9, calibrated_sufficiency=cal)
+
+        # 校准路径: cal 高于阈值 -> 停; 低于 -> 追
+        self.assertFalse(_decide_followup(q, a, aa(0.2, 0.95), policy, 0))
+        self.assertTrue(_decide_followup(q, a, aa(0.7, 0.5), policy, 0))
+        # 无校准 (启发式路径): raw 阈值, 与 8.3 之前一致
+        self.assertFalse(_decide_followup(q, a, aa(0.7, None), policy, 0))
+        self.assertTrue(_decide_followup(q, a, aa(0.4, None), policy, 0))
+
+
 class CalibrationDatasetTests(unittest.TestCase):
     """数据集本身的结构性护栏 —— 防有人改坏 JSON。"""
 
