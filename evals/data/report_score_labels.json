@@ -1,0 +1,15 @@
+{
+ "version": 1,
+ "notes": [
+  "Sprint 8.5 task 3 —— Evaluator 分数校准的人工标注集 (报告级, 数值分)。",
+  "标注指引: 从 HR 界面挑 20-30 份已 finalize 的报告, 逐份读完整对话",
+  "(GET /hr/sessions/{id}) 后, 按你的人工判断给 overall 打 0-100 分;",
+  "不要先看系统分再打 (锚定偏差), 建议两人独立标后取均值。",
+  "report_id 从 HR 候选人列表取; human_overall 必填, human_dimensions 选填",
+  "(键为 competency 名称)。",
+  "labels 为空时 sim/calibrate_evaluator.py 优雅跳过并打印本指引。",
+  "样例: {\"report_id\": \"abc123\", \"human_overall\": 72,",
+  "       \"human_dimensions\": {\"技术深度\": 75, \"沟通协作\": 68}}"
+ ],
+ "labels": []
+}

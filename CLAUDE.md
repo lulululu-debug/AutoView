@@ -199,3 +199,6 @@ Sprint 1 阶段不引 Alembic，用 `Base.metadata.create_all`；schema 真的�
 - **候选人端不返回 EvaluationReport / DimensionScore**——候选人不接触自己的报告
 - **不做动态补题**——任何"LLM 在线生成新题再考一遍"的设计直接拒，破坏可复现性 + 公平性
 - 不要拆掉 Sprint 0 的启发式 fallback——Assessor 失败时它就是保底
+- **MAE 校准门禁未过不许开 `EVAL_PANEL_ENABLED`**(Sprint 8.5)——裁判团
+  替代公式分之前,必须有报告级人工标注 + `sim/calibrate_evaluator` 通过;
+  rubric 权重(`RUBRIC_WEIGHT`)调整同样要 frozen 复验 + 区分度不塌

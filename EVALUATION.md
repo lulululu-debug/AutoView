@@ -90,6 +90,7 @@
 | 13 | **注入防御结构护栏**(Sprint 8.1) | wrap_untrusted 边界性质(nonce 防伪造闭合)/ 四接入点 prompt 集成 / strip_invisible 幂等 / 输出侧异常形状 / stub 路径行为不变 | `python -m unittest evals.test_injection_guard` | 19 条,全绿 |
 | 14 | **golden trace 决策回归**(Sprint 8.2) | 3 场典型 stub 面试确定性回放后决策序列逐项 diff(追问/结束/评估的依据数值 + 全部 LLM 请求哈希与响应);改 prompt / policy 阈值在这里变红属**预期信号** | `python -m unittest evals.test_trace_replay`;确认变化合理后 `python -m scripts.record_golden_traces` 重录并随代码同 commit | 3 golden(签名项 71/71/31);零 token;回放 miss 抛 ReplayDivergence 不静默 |
 | 15 | **冻结 persona 回归批次**(Sprint 8.3.1,"真 LLM 版 golden") | 候选人端复放录制答案(零候选人 LLM),输入全固定 → 批次间分差只可能来自评估端;S83-R1 的 ±10 分 persona 生成噪声被彻底剔除 | `python -m sim.run_interviews --personas all --frozen --run-dir <dir>`;答案变更后 `python -m scripts.freeze_persona_answers` 重冻结并随代码同 commit | 9 persona fixture;连跑两次 9/9 逐字节一致;LLM 缓存命中期内近零成本 |
+| 16 | **Evaluator MAE 校准门禁**(Sprint 8.5,脚手架) | 报告级「模型 overall vs 人工数值分」线性映射 + MAE ≤ 10 门禁;**未过门禁 EVAL_PANEL_ENABLED 不许开** | 标注 `evals/data/report_score_labels.json`(20-30 份,指引在文件内)后 `python -m sim.calibrate_evaluator` | 待标注(记账);空标注优雅跳过 |
 
 **Sprint 8.1 注入防御的真实 LLM 对抗测试(手动清单,烧 token)**:
 1. 指令注入拉分:取 calibration 核心集 insufficient 样本,答案尾部叠加
@@ -293,6 +294,26 @@ judge 金标校准 **19/20 首跑通过**(四 judge 全过线)。f5b 审计结�
   28.8(strong→terse 序)
 - summary prompt 增矛盾块属 F7 管辖,忠实性审计随下次 sim.judge 复验(记账)
 - 全量 evals **564 绿**
+
+---
+
+### 2026-07-28 Sprint 8.5 rubric 化打分复验(frozen f/f2/f3/f4 三轮迭代)
+
+- **frozen 批次驱动的 prompt 迭代**(方法论范本):
+  f:判定过宽,suf 0.40 的教科书答案 rubric 6/6 全中,copy-paste +7.3 ⚠️
+  f2:收紧标准 → 压制恢复但 hits 有效率仅 26%,零星生效随机罚强者
+  (campus-strong -13.3)⚠️
+  f3:改对象格式无效 —— via=llm 但 9/11 缺字段,根因定位:**mini 严格照
+  末尾 JSON schema 块输出,"额外加字段"的旁述会被丢**
+  f4:rubric_hits 写进 schema 块本身 → **有效率 100%(95/95)**
+- **f4 定稿指标**:区分度 6/6;copy-paste 压制 **-8.2 → -11.8**(严格逐项
+  判定让教科书答案现形,rubric 的核心收益);strong 端 -8.5/-1.5 为全覆盖
+  下的一致性量表下移,非随机惩罚。f4 为 rubric 时代新冻结基线
+- 裁判团(task 2)代码就绪但 **EVAL_PANEL_ENABLED 默认关**:MAE 门禁
+  (#16)未过前不进主路径;裁判与生成模型强制不同名
+- **记账**:报告级人工标注 20-30 份(指引在 report_score_labels.json),
+  标完跑 `sim/calibrate_evaluator`;panel 开启需另行确认
+- 全量 evals **577 绿**
 
 ---
 
