@@ -1230,24 +1230,36 @@ panel 代码就绪但默认关,门禁脚手架可跑;标注工作量清晰记账
 > 4. **连接池/线程池默认值**(PG pool 5、threadpool 40)→ env 可调
 > 全链路 async 重写留账:若实测 >500 并发会话再评估,先改 llm 调用层。
 
-- [ ] **task 1 Milvus 独立部署解耦**:
+- [x] **task 1 Milvus 独立部署解耦**:
       vector_store 支持 MILVUS_URI(http:// 服务端)与 MILVUS_LITE_URI
       (本地文件)二选一,server 优先;docker-compose.yml 起 milvus
       standalone;本机 docker 实测两种模式行为一致(collections/插入/
       检索/删除);evals 保持 lite(CI 零依赖);「跑批停 uvicorn」纪律
       在 server 模式下解除(文档更新)
-- [ ] **task 2 RQ 任务队列**:
+- [x] **task 2 RQ 任务队列**:
       pyproject 加 rq;src/jobs/(enqueue 封装 + worker 入口
       python -m src.jobs.worker);候选人上传路径(ingest_resume +
       run_planner)改走队列,带重试;RQ 未装/Redis 不可用/未起 worker 时
       **自动退回 BackgroundTasks**(降级铁律,eval 钉死);candidate 的
       plan_pending 轮询语义不变,前端零改动
-- [ ] **task 3 会话锁 + 池容量 + 压测**:
+- [x] **task 3 会话锁 + 池容量 + 压测**:
       submit_answer/finalize 挂 per-session Redis 锁(SET NX,拿不到返
       409,候选人端提示重试);PG engine pool_size/max_overflow env 化
       (默认 20/30);FastAPI startup 把 threadpool tokens 提到
       THREADPOOL_TOKENS(默认 100);scripts/load_test.py(stub 模式 N 路
       并发完整面试,验证无跨会话串扰 + 容量数字);eval:锁互斥/降级/池配置
+
+**实际落地**(2026-07-28):
+- task 1: server/lite 双模式 (MILVUS_SERVER_URI 优先); 实测修复一致性差异
+  —— server 默认 Bounded 下 ingest 后立刻检索读不到自己刚写的切片,
+  检索统一 consistency_level=Strong (面试链路是 read-own-write)
+- task 2: RQ 踩坑 —— 业务 Redis client decode_responses=True 会把 pickle
+  任务体解码炸掉, 队列走专用 raw 连接; Planner 失败抛出交 RQ 重试,
+  分段/ingest 吞异常 (下游有 fallback)
+- task 3: 压测对比把本 sprint 的价值量化 —— 同为 30 场×10 并发且 uvicorn
+  共存: lite 模式 29/30 完成、p50 3133ms (锁竞争 + 一次孤例 AttributeError);
+  **server 模式 30/30 零失败、总耗时 246.7s→61.4s、p50 5ms、7.3 turns/s**,
+  串扰校验全过。锁冲突 409 语义上线; evals +9, 全量 586 绿。
 
 **完成标准**:docker milvus + 多 worker uvicorn + RQ worker 架构本机跑通;
 压测 N≥30 路并发面试零串扰零 5xx;所有降级路径(无 server milvus 退 lite /

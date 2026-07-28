@@ -115,6 +115,12 @@ def _save_trace_safe(trace_obj: DecisionTrace) -> None:
         log.debug("trace 保存失败 (旁路观测, 忽略)", exc_info=True)
 
 
+class SessionBusy(RuntimeError):
+    """Sprint 9: 同一会话已有并发请求在处理 (双击/重试/攻击)。
+    submit/finalize 是 Redis 读改写序列, 并发会互相覆盖 —— 锁上直接拒,
+    API 层映射 409, 候选人端提示稍后重试。"""
+
+
 class SessionNotFound(LookupError):
     """session_id 在 Redis 中找不到(过期或从未存在)。"""
 
@@ -239,14 +245,21 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
     Sprint 8.2: 全程挂决策 trace (Redis 与 session 同 TTL); 链路异常时
     trace 不落盘 —— 面试失败优先, trace 是旁路。
     """
-    trace_obj = _load_trace_or_new(session_id)
-    token = trace.activate(trace_obj)
+    # Sprint 9: per-session 锁 —— submit 是读改写序列, 并发同会话请求拒掉
+    lock_token = cache.acquire_session_lock(session_id)
+    if lock_token is None:
+        raise SessionBusy(f"session {session_id} 正在处理另一个请求")
     try:
-        result = _submit_answer_inner(session_id, answer_text)
+        trace_obj = _load_trace_or_new(session_id)
+        token = trace.activate(trace_obj)
+        try:
+            result = _submit_answer_inner(session_id, answer_text)
+        finally:
+            trace.deactivate(token)
+        _save_trace_safe(trace_obj)
+        return result
     finally:
-        trace.deactivate(token)
-    _save_trace_safe(trace_obj)
-    return result
+        cache.release_session_lock(session_id, lock_token)
 
 
 def _submit_answer_inner(session_id: str, answer_text: str) -> TurnResult:
@@ -552,6 +565,17 @@ def get_report(session_id: str) -> EvaluationReport:
 
 def finalize(session_id: str) -> EvaluationReport:
     """跑 evaluator, 把 session + report 归档进 Postgres, 清 Redis。"""
+    # Sprint 9: 与 submit_answer 同一把 per-session 锁 (防 submit/finalize 竞态)
+    lock_token = cache.acquire_session_lock(session_id)
+    if lock_token is None:
+        raise SessionBusy(f"session {session_id} 正在处理另一个请求")
+    try:
+        return _finalize_inner(session_id)
+    finally:
+        cache.release_session_lock(session_id, lock_token)
+
+
+def _finalize_inner(session_id: str) -> EvaluationReport:
     session = cache.load_session(session_id)
     if session is None:
         raise SessionNotFound(f"session {session_id} 不在 Redis 中")

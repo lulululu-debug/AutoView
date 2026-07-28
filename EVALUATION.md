@@ -324,7 +324,8 @@ judge 金标校准 **19/20 首跑通过**(四 judge 全过线)。f5b 审计结�
 python -m unittest discover -s evals
 
 # 效果评估 (烧 token, 显式跑; 需真 OPENAI_API_KEY + PG/Redis/Milvus)
-# 注意: 跑批期间停 uvicorn (Milvus Lite 并发会触发降级, 污染测量)
+# 注意: lite 模式跑批期间停 uvicorn (Milvus Lite 单进程, 并发触发降级);
+# Sprint 9 起配 MILVUS_SERVER_URI (docker compose up -d milvus) 免停
 python -m sim.run_interviews --personas all --repeat 3   # ~27 场, ¥3-14
 python -m sim.report sim/runs/<目录>                      # 零 token 汇总
 
