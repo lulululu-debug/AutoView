@@ -91,7 +91,8 @@ class SchedulingDecisionTests(unittest.TestCase):
 
     def test_low_variance_low_mean_still_probes(self) -> None:
         """s83 复验教训: 证据足但未达标 (mean<0.8) 必须保留追问 ——
-        追问是候选人的 second chance, 不能只因'问过几次'就放弃该维度。"""
+        缺口证据 (missing_signals) 靠追问暴露, 不能只因'问过几次'就放弃。
+        注: 追问回答不进评分, 本门只关证据完整性与预算流向。"""
         low_cal = _aa(self.q, 0.5)
         self.assertTrue(self.decide(
             self.q, self.ans, low_cal, self.policy, 0,

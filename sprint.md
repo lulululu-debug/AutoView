@@ -1061,12 +1061,14 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       (应全绿,新逻辑不触 stub 路径)+ 小规模 sim 批次(core+adversarial
       各 repeat 1)对比基线:区分度排序不塌、对抗 Δ 不缩水、followup 总量
       变化记录;EVALUATION.md / CLAUDE.md 记录
-      实际落地: 区分度 6/6 保持; **首轮复验抓到真缺陷并修正** —— 方差门
-      只看证据量会砍 medium 的 second-chance 追问 (追问回答按 best-of
-      计分), 加均值条件 (且 mean≥0.8 才停 probe); 用 8.2 trace 逐 span
-      解剖定位, 门修复前后 medium 决策一致证明 8.3 无害;
-      残留 S83-R1 立项: medium 基线 63→51±8 漂移 (先于 8.3, 嫌疑 8.1
-      prompt 变更或 judge 漂移), 对抗 Δ 连带缩水, 复测方案见 EVALUATION.md;
+      实际落地: 区分度 6/6 保持; 复验修正方差门语义 —— 加均值条件
+      (variance<0.03 且 mean≥0.8 才停 probe), 未达标维度保留追问以暴露
+      缺口证据 (勘误: 追问回答不进评分, "second chance" 理由不成立);
+      用 8.2 trace 逐 span 解剖, 门修复前后 medium 决策一致证明 8.3 无害;
+      **S83-R1 已定位** (固定输入再评估, 54 对 × 双臂): 8.1 prompt 效应
+      -0.02 排除, 评审端漂移 +0.07 方向相反 → medium 基线 63→51 漂移在
+      **候选人仿真端** (persona 当日生成波动, σ≈8), 系统评估侧无回归;
+      记账: 回归批次应冻结 persona 答案 fixture 或 repeat≥3 报置信区间。
       批次跑法纪律又验证一次: 跑批必须停 uvicorn (Milvus Lite 并发)。
       全量 538 绿。
 
