@@ -231,6 +231,27 @@ judge 金标校准 **19/20 首跑通过**(四 judge 全过线)。f5b 审计结�
 
 ---
 
+### 2026-07-28 Sprint 8.3 信念驱动追问复验(batch-20260728-s83 / -fix)
+
+- **区分度保持**:9 场全 persona 批次 pairwise **6/6**(campus 81>60.3>37.7,
+  lateral 77.8>45.3>40.0);adv-terse Δ-29.2 压制正常
+- **首轮复验抓到真缺陷并当场修正**:方差门只看「证据够」不看「结论好」,
+  砍掉 medium 档的翻盘追问(追问回答挂父题 best-of 计分 = second chance)。
+  修正 = 加均值条件(variance<0.03 **且** mean≥0.8 才停 probe)。trace 佐证:
+  medium r1 的 variance_gate 拦截 4→0,拦截只剩「已确立为佳」维度(strong)
+- **8.3 门控无害结论**:门修复前后 medium r1 决策序列与得分完全一致
+  (45.3)—— 限制 medium 追问的是 F1 时代预算守卫,8.3 的门只作用于
+  established-good 维度,预算确实流向高方差处
+- **残留 S83-R1(未结)**:lateral-medium 基线 63.0(07-23)→ 51.2±8.4
+  (07-28,N=2),连带对抗 Δ 从 -14.8 缩水到 +0.6 ⚠️。**与 8.3 无因果**
+  (上一条);嫌疑:8.1 assessor prompt 包装变更(校准门禁 8/8+gap0.489 过,
+  但题级门禁不排除 persona 级分布漂移)或 5 天间 gpt-4o-mini 漂移;
+  σ≈8 明显高于 F5b 时代(σ 1-4)。**下一步**:medium/copy-paste repeat 3
+  复测定漂移源,必要时把 persona 级基线纳入 calibration 门禁
+- 全量 evals **538 绿**;golden trace 决策回归随每次门控调整重录并核对骨架
+
+---
+
 ## 三、复跑指南
 
 ```bash

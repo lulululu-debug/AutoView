@@ -1056,11 +1056,19 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       mean − k·√variance 置信下界替代裸 max;belief 数字不进 HR UI/报告;
       eval:test_belief_update(共轭数值性质)+ test_followup_scheduling
       (不均衡场景预算流向 / 预算耗尽 / 无校准值时行为与现在一致)
-- [ ] **task 3 真 LLM 复验 + 收尾**:
+- [x] **task 3 真 LLM 复验 + 收尾**:
       sim/calibrate_assessor(prompt 未动,应原样过)+ golden trace diff
       (应全绿,新逻辑不触 stub 路径)+ 小规模 sim 批次(core+adversarial
       各 repeat 1)对比基线:区分度排序不塌、对抗 Δ 不缩水、followup 总量
       变化记录;EVALUATION.md / CLAUDE.md 记录
+      实际落地: 区分度 6/6 保持; **首轮复验抓到真缺陷并修正** —— 方差门
+      只看证据量会砍 medium 的 second-chance 追问 (追问回答按 best-of
+      计分), 加均值条件 (且 mean≥0.8 才停 probe); 用 8.2 trace 逐 span
+      解剖定位, 门修复前后 medium 决策一致证明 8.3 无害;
+      残留 S83-R1 立项: medium 基线 63→51±8 漂移 (先于 8.3, 嫌疑 8.1
+      prompt 变更或 judge 漂移), 对抗 Δ 连带缩水, 复测方案见 EVALUATION.md;
+      批次跑法纪律又验证一次: 跑批必须停 uvicorn (Milvus Lite 并发)。
+      全量 538 绿。
 
 **完成标准**:真 LLM 路径追问决策由校准分 + 信念方差 + 全局预算共同驱动;
 stub/启发式路径与 8.2 golden 完全一致;sim 复验区分度与对抗指标不劣化;

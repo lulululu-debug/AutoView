@@ -115,8 +115,11 @@ def _decide_followup(
             if (
                 belief is not None
                 and belief.variance < policy.min_variance_to_probe
+                and belief.mean >= policy.min_established_mean
             ):
-                # 该维度证据已足 (方差低), 追问价值 ≈ 方差削减 ≈ 0
+                # 该维度证据已足**且已确立为佳**: 追问的信息增益与翻盘价值
+                # 都 ≈ 0, 预算留给别的维度。均值条件是 s83 首轮复验加的:
+                # 只看方差会砍掉中档候选人的 second chance (见 policy 注)。
                 return False
             return True
         if (
@@ -304,6 +307,7 @@ def next_turn(
             belief_variance=belief.variance if belief else None,
             belief_n=belief.n_observations if belief else None,
             min_variance_to_probe=policy.min_variance_to_probe,
+            min_established_mean=policy.min_established_mean,
             via="assessment" if assessment is not None else "heuristic",
         )
         if wants_followup:
