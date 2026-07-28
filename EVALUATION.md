@@ -89,6 +89,7 @@
 | 11 | **HR 复核回流统计** | 复核率 / 分数-决策同向性(recommend>borderline>reject 应单调)/ 改分率 + 维度 \|Δ\| / 证据不足×决策交叉 | `python -m scripts.review_stats` | 零 LLM 只读 PG;纯函数 + 7 条单元护栏;待真实复核数据 |
 | 13 | **注入防御结构护栏**(Sprint 8.1) | wrap_untrusted 边界性质(nonce 防伪造闭合)/ 四接入点 prompt 集成 / strip_invisible 幂等 / 输出侧异常形状 / stub 路径行为不变 | `python -m unittest evals.test_injection_guard` | 19 条,全绿 |
 | 14 | **golden trace 决策回归**(Sprint 8.2) | 3 场典型 stub 面试确定性回放后决策序列逐项 diff(追问/结束/评估的依据数值 + 全部 LLM 请求哈希与响应);改 prompt / policy 阈值在这里变红属**预期信号** | `python -m unittest evals.test_trace_replay`;确认变化合理后 `python -m scripts.record_golden_traces` 重录并随代码同 commit | 3 golden(签名项 71/71/31);零 token;回放 miss 抛 ReplayDivergence 不静默 |
+| 15 | **冻结 persona 回归批次**(Sprint 8.3.1,"真 LLM 版 golden") | 候选人端复放录制答案(零候选人 LLM),输入全固定 → 批次间分差只可能来自评估端;S83-R1 的 ±10 分 persona 生成噪声被彻底剔除 | `python -m sim.run_interviews --personas all --frozen --run-dir <dir>`;答案变更后 `python -m scripts.freeze_persona_answers` 重冻结并随代码同 commit | 9 persona fixture;连跑两次 9/9 逐字节一致;LLM 缓存命中期内近零成本 |
 
 **Sprint 8.1 注入防御的真实 LLM 对抗测试(手动清单,烧 token)**:
 1. 指令注入拉分:取 calibration 核心集 insufficient 样本,答案尾部叠加
@@ -253,6 +254,24 @@ judge 金标校准 **19/20 首跑通过**(四 judge 全过线)。f5b 审计结�
   persona 留探索用),或 repeat≥3 报告置信区间,否则 persona 级基线比较
   的误差条覆盖不了 ±10 分
 - 全量 evals **538 绿**;golden trace 决策回归随每次门控调整重录并核对骨架
+
+---
+
+### 2026-07-28 Sprint 8.3.1 冻结 persona 回归基线(frozen-20260728-a/b)
+
+- 录制式冻结落地:s83 批次 9 persona 的真实回答按 category 抽成
+  `sim/data/frozen_answers.json`,`--frozen` 批次候选人端零 LLM 复放
+- **确定性验证**:连跑两批 9/9 场 overall 逐字节一致;与源批次 s83 比
+  8/9 场分数完全吻合(campus-weak 37.7→29.7 为复放对位差异,冻结基线
+  以自身为准)
+- **冻结基线(后续评估端变更以此为对照)**:campus-strong 81.0 /
+  lateral-strong 77.8 / campus-medium 60.3 / adv-copy-paste 57.4 /
+  lateral-medium 45.3 / adv-off-topic 42.9 / lateral-weak 40.0 /
+  campus-weak 29.7 / adv-terse 16.1;区分度 pairwise 6/6
+- 纪律:planner 出题或 persona 定义变更 → fixture 失配 → 重冻结
+  (`scripts/freeze_persona_answers`)并显式 commit,与 golden 重录同款;
+  LLM 缓存 TTL 过期后重跑 frozen 批次 = 评估端漂移检测器(同输入异分即漂移)
+- 全量 evals **545 绿**
 
 ---
 

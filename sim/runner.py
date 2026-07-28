@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from sim import candidate as sim_candidate
+from sim import frozen as sim_frozen
 from sim.personas import Persona
 
 log = logging.getLogger(__name__)
@@ -41,8 +42,14 @@ def _job_for_track(track) -> "JobContext":
     )
 
 
-def run_one(persona: Persona, run_id: str, out_dir: Path) -> dict:
-    """跑一场完整仿真面试, artifact 写盘并返回摘要 dict。"""
+def run_one(
+    persona: Persona, run_id: str, out_dir: Path, *, frozen: bool = False,
+) -> dict:
+    """跑一场完整仿真面试, artifact 写盘并返回摘要 dict。
+
+    frozen=True (Sprint 8.3.1): 候选人端零 LLM, 按 category 顺序复放
+    sim/data/frozen_answers.json 的录制答案 —— 回归型批次专用, 输入全
+    固定后批次间分差只可能来自评估端 ("真 LLM 版 golden")。"""
     from src import db, ingestion, orchestrator
     from src.agents import planner
     from src.schemas import CandidateProfile
@@ -77,10 +84,23 @@ def run_one(persona: Persona, run_id: str, out_dir: Path) -> dict:
     history: list[tuple[str, str]] = []
     turn_latencies: list[float] = []
 
+    dispenser = sim_frozen.Dispenser(persona.persona_id) if frozen else None
+    q_cat = {
+        q.question_id: q.category.value
+        for r in plan.rounds for q in r.questions
+    }
+    last_cat = "self_intro"
+
     n_turns = 0
     while not turn.done and n_turns < _MAX_TURNS:
         question = turn.prompt or ""
-        ans = sim_candidate.answer(persona, question, history, nonce=run_id)
+        if dispenser is not None:
+            # 追问 ref 不在题库 -> 归上一个 category (与冻结脚本同规则)
+            cat = q_cat.get(turn.ref_id or "", last_cat)
+            last_cat = cat
+            ans = dispenser.next(cat)
+        else:
+            ans = sim_candidate.answer(persona, question, history, nonce=run_id)
         history.append(("面试官", question))
         history.append(("候选人", ans))
         t_turn = time.time()
@@ -110,6 +130,7 @@ def run_one(persona: Persona, run_id: str, out_dir: Path) -> dict:
         "needs_human_review": report.needs_human_review,
         "competency_coverage": report.competency_coverage,
         "n_answers": n_turns,
+        "frozen": frozen,
         "duration_s": round(time.time() - t0, 1),
         "turn_latencies_s": turn_latencies,
         # 完整对象: task 2 (指标) / task 4 (judge) 直接从 artifact 复算

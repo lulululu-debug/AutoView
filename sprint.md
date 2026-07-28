@@ -1078,6 +1078,33 @@ belief/校准数字对 HR 与候选人不可见。
 
 ---
 
+## Sprint 8.3.1 — sim persona 答案冻结（回归基线）
+
+> 2026-07-28 立项。S83-R1 的直接后续:persona 级基线误差条 ±10 分,根因是
+> 候选人仿真端逐日生成漂移。回归型批次改为**录制式冻结**:把 s83 批次
+> (已付费) 每个 persona 的真实回答按 category 抽成 fixture,`--frozen`
+> 模式下候选人端零 LLM、逐字节复放 —— 输入全固定后,批次间分差只能来自
+> 评估端(assessor/planner/policy),即「真 LLM 版 golden」。
+> 生成式 persona 保留,探索性测试用;fairness 的答案重放机制不动。
+
+- [x] **task 1 冻结机制 + 基线**:
+      scripts/freeze_persona_answers.py(从批次 artifact 抽 9 persona 的
+      分类别答案池)→ sim/data/frozen_answers.json;sim/frozen.py 发放器
+      (按 category 顺序消费,溢出循环加后缀防撞复制粘贴硬规则);
+      runner/run_interviews 加 --frozen;冻结基线批次(答案与 s83 同 →
+      assessor 撞当日缓存 ≈ 零成本)入 EVALUATION.md 作新基线;
+      结构 eval(fixture 完整性 / 发放器行为);fixture 失效即重冻结
+      (planner 出题变更后),与 golden 重录同款纪律
+      实际落地: 连跑两批 9/9 逐字节一致; 与源批次 8/9 吻合 (campus-weak
+      复放对位差异 37.7→29.7, 冻结基线以自身为准); 追问答案归父题
+      category 池 (冻结与复放同规则); TTL 过期后重跑 frozen 批次即评估端
+      漂移检测器; evals +7, 全量 545 绿。
+
+**完成标准**:--frozen 批次候选人端零 LLM 调用且两次连跑分数逐字节一致;
+9 persona fixture 齐全;EVALUATION.md 记录冻结基线与重冻结纪律。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
