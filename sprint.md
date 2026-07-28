@@ -1135,12 +1135,19 @@ belief/校准数字对 HR 与候选人不可见。
       不许发明记录外结论);追问 focus 与 8.3 打通:同等条件下该题
       competency 有 doubted claim → followup_goal 前缀注入澄清目标
       (走既有配额,不加问数);eval:reflection 失败退化 / 澄清注入结构
-- [ ] **task 3 消费点 + frozen 复验**:
+- [x] **task 3 消费点 + frozen 复验**:
       lazy project 生成 prompt 注入 doubted/contradicted 条目(优先深挖
       存疑点);Evaluator:未消解 contradicted → needs_human_review=True
       (现恒 True,先接线)+ contradicted 条目(带 evidence)进 summary
       输入;**frozen 批次复验**(8.3.1 首次实战):prompt 变更对分数的
       影响在固定输入下测量;golden 重录(span 变);EVALUATION.md 记录
+      实际落地: frozen 首战即立功 —— lateral-strong -19.5 被圈出, 定性为
+      **fixture 与新题集失配** (8.4 故意改题) 而非质量回归; 生成式复核
+      lateral-strong 76.6 持平、区分度 6/6、对抗 Δ 恢复 -8/-8/-26;
+      按纪律从 post-8.4 批次重冻结, frozen-d 与生成式源 9/9 一致 +
+      d/e 连跑 9/9 逐字节一致, 新基线入 EVALUATION.md;
+      方法论沉淀: 题集变更型 feature 的 frozen Δ = 变更检测信号,
+      质量裁决用生成式复核, 两者配合使用。全量 564 绿。
 
 **完成标准**:claims 全程可溯源(evidence→原文);矛盾标记确定性(同输入
 同输出);stub 环境 reflection 跳过、其余纯规则路径全绿;frozen 复验分差
