@@ -477,6 +477,7 @@ def save_session(session: InterviewSession) -> None:
             media_ref=payload["media_ref"],
             integrity_flags=payload.get("integrity_flags", []),
             beliefs=payload.get("beliefs", {}),
+            candidate_model=payload.get("candidate_model", {}),
         )
         s.merge(row)
 
@@ -501,6 +502,7 @@ def load_session(session_id: str) -> Optional[InterviewSession]:
                 "media_ref": row.media_ref,
                 "integrity_flags": row.integrity_flags or [],
                 "beliefs": row.beliefs or {},
+                "candidate_model": row.candidate_model or {},
             }
         )
 

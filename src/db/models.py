@@ -292,6 +292,12 @@ class InterviewSessionORM(Base):
     beliefs: Mapped[dict] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}",
     )
+    # Sprint 8.4: 跨 stage 候选人记忆 (第四类数据)。已有库需手动补列:
+    #   ALTER TABLE interview_sessions ADD COLUMN IF NOT EXISTS candidate_model
+    #   JSONB NOT NULL DEFAULT '{}'::jsonb;
+    candidate_model: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
