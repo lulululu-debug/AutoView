@@ -31,6 +31,7 @@ from src.llm import sanitize
 log = logging.getLogger(__name__)
 from src.agents import analyzer, assessor, evaluator, interviewer, planner
 from src.schemas import (
+    AnswerAssessment,
     CandidateAnswer,
     CandidateProfile,
     EvaluationReport,
@@ -45,6 +46,21 @@ from src.schemas import (
     TurnResult,
     TurnRole,
 )
+
+
+# Sprint 8.1 task 3: 输出侧异常阈值。sufficiency 达到该值且 missing_signals /
+# concerns 全空 -> 疑似被注入拉分 (评分锚点下真实好回答也极少三者同时),
+# 只记 integrity_flags 不改决策。改阈值不需要重跑校准 (不影响任何决策路径)。
+_ANOMALY_SUFFICIENCY = 0.95
+
+
+def _assessment_anomaly(a: AnswerAssessment) -> bool:
+    """满分 + 零缺失 + 零担忧的异常形状 (注入拉分典型输出)。纯函数供 eval。"""
+    return (
+        a.sufficiency >= _ANOMALY_SUFFICIENCY
+        and not a.missing_signals
+        and not a.concerns
+    )
 
 
 class SessionNotFound(LookupError):
@@ -201,6 +217,13 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
                 answered_q, answer, session, plan, job=job_for_decision,
             )
             session.assessments.append(assessment)
+            # Sprint 8.1 task 3: 输出侧异常模式 —— 满分且零缺失/零担忧是注入
+            # 拉分的典型形状 (真实好回答极少三者同时)。只记 flag 供人工复核,
+            # 不改追问/终止决策。
+            if _assessment_anomaly(assessment):
+                session.integrity_flags.append(
+                    f"assessment_anomaly:{answered_q.question_id}",
+                )
         except Exception:
             # Assessor 自己有 LLM->启发式双路径, 理论上 assess() 不会抛;
             # 真抛了一律静默吞, 让面试链路不受 Assessor 影响。

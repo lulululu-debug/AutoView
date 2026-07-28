@@ -936,21 +936,31 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
 > 防御限界(评审修正 4):指令注入可防;隐藏关键词堆砌型数据注入只有
 > "简历原文 HR 可见 + 人工复核"兜底,不宣称全防。
 
-- [ ] **task 1 wrap_untrusted 统一包装**:
+- [x] **task 1 wrap_untrusted 统一包装**:
       新增 src/llm/sanitize.py(`wrap_untrusted`:sha256(text) 派生 nonce 的
       边界标记,防伪造闭合且确定性可复现;`UNTRUSTED_NOTICE` 系统提示声明);
       接入 4 处候选人文本拼接点:Assessor user 模板 / Interviewer 追问 prompt /
       Evaluator summary transcript / Planner lazy 出题(intro_text + 简历段);
       Assessor prompt 变 → 重跑 sim/calibrate_assessor;
       evals/test_injection_guard.py(nonce 性质 / stub 路径行为不变)
-- [ ] **task 2 入库净化 + 标记**:
+      实际落地: 校准通过 —— 核心集 gap +0.489 (门槛 0.3), 对抗+守卫 8/8;
+      monkeypatch llm.complete 捕获 prompt 验证集成, 原文只包裹不过滤;
+      summary prompt 变更的 F7 忠实性审计随下次 sim 批次复验 (记入手动清单)。
+- [x] **task 2 入库净化 + 标记**:
       sanitize.py 增 `strip_invisible`(剥离零宽/双向控制/控制字符,幂等);
       resume 解析与 answer 提交两个入口接入;命中超阈值只标记
-      session.integrity_flags,finalize 置 needs_human_review,**不拦截**
-- [ ] **task 3 输出侧异常校验**:
+      session.integrity_flags,**不拦截**
+      实际落地: 剥完再判 MIN_TEXT_CHARS (不可见字符不给凑长度); 阈值 5
+      (单 BOM/零宽残留不误伤); ORM 补列 candidates.injection_suspected +
+      interview_sessions.integrity_flags (dev/test 已 ALTER), repository 贯通;
+      needs_human_review 现状恒 True, flags 先只落库审计, 未来条件化时必须并入。
+- [x] **task 3 输出侧异常校验**:
       assessment 落地点检测异常模式(sufficiency ≥ 0.95 且 missing_signals/
-      concerns 全空)→ integrity_flags;finalize 汇总置 needs_human_review;
+      concerns 全空)→ integrity_flags;
       EVALUATION.md 记录防御限界 + 真实 LLM 对抗测试手动清单
+      实际落地: `_assessment_anomaly` 纯函数 (不误伤带 signals 的正常高分);
+      EVALUATION.md 手段清单 +#13, 手动清单 3 项 (指令注入拉分复验 /
+      F7 忠实性 / 防御限界声明); evals 19 条, 全量 499 绿。
 
 **完成标准**:注入样本不改变任何决策路径行为(stub/启发式 evals 全绿),
 只多出人工复核标记;assessor 校准两组金标重跑通过;flags 不进 HR UI 明细
