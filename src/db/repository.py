@@ -12,6 +12,7 @@ from typing import Optional
 from src.db.base import session_scope
 from src.db.models import (
     CandidateORM,
+    DecisionTraceORM,
     EvaluationReportORM,
     InterviewPlanORM,
     InterviewSessionORM,
@@ -27,6 +28,7 @@ from src.db.models import (
 from src.schemas import (
     CandidateProfile,
     Dataset,
+    DecisionTrace,
     EvaluationReport,
     InterviewPlan,
     InterviewSession,
@@ -499,6 +501,32 @@ def load_session(session_id: str) -> Optional[InterviewSession]:
                 "integrity_flags": row.integrity_flags or [],
             }
         )
+
+
+# ---------- DecisionTrace (Sprint 8.2) ----------
+
+def save_decision_trace(trace: DecisionTrace) -> None:
+    """按 session_id upsert。finalize 归档单点调用; 失败由调用方决定兜底
+    (orchestrator 保留 Redis 副本至 TTL)。"""
+    payload = trace.model_dump(mode="json")
+    with session_scope() as s:
+        s.merge(DecisionTraceORM(
+            session_id=payload["session_id"],
+            spans=payload["spans"],
+            llm_calls=payload["llm_calls"],
+        ))
+
+
+def load_decision_trace(session_id: str) -> Optional[DecisionTrace]:
+    with session_scope() as s:
+        row = s.get(DecisionTraceORM, session_id)
+        if row is None:
+            return None
+        return DecisionTrace.model_validate({
+            "session_id": row.session_id,
+            "spans": row.spans or [],
+            "llm_calls": row.llm_calls or [],
+        })
 
 
 # ---------- EvaluationReport ----------

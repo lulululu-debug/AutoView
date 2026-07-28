@@ -28,6 +28,7 @@ from api.schemas import CandidateWithStatus, ResumeChunk, ReviewSubmit
 from src import auth, db, vector_store
 from src.agents import planner
 from src.schemas import (
+    DecisionTrace,
     EvaluationReport,
     InterviewPlan,
     InterviewSession,
@@ -243,6 +244,27 @@ def get_session(session_id: str, user: HrUser) -> InterviewSession:
             status_code=404, detail=f"session {session_id} 不存在",
         )
     return session
+
+
+@router.get("/sessions/{session_id}/trace", response_model=DecisionTrace)
+def get_session_trace(session_id: str, user: HrUser) -> DecisionTrace:
+    """Sprint 8.2: 决策 trace 审计导出 (EU AI Act Art.12 "决策可重构")。
+
+    权限同 review 流程 (session -> job 派生归属, 越权 404); **不进 HR UI
+    页面** —— 这是审计/合规导出接口, 前端不渲染, 含 prompt 全文与内部
+    决策数值, 只给需要出审计材料的场景用。"""
+    session = db.load_session(session_id)
+    if session is None or not _can_access(db.load_job(session.job_id), user):
+        raise HTTPException(
+            status_code=404, detail=f"session {session_id} 不存在",
+        )
+    tr = db.load_decision_trace(session_id)
+    if tr is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"session {session_id} 无归档 trace (旧数据或归档失败)",
+        )
+    return tr
 
 
 @router.get("/reports/{report_id}", response_model=EvaluationReport)
