@@ -359,6 +359,12 @@ class FollowUpPolicy(BaseModel):
     #   见 src/beliefs.py 数值表
     total_followup_budget: int = 5
     min_variance_to_probe: float = 0.03
+    # 8.3 首轮 sim 复验的教训 (batch-20260728-s83): 追问在本系统同时是
+    # 候选人的 second chance (追问回答挂父题按 best-of 计分), 只按"证据够"
+    # 停probe 会砍掉 medium 档的翻盘机会 (lateral-medium 63->45 回归)。
+    # 方差门必须加均值条件: 证据足 **且该维度已确立为佳** (mean >= 本值,
+    # 校准概率空间) 才停止消耗预算 —— 强者省预算, 中弱档保留追问权。
+    min_established_mean: float = 0.8
 
     @classmethod
     def for_stage(cls, stage: "InterviewStage") -> "FollowUpPolicy":

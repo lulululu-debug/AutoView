@@ -53,11 +53,20 @@ def _high_var(cid: str) -> CompetencyBelief:
     return initial_belief(cid)  # variance 0.25
 
 
-def _low_var(cid: str) -> CompetencyBelief:
+def _low_var_high_mean(cid: str) -> CompetencyBelief:
+    """证据足且已确立为佳: variance ~0.021 < 0.03, mean ~0.87 >= 0.8。"""
+    b = None
+    for _ in range(4):
+        b = update_belief(b, cid, 0.92)
+    return b
+
+
+def _low_var_low_mean(cid: str) -> CompetencyBelief:
+    """证据足但未达标: variance ~0.021 < 0.03, mean ~0.5 < 0.8。"""
     b = None
     for _ in range(4):
         b = update_belief(b, cid, 0.5)
-    return b  # variance ~0.021 < 0.03
+    return b
 
 
 class SchedulingDecisionTests(unittest.TestCase):
@@ -69,7 +78,7 @@ class SchedulingDecisionTests(unittest.TestCase):
         self.policy = FollowUpPolicy(max_followups_per_question=2)
 
     def test_budget_flows_to_high_variance(self) -> None:
-        """同样的低校准分: 高方差维度追问, 低方差维度不追 (证据已足)。"""
+        """同样的低校准分: 高方差维度追问; 低方差且已确立为佳的维度不追。"""
         low_cal = _aa(self.q, 0.5)
         self.assertTrue(self.decide(
             self.q, self.ans, low_cal, self.policy, 0,
@@ -77,7 +86,16 @@ class SchedulingDecisionTests(unittest.TestCase):
         ))
         self.assertFalse(self.decide(
             self.q, self.ans, low_cal, self.policy, 0,
-            belief=_low_var("c1"), total_followups=0,
+            belief=_low_var_high_mean("c1"), total_followups=0,
+        ))
+
+    def test_low_variance_low_mean_still_probes(self) -> None:
+        """s83 复验教训: 证据足但未达标 (mean<0.8) 必须保留追问 ——
+        追问是候选人的 second chance, 不能只因'问过几次'就放弃该维度。"""
+        low_cal = _aa(self.q, 0.5)
+        self.assertTrue(self.decide(
+            self.q, self.ans, low_cal, self.policy, 0,
+            belief=_low_var_low_mean("c1"), total_followups=0,
         ))
 
     def test_global_budget_exhausted_stops(self) -> None:
@@ -101,7 +119,7 @@ class SchedulingDecisionTests(unittest.TestCase):
         raw_low = _aa(self.q, None, raw=0.4)
         self.assertTrue(self.decide(
             self.q, self.ans, raw_low, self.policy, 0,
-            belief=_low_var("c1"), total_followups=99,
+            belief=_low_var_high_mean("c1"), total_followups=99,
         ))
         raw_high = _aa(self.q, None, raw=0.7)
         self.assertFalse(self.decide(
@@ -193,7 +211,7 @@ class NextTurnIntegrationTests(unittest.TestCase):
         self.assertIsInstance(
             self.interviewer.next_turn(s_high, plan, job=None), FollowUp,
         )
-        s_low, plan2 = self._fixture(_low_var("c1"))
+        s_low, plan2 = self._fixture(_low_var_high_mean("c1"))
         nxt = self.interviewer.next_turn(s_low, plan2, job=None)
         self.assertIsInstance(nxt, Question)  # 不追问, 推进下一题
 
