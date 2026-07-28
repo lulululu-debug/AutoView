@@ -349,6 +349,25 @@ def _submit_answer_inner(session_id: str, answer_text: str) -> TurnResult:
             )
 
     nxt = interviewer.next_turn(session, plan, job=job_for_decision)
+
+    # Sprint 8.4 task 2: stage 收尾 (下一题类别不同 / 面试结束) -> 一次
+    # reflection 蒸馏该 stage 的记忆条目。LLM 失败/stub/超时一律跳过,
+    # 纯旁路, 不影响面试推进。
+    if answered_q is not None and (
+        nxt is None
+        or (isinstance(nxt, Question) and nxt.category != answered_q.category)
+    ):
+        before = len(session.candidate_model.claims)
+        with trace.span_label("stage_reflection"):
+            session.candidate_model = cm_mod.reflect_stage(
+                session.candidate_model, answered_q.category.value,
+            )
+        trace.record_decision(
+            "stage_reflection", stage=answered_q.category.value,
+            claims_before=before,
+            claims_after=len(session.candidate_model.claims),
+        )
+
     if nxt is None:
         session.status = SessionStatus.COMPLETED
         cache.save_session(session)

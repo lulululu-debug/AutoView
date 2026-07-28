@@ -20,6 +20,7 @@ Orchestrator 负责将返回值写入 session.history, 并补上候选人答复�
 from __future__ import annotations
 
 from src import beliefs as beliefs_mod
+from src import candidate_model as cm_mod
 from src import llm, trace
 from src.llm import sanitize
 from src.coverage import (
@@ -136,9 +137,11 @@ def _followup_text(
     question: Question,
     answer: CandidateAnswer,
     assessment: AnswerAssessment | None,
+    doubted: list[str] | None = None,
 ) -> str:
     """生成追问文本。
     Sprint 5.6 起 assessment.followup_goal 拼进 prompt 让 LLM 聚焦缺什么;
+    Sprint 8.4 起 doubted (CandidateModel 存疑条目) 作澄清目标注入;
     LLM stub / 失败时退到通用模板 (有 followup_goal 也拼进模板)。"""
     fallback_generic = (
         "能再展开一个具体的例子吗? 比如当时面对的约束、你做的取舍, 以及最终结果。"
@@ -152,18 +155,26 @@ def _followup_text(
         missing_hint = (
             "候选人当前回答缺失: " + "; ".join(assessment.missing_signals) + "\n"
         )
+    doubt_hint = ""
+    if doubted:
+        doubt_hint = (
+            "此前阶段记录的存疑点: " + "; ".join(doubted)
+            + "\n若与本题相关, 追问可顺带澄清最相关的一条。\n"
+        )
 
     wrapped_answer = sanitize.wrap_untrusted(answer.text, "候选人回答")
     text = llm.complete(
         _FOLLOWUP_SYSTEM,
         f"问题: {question.text}\n候选人回答: {wrapped_answer}\n"
-        f"{missing_hint}{goal_hint}请输出追问:",
+        f"{missing_hint}{goal_hint}{doubt_hint}请输出追问:",
         max_tokens=160,
     )
     if not text or llm.is_stub(text):
         # LLM 不可用; fallback 模板 + goal 一起拼, 即使没 LLM 也比泛泛模板聚焦
         if assessment is not None and assessment.followup_goal.strip():
             return f"能聚焦讲一下: {assessment.followup_goal.strip()}"
+        if doubted:
+            return f"能澄清一下: {doubted[0]}"
         return fallback_generic
     return text
 
@@ -311,8 +322,17 @@ def next_turn(
             via="assessment" if assessment is not None else "heuristic",
         )
         if wants_followup:
+            # Sprint 8.4: 该题 competency 此前的存疑条目 -> 澄清目标注入
+            # (只读 CandidateModel; 走既有配额, 不加问数)
+            doubted = [
+                c.claim for c in cm_mod.doubted_claims(
+                    session.candidate_model, current_q.competency_id,
+                )
+            ][:2]
             with trace.span_label("followup_text"):
-                text = _followup_text(current_q, latest, assessment)
+                text = _followup_text(
+                    current_q, latest, assessment, doubted=doubted,
+                )
             return FollowUp(
                 parent_question_id=current_q.question_id,
                 text=text,

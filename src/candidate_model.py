@@ -162,6 +162,102 @@ def _same_direction(a: ClaimStatus, b: ClaimStatus) -> bool:
     )
 
 
+# ---------- stage reflection (Sprint 8.4 task 2, 唯一新 LLM 调用) ----------
+
+REFLECT_TIMEOUT_SECONDS = 10.0
+_REFLECT_MODEL = "gpt-4o-mini"      # 与 Assessor 同款: 便宜快, 不读 env
+
+_REFLECT_SYSTEM = (
+    "你在维护一份面试候选人的结构化记忆。下面给出同一面试阶段沉淀的多条"
+    "结论条目 (id / 方向 / 文本)。任务: 找出**讲同一件事**的条目分组, 并为"
+    "每组给出一句合并后的中文改写。\n"
+    "硬约束:\n"
+    "1. 只能分组语义上确属同一事实的条目; 拿不准就不分组。\n"
+    "2. 改写只能基于条目原文措辞, 禁止引入任何新事实、新数字、新评价。\n"
+    "3. 方向不同 (正向 vs 存疑) 的条目**绝不**分到一组。\n"
+    '严格输出 JSON: {"groups": [{"ids": ["id1", "id2"], "text": "合并改写"}]}, '
+    "没有可合并的输出 {\"groups\": []}, 不要任何解释或代码块标记。"
+)
+
+
+def reflect_stage(
+    model: CandidateModel, stage_category: str,
+) -> CandidateModel:
+    """stage 收尾时蒸馏合并该 stage 的条目 (Generative Agents 式 reflection)。
+
+    LLM 只判"语义是否同一件事" (分组), 合并动作本身是确定性的
+    (evidence 并集 / 状态取更强 / 方向不同的组直接拒绝) —— 不让 LLM
+    仲裁结论。stub / 超时 / 解析失败 / 非法分组 -> 原样返回 (失败跳过)。
+    """
+    from src import llm  # 延迟 import: 纯规则路径不摸 llm
+
+    candidates = [
+        c for c in model.claims
+        if c.source_stage == stage_category
+        and c.status is not ClaimStatus.CONTRADICTED
+    ]
+    if len(candidates) < 2:
+        return model
+
+    # 序号做引用而不用 claim_id: uuid 进 prompt 会让 request_hash 每 run
+    # 不同, 破坏 golden/frozen 的确定性 (golden 录制自检抓过这个坑)
+    lines = "\n".join(
+        f"- id={i + 1} 方向={'存疑' if c.status is ClaimStatus.DOUBTED else '正向'}"
+        f" 文本={c.claim}"
+        for i, c in enumerate(candidates)
+    )
+    try:
+        raw = llm.complete(
+            _REFLECT_SYSTEM,
+            f"阶段: {stage_category}\n条目:\n{lines}\n请输出分组 JSON:",
+            model=_REFLECT_MODEL,
+            max_tokens=500,
+            timeout=REFLECT_TIMEOUT_SECONDS,
+        )
+        if not raw or llm.is_stub(raw):
+            return model
+        import json as _json
+        groups = _json.loads(raw).get("groups", [])
+    except Exception:
+        log.warning("stage reflection 失败, 跳过 (stage=%s)", stage_category)
+        return model
+
+    by_prefix = {str(i + 1): c for i, c in enumerate(candidates)}
+    merged_away: set[str] = set()
+    claims = [c.model_copy(deep=True) for c in model.claims]
+    by_id = {c.claim_id: c for c in claims}
+
+    for g in groups:
+        ids = [str(i) for i in (g.get("ids") or [])]
+        text = str(g.get("text") or "").strip()
+        members = [by_prefix[i] for i in ids if i in by_prefix]
+        # 确定性守卫: >=2 条 / 同方向 / 同 competency / 改写非空 / 未被并过
+        if len(members) < 2 or not text or len(text) > 200:
+            continue
+        if any(m.claim_id in merged_away for m in members):
+            continue
+        directions = {m.status is ClaimStatus.DOUBTED for m in members}
+        comps = {m.competency_id for m in members}
+        if len(directions) != 1 or len(comps) != 1:
+            continue
+        head = by_id[members[0].claim_id]
+        head.claim = text
+        for m in members[1:]:
+            for ev in by_id[m.claim_id].evidence:
+                if ev not in head.evidence:
+                    head.evidence.append(ev)
+            if by_id[m.claim_id].status is ClaimStatus.VERIFIED:
+                head.status = ClaimStatus.VERIFIED  # 状态取更强
+            merged_away.add(m.claim_id)
+
+    if not merged_away:
+        return model
+    return CandidateModel(
+        claims=[c for c in claims if c.claim_id not in merged_away],
+        contradictions=[list(p) for p in model.contradictions],
+    )
+
+
 def doubted_claims(
     model: CandidateModel, competency_id: str | None = None,
 ) -> list[SkillClaim]:
