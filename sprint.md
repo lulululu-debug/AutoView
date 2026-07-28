@@ -1172,7 +1172,7 @@ belief/校准数字对 HR 与候选人不可见。
 > - Assessor 的 rubric 判定放**条件 user 块**(有 rubric 才拼),system
 >   prompt 不动 → 校准金标 prompt 逐字节不变,不触发重校准级联。
 
-- [ ] **task 1 per-question rubric + 命中率进分**:
+- [x] **task 1 per-question rubric + 命中率进分**:
       Question.rubric: list[str](plan 生成,3-6 条二元项;stub 走分类别
       模板;lazy project 题在 resolve 时生成);Assessor 条件 user 块逐项
       判定 → AnswerAssessment.rubric_hits: list[bool](长度不匹配 → 弃用
@@ -1182,7 +1182,7 @@ belief/校准数字对 HR 与候选人不可见。
       eval:rubric 随 plan 固定 / hits 与分单调 / 兼容路径;golden 重录;
       **frozen 批次复验**(评估端变更,frozen Δ 就是本变更的效果)+
       区分度不塌
-- [ ] **task 2 小型裁判团(默认关)**:
+- [x] **task 2 小型裁判团(默认关)**:
       finalize 时对每维度 3 judge(EVAL_PANEL_MODELS)独立打分取中位数;
       极差 > 阈值 → 该维度 judge_disagreement → needs_human_review;
       任一 judge 失败剩余继续,全挂退回 assessment 公式路径(现主路径变
@@ -1190,13 +1190,21 @@ belief/校准数字对 HR 与候选人不可见。
       与追问生成模型强制不同名(config 校验);EVAL_PANEL_ENABLED 默认
       false,过 MAE 门禁前不开;eval:中位数聚合 / 部分失败降级 / 全挂
       回退 / 分离校验(stub 模拟)
-- [ ] **task 3 MAE 校准门禁脚手架 + 复验收尾**:
+- [x] **task 3 MAE 校准门禁脚手架 + 复验收尾**:
       evals/data/report_score_labels.json 标注模板(report_id + 人工
       overall + 维度分;附标注指引)+ sim/calibrate_evaluator.py(线性/
       单调映射拟合 + MAE 门禁,无标注优雅跳过并打印指引);
       panel 开启条件写死:MAE 门禁通过 + 用户确认;
       EVALUATION.md 手段 #16 + 记账;frozen/生成式复验记录;CLAUDE.md
       「不要做的事」补:MAE 未过门禁不许开 panel
+
+**实际落地**(2026-07-28):task 1 经 frozen 驱动的三轮 prompt 迭代定稿
+(f 判定过宽 → f2 收紧但有效率 26% → f3 定位根因"mini 严格照 JSON schema
+块输出、旁述字段被丢" → f4 写进 schema 块, 有效率 100%);f4 指标:区分度
+6/6、copy-paste 压制 -8.2→-11.8(rubric 核心收益)、strong 端一致性量表
+下移非随机惩罚,f4 为新冻结基线。task 2 panel 就绪默认关, 裁判/生成模型
+强制不同名, 全挂回退公式→启发式链不断。task 3 标注模板+MAE 门禁脚本可跑
+(空标注优雅跳过);CLAUDE.md 红线:MAE 未过不许开 panel。全量 577 绿。
 
 **完成标准**:rubric 全链路(plan 生成→assessor 判定→评分组合)stub/真
 LLM 双路径工作且老 plan 兼容;frozen 复验 Δ 可解释、区分度 6/6 不塌;

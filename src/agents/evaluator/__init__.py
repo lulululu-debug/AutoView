@@ -18,8 +18,9 @@ Sprint 3-7 RAG: 召回 JD + 公司资料切片做 context-aware summary。
 from __future__ import annotations
 
 import logging
+import os
 
-from src import embeddings, llm, vector_store
+from src import embeddings, llm, trace, vector_store
 from src.coverage import compute_coverage, insufficient_competencies
 from src.llm import sanitize
 from src.schemas import (
@@ -68,6 +69,94 @@ _SPECIFICITY_KEYWORDS = ("例如", "比如", "当时", "结果", "我们", "用�
 # Sprint 8.5: rubric 命中率在题级质量里的权重 (sufficiency 占 1-w)。
 # 初始 0.3 偏保守; 调整 = 评估端变更, 必须 frozen 复验 + 区分度不塌。
 RUBRIC_WEIGHT = 0.3
+
+# ---------- Sprint 8.5 task 2: 小型裁判团 (默认关) ----------
+# EVAL_PANEL_ENABLED 默认 false: MAE 校准门禁 (sim/calibrate_evaluator)
+# 通过 + 用户确认前不进主路径。开启后 panel 中位数**替代** assessment 公式
+# 分; panel 全挂退回公式路径, 公式再挂退启发式 —— fallback 链不断。
+# 限界: 单 provider 下是"伪异构" (同家族不同模型, Nine Judges: 错误相关
+# → 有效票 < 3); 接第二家族改 EVAL_PANEL_MODELS + OPENAI_BASE_URL 网关。
+PANEL_DISAGREEMENT_RANGE = 25.0     # 极差 >= 此值 -> judge_disagreement
+_PANEL_TIMEOUT_SECONDS = 15.0
+_PANEL_DEFAULT_MODELS = "gpt-4.1-mini,gpt-4o,gpt-4.1"
+
+_PANEL_SYSTEM = (
+    "你是招聘评分裁判。根据候选人在某个考察维度下的问答记录, 给出 0-100 的"
+    "维度评分。评分依据: 回答的具体性与第一人称细节、量化结果、决策理由与"
+    "取舍; 内容正确但泛泛而谈给中低分; 跑题/敷衍给低分。\n"
+    '严格输出 JSON: {"score": <0-100 数字>}, 不要任何解释。'
+)
+
+
+def _panel_enabled() -> bool:
+    return os.environ.get("EVAL_PANEL_ENABLED", "").lower() in ("1", "true", "yes")
+
+
+def _panel_models() -> list[str]:
+    """裁判与生成分离 (Self-Preference Bias): 与追问生成模型 (llm.DEFAULT_MODEL)
+    同名的 judge 被剔除, 记 log —— config 校验而非静默共用。"""
+    raw = os.environ.get("EVAL_PANEL_MODELS", _PANEL_DEFAULT_MODELS)
+    models = [m.strip() for m in raw.split(",") if m.strip()]
+    out = []
+    for m in models:
+        if m == llm.DEFAULT_MODEL:
+            log.warning(
+                "panel judge %s 与追问生成模型同名, 剔除 (裁判与生成分离)", m,
+            )
+            continue
+        out.append(m)
+    return out
+
+
+def _panel_score_dimension(
+    comp: Competency,
+    questions: list[Question],
+    session: InterviewSession,
+) -> tuple[float, bool] | None:
+    """3 judge 独立打分取中位数。返回 (median, disagreement) 或 None (全挂)。
+    任一 judge 失败剩余继续; stub 视为失败 (panel 不许在无 key 环境假装打分)。"""
+    import statistics as _stats
+
+    comp_q = {
+        q.question_id: q.text for q in questions
+        if q.competency_id == comp.competency_id
+    }
+    qa_lines = []
+    for a in session.answers:
+        if a.question_id in comp_q:
+            qa_lines.append(
+                f"[问] {comp_q[a.question_id]}\n[答] {a.text}"
+            )
+    if not qa_lines:
+        return None
+    user = (
+        f"考察维度: {comp.name} —— {comp.description}\n\n问答记录:\n"
+        + sanitize.wrap_untrusted("\n---\n".join(qa_lines), "候选人问答记录")
+        + "\n\n请输出评分 JSON:"
+    )
+
+    scores: list[float] = []
+    for model_name in _panel_models():
+        try:
+            raw = llm.complete(
+                _PANEL_SYSTEM, user,
+                model=model_name, max_tokens=60,
+                timeout=_PANEL_TIMEOUT_SECONDS,
+            )
+            if not raw or llm.is_stub(raw):
+                continue
+            import json as _json
+            import re as _re
+            m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+            val = float(_json.loads(m.group(0))["score"])
+            scores.append(min(100.0, max(0.0, val)))
+        except Exception:
+            log.warning("panel judge %s 失败, 跳过", model_name)
+    if not scores:
+        return None
+    median = round(float(_stats.median(scores)), 1)
+    disagreement = (max(scores) - min(scores)) >= PANEL_DISAGREEMENT_RANGE
+    return median, disagreement
 
 # 召回 JD + 公司资料的 top-K, 拼起来当 LLM 总结的上下文
 _RAG_TOP_K = 4
@@ -344,6 +433,32 @@ def evaluate(
     questions = [q for r in plan.rounds for q in r.questions]
 
     content_scores = [_score_for_competency(c, questions, session) for c in comps]
+
+    # Sprint 8.5 task 2: 裁判团 (默认关, MAE 门禁前不开)。panel 中位数替代
+    # 公式分; 全挂保留公式分 (fallback 链: panel -> assessment 公式 -> 启发式)。
+    if _panel_enabled():
+        for i, ds in enumerate(content_scores):
+            if ds is None:
+                continue
+            comp = next(
+                c for c in comps if c.competency_id == ds.competency_id
+            )
+            panel = _panel_score_dimension(comp, questions, session)
+            trace.record_decision(
+                "panel_score", competency_id=comp.competency_id,
+                panel_used=panel is not None,
+                median=panel[0] if panel else None,
+                disagreement=panel[1] if panel else None,
+                formula_score=ds.score,
+            )
+            if panel is None:
+                continue
+            median, disagreement = panel
+            content_scores[i] = ds.model_copy(update={"score": median})
+            if disagreement:
+                session.integrity_flags.append(
+                    f"judge_disagreement:{comp.competency_id}",
+                )
 
     total_weight = sum(c.weight for c in comps) or 1.0
     overall = round(
