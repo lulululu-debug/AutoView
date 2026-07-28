@@ -144,13 +144,17 @@ def assess(
             followup_goal="请针对本题给出独立的回答, 不要复用前面的答案",
             stop_reason="",
             covered_aspects=[],
+            via="rule_duplicate",  # Sprint 8.2 审计标注
         )
 
     relevant_aspects = _relevant_aspects(question, job)
     # 优先走 LLM; 任何异常 (超时 / API 报错 / JSON 解析失败 / schema 校验失败)
     # 一律 fallback 到启发式, 让 Interviewer 始终能拿到一个有效 AnswerAssessment。
     try:
-        return _assess_via_llm(question, answer, relevant_aspects)
+        # Sprint 8.2: via 标注走的路径 (纯审计, 进 trace 的 assess span)
+        return _assess_via_llm(
+            question, answer, relevant_aspects,
+        ).model_copy(update={"via": "llm"})
     except _LLMStubFallback:
         # 期望中的 stub 路径 (dev / eval), 不写 log.exception 防噪
         pass
@@ -159,7 +163,9 @@ def assess(
             "Assessor LLM 路径失败, 走启发式 fallback (question_id=%s)",
             question.question_id,
         )
-    return _heuristic_assessment(question, answer, relevant_aspects)
+    return _heuristic_assessment(
+        question, answer, relevant_aspects,
+    ).model_copy(update={"via": "heuristic"})
 
 
 # 答案过短时不算复制粘贴 ("不知道" / "好的" 这种天然会重复, 不能误判).

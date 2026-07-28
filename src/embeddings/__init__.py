@@ -18,8 +18,11 @@ OPENAI_BASE_URL 可覆盖, 兼容代理 / 私有部署。
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import time
 
+from src import trace
 from src.cache import embedding_cache
 
 EMBEDDING_DIM = 1536  # text-embedding-3-small 默认维度
@@ -39,26 +42,44 @@ def embed(text: str, *, model: str | None = None) -> list[float]:
         # 空字符串特殊处理: 不调 API, 直接 stub。比让 API 报错或返奇怪结果好。
         return _stub_vector()
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return _stub_vector()
-
     resolved_model = model or DEFAULT_MODEL
     cache_key = embedding_cache.make_key(text, resolved_model)
 
+    # Sprint 8.2: embedding 只录摘要不回放 (限界见 src/trace 模块注)
+    def _record(vector: list[float], path: str, latency_ms: float = 0.0) -> None:
+        digest = hashlib.sha256(
+            ",".join(f"{v:.6f}" for v in vector[:8]).encode()
+        ).hexdigest()[:16]
+        trace.record_llm(
+            kind="embedding", request_hash=cache_key, model=resolved_model,
+            user=text, response=f"vector:{digest}",
+            path=path, latency_ms=latency_ms,
+        )
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        vec = _stub_vector()
+        _record(vec, "stub")
+        return vec
+
     cached = embedding_cache.get(cache_key)
     if cached is not None:
+        _record(cached, "cache")
         return cached
 
     try:
         from openai import OpenAI
     except ImportError:
-        return _stub_vector()
+        vec = _stub_vector()
+        _record(vec, "stub")
+        return vec
 
     base_url = os.environ.get("OPENAI_BASE_URL") or None
     client = OpenAI(api_key=api_key, base_url=base_url)
+    _t0 = time.monotonic()
     resp = client.embeddings.create(model=resolved_model, input=text)
     vector = list(resp.data[0].embedding)
+    _record(vector, "llm", latency_ms=(time.monotonic() - _t0) * 1000.0)
 
     if vector and not is_stub_vector(vector):
         embedding_cache.set(cache_key, vector)

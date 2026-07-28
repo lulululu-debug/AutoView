@@ -30,6 +30,11 @@ from src.cache.session_store import (
     load_session,
     save_session,
 )
+from src.cache.trace_store import (
+    delete_trace,
+    load_trace,
+    save_trace,
+)
 
 __all__ = [
     "RedisNotConfigured",
@@ -42,4 +47,7 @@ __all__ = [
     "delete_session",
     "load_session",
     "save_session",
+    "delete_trace",
+    "load_trace",
+    "save_trace",
 ]

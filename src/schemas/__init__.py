@@ -313,6 +313,10 @@ class AnswerAssessment(BaseModel):
     # 然后判定回答里实际触达了哪些。整轮所有 covered_aspects 的并集 / 全 aspect
     # = profile_richness. 老 AnswerAssessment 缺该字段时默认 [] (不影响 richness 计算)。
     covered_aspects: list[str] = []
+    # Sprint 8.2: 本条 assessment 走的路径 —— "llm" | "heuristic" |
+    # "rule_duplicate" (复制粘贴硬规则短路)。纯审计标注 (进 trace 的 assess
+    # span), 不参与任何决策; 老数据缺省空串。
+    via: str = ""
 
 
 class FollowUpPolicy(BaseModel):
@@ -465,6 +469,47 @@ class Signal(BaseModel):
     value: str                               # 描述性, 非分数
     confidence: float                        # 0~1
     source: str                              # 来源说明(便于审计)
+
+
+# ---------- 决策 Trace (Sprint 8.2) ----------
+
+class LLMCallRecord(BaseModel):
+    """单次 LLM / embedding 调用录制 (Sprint 8.2)。
+
+    request_hash 与 LLM 缓存 key 同源 (canonical json 的 sha256), 是确定性
+    回放的查找键。prompt / response 存全文 ("决策可重构" 要求, EU AI Act
+    Art.12); embedding 只存向量摘要 —— 只录不回放, 限界见 src/trace 模块注。
+    内部审计数据: 不进 HR UI, 不参与任何决策。"""
+    record_id: str = Field(default_factory=_new_id)
+    kind: str                                # "chat" | "chat_vision" | "embedding"
+    request_hash: str
+    model: str                               # OTel gen_ai.request.model
+    system: str = ""                         # chat: system prompt 全文
+    user: str = ""                           # chat: user prompt 全文; embedding: 原文
+    response: str = ""                       # chat: 返回文本; embedding: sha256 摘要
+    path: str                                # "llm" | "cache" | "stub"
+    latency_ms: float = 0.0                  # diff 时剔除
+    span: str = ""                           # 归属决策环节标签 (如 "assess"), 可空
+
+
+class DecisionSpan(BaseModel):
+    """一次决策的结构化依据 (Sprint 8.2)。
+
+    attributes 记录决策类型对应的**实际数值** (阈值、比较值、走了哪条路径),
+    让 "为何追问 / 为何结束" 可从 trace 重构。diff 时剔除 *_id / ts。"""
+    span_id: str = Field(default_factory=_new_id)
+    name: str                                # assess / followup_decision / completion_check / lazy_gen / session_start / finalize
+    question_id: str = ""
+    attributes: dict = {}
+    ts: float = 0.0                          # epoch 秒
+
+
+class DecisionTrace(BaseModel):
+    """一场面试的完整决策 trace。Redis 与 session 同 TTL 热存,
+    finalize 归档 PG decision_traces (Sprint 8.2 task 2)。"""
+    session_id: str
+    spans: list[DecisionSpan] = []
+    llm_calls: list[LLMCallRecord] = []
 
 
 # ---------- 评估报告 ----------

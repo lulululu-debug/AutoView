@@ -22,7 +22,9 @@ import base64
 import hashlib
 import logging
 import os
+import time
 
+from src import trace
 from src.cache import llm_cache
 
 DEFAULT_MODEL = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
@@ -48,12 +50,22 @@ def complete(
     timeout: openai SDK 级超时 (秒), Sprint 5.6 Assessor 用 10s 限制延迟突发;
     None = SDK 默认 (无显式超时)。超时会抛 openai.APITimeoutError, 调用方
     负责 try/except 把它降级到启发式 fallback。"""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return _stub(user)
-
     resolved_model = model or DEFAULT_MODEL
     cache_key = llm_cache.make_key(system, user, resolved_model, max_tokens)
+
+    # Sprint 8.2: 录制辅助 —— 单点挂钩, 活动 trace 不存在时 no-op
+    def _record(response: str, path: str, latency_ms: float = 0.0) -> None:
+        trace.record_llm(
+            kind="chat", request_hash=cache_key, model=resolved_model,
+            system=system, user=user, response=response,
+            path=path, latency_ms=latency_ms,
+        )
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        stub = _stub(user)
+        _record(stub, "stub")
+        return stub
 
     if _trace_enabled():
         # 全文打 prompt; 跑大面试时 user 体积可能很大 (resume + RAG chunks),
@@ -69,12 +81,15 @@ def complete(
         if _trace_enabled():
             log.info("LLM cache HIT key=%s\n=== CACHED RESULT ===\n%s\n=== END ===",
                      cache_key, cached)
+        _record(cached, "cache")
         return cached
 
     try:
         from openai import OpenAI
     except ImportError:
-        return _stub(user)
+        stub = _stub(user)
+        _record(stub, "stub")
+        return stub
 
     base_url = os.environ.get("OPENAI_BASE_URL") or None
     client = OpenAI(api_key=api_key, base_url=base_url)
@@ -88,8 +103,10 @@ def complete(
     }
     if timeout is not None:
         create_kwargs["timeout"] = timeout
+    _t0 = time.monotonic()
     resp = client.chat.completions.create(**create_kwargs)
     result = (resp.choices[0].message.content or "").strip()
+    _record(result, "llm", latency_ms=(time.monotonic() - _t0) * 1000.0)
 
     if _trace_enabled():
         log.info(
@@ -122,10 +139,6 @@ def complete_vision(
     与 complete() 一致的约束: stub / 空不入缓存。走 gpt-4o 系列 (默认模型
     gpt-4o-mini 支持 vision); 若 OPENAI_CHAT_MODEL 被配成不支持 vision 的
     模型, 调用会 API 报错, 由上游 (resume_parser) 包装成 ResumeParseError。"""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return _stub(user)
-
     resolved_model = model or DEFAULT_MODEL
     # cache key 必须含图片内容, 否则不同图片同 (system,user) 会命中同一条
     img_digest = hashlib.sha256(b"".join(raw for _, raw in images)).hexdigest()
@@ -133,14 +146,31 @@ def complete_vision(
         system, f"{user}|vision:{img_digest}", resolved_model, max_tokens,
     )
 
+    def _record(response: str, path: str, latency_ms: float = 0.0) -> None:
+        # Sprint 8.2: user 不含图片原始字节 (hash 已进 cache_key), 只录文本
+        trace.record_llm(
+            kind="chat_vision", request_hash=cache_key, model=resolved_model,
+            system=system, user=user, response=response,
+            path=path, latency_ms=latency_ms,
+        )
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        stub = _stub(user)
+        _record(stub, "stub")
+        return stub
+
     cached = llm_cache.get(cache_key)
     if cached is not None:
+        _record(cached, "cache")
         return cached
 
     try:
         from openai import OpenAI
     except ImportError:
-        return _stub(user)
+        stub = _stub(user)
+        _record(stub, "stub")
+        return stub
 
     base_url = os.environ.get("OPENAI_BASE_URL") or None
     client = OpenAI(api_key=api_key, base_url=base_url)
@@ -161,8 +191,10 @@ def complete_vision(
     }
     if timeout is not None:
         create_kwargs["timeout"] = timeout
+    _t0 = time.monotonic()
     resp = client.chat.completions.create(**create_kwargs)
     result = (resp.choices[0].message.content or "").strip()
+    _record(result, "llm", latency_ms=(time.monotonic() - _t0) * 1000.0)
 
     if result and not is_stub(result):
         llm_cache.set(cache_key, result)
