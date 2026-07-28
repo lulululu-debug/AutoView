@@ -140,8 +140,19 @@ def start_session(
     内存路径(run_interview / src.main / 旧 eval) 不传, 由 planner 现场生成
     (backward compat)。
     """
-    if plan is None:
-        plan = planner.plan(job, candidate)
+    # Sprint 8.2: trace 在 plan 生成前就激活 (session_id 随后补) —— 内存路径
+    # 的 plan 生成 LLM 调用必须进录制, 否则确定性回放在 plan 阶段就 miss。
+    # API 路径 plan 预生成传入, 本分支不跑, 其 plan 调用不在 trace (候选人
+    # 上传时后台生成, 归 planner eval 体系管)。
+    trace_obj = DecisionTrace(session_id="pending")
+    token = trace.activate(trace_obj)
+    try:
+        if plan is None:
+            with trace.span_label("plan_gen"):
+                plan = planner.plan(job, candidate)
+    except BaseException:
+        trace.deactivate(token)
+        raise
     # Sprint 5.5 task 4: lazy 占位题不再在 start_session 回灌. 改在 submit_answer
     # 检测到"下一题是 lazy + text 空"时, 用 session.intro_text + Resume RAG 现场
     # resolve. 这样 lateral / campus 都自然在候选人答完 self_intro 之后才生成
@@ -155,11 +166,7 @@ def start_session(
     if candidate.injection_suspected:
         session.integrity_flags.append("resume_invisible_chars")
 
-    # Sprint 8.2: 从 session 诞生起挂 trace (plan 生成在 session 之前, 不在
-    # trace 范围 —— trace 的对象是"这场面试的决策", plan 可复现性由 planner
-    # eval 体系守)
-    trace_obj = DecisionTrace(session_id=session.session_id)
-    token = trace.activate(trace_obj)
+    trace_obj.session_id = session.session_id
     try:
         trace.record_decision(
             "session_start", plan_id=plan.plan_id,

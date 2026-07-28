@@ -88,6 +88,7 @@
 | 10 | **RAG 检索指标** | 题库召回 hit@5(≥80%)/ 污染@5(=0,F6 验收线)/ 标签完整性 / documents fixture 召回 | `python -m sim.rag_metrics` | 确定性金标,只花 embedding(分厘级);破线 exit 1 |
 | 11 | **HR 复核回流统计** | 复核率 / 分数-决策同向性(recommend>borderline>reject 应单调)/ 改分率 + 维度 \|Δ\| / 证据不足×决策交叉 | `python -m scripts.review_stats` | 零 LLM 只读 PG;纯函数 + 7 条单元护栏;待真实复核数据 |
 | 13 | **注入防御结构护栏**(Sprint 8.1) | wrap_untrusted 边界性质(nonce 防伪造闭合)/ 四接入点 prompt 集成 / strip_invisible 幂等 / 输出侧异常形状 / stub 路径行为不变 | `python -m unittest evals.test_injection_guard` | 19 条,全绿 |
+| 14 | **golden trace 决策回归**(Sprint 8.2) | 3 场典型 stub 面试确定性回放后决策序列逐项 diff(追问/结束/评估的依据数值 + 全部 LLM 请求哈希与响应);改 prompt / policy 阈值在这里变红属**预期信号** | `python -m unittest evals.test_trace_replay`;确认变化合理后 `python -m scripts.record_golden_traces` 重录并随代码同 commit | 3 golden(签名项 71/71/31);零 token;回放 miss 抛 ReplayDivergence 不静默 |
 
 **Sprint 8.1 注入防御的真实 LLM 对抗测试(手动清单,烧 token)**:
 1. 指令注入拉分:取 calibration 核心集 insufficient 样本,答案尾部叠加

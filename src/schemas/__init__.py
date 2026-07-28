@@ -487,7 +487,7 @@ class LLMCallRecord(BaseModel):
     system: str = ""                         # chat: system prompt 全文
     user: str = ""                           # chat: user prompt 全文; embedding: 原文
     response: str = ""                       # chat: 返回文本; embedding: sha256 摘要
-    path: str                                # "llm" | "cache" | "stub"
+    path: str                                # "llm" | "cache" | "stub" | "replay"
     latency_ms: float = 0.0                  # diff 时剔除
     span: str = ""                           # 归属决策环节标签 (如 "assess"), 可空
 
