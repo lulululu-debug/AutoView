@@ -1,0 +1,38 @@
+# Sprint 9: 高并发承载的基础设施。
+#
+# 当前只含 Milvus standalone (多进程安全的向量库, 解除 Milvus Lite 的
+# 单进程限制); PG / Redis dev 期继续用 brew services, 部署 sprint 再收编。
+#
+#   docker compose up -d milvus     # 起
+#   docker compose down             # 停 (数据在 volume 里保留)
+#
+# 应用侧切换: .env 里设 MILVUS_SERVER_URI=http://localhost:19530
+# (设了 server 就优先于 MILVUS_LITE_URI; 注释掉即回落 lite)。
+# 首次切换后记得重跑 scripts/seed_questions.py + 语料 ingest (新库是空的)。
+
+services:
+  milvus:
+    image: milvusdb/milvus:v2.4.15
+    command: ["milvus", "run", "standalone"]
+    environment:
+      # 嵌入式 etcd + 本地存储: 单容器跑齐, 不拉 etcd/minio 三件套
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
+      COMMON_STORAGETYPE: local
+    volumes:
+      - milvus_data:/var/lib/milvus
+      - ./deploy/milvus/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro
+    ports:
+      - "19530:19530"   # SDK
+      - "9091:9091"     # healthz / metrics
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  milvus_data:

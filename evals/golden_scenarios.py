@@ -62,11 +62,15 @@ def isolate_environment() -> dict:
 
     saved = {
         k: _os.environ.get(k)
-        for k in ("OPENAI_API_KEY", "ASSESSOR_ENABLED", "MILVUS_LITE_URI")
+        for k in (
+            "OPENAI_API_KEY", "ASSESSOR_ENABLED",
+            "MILVUS_LITE_URI", "MILVUS_SERVER_URI",
+        )
     }
     _os.environ.pop("OPENAI_API_KEY", None)
     _os.environ["ASSESSOR_ENABLED"] = "true"
     _os.environ.pop("MILVUS_LITE_URI", None)
+    _os.environ.pop("MILVUS_SERVER_URI", None)  # Sprint 9: server 模式同样隔离
     from src.vector_store.base import reset_client_for_testing
     reset_client_for_testing()
     return saved
