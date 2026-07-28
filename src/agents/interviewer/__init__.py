@@ -117,9 +117,9 @@ def _decide_followup(
                 and belief.variance < policy.min_variance_to_probe
                 and belief.mean >= policy.min_established_mean
             ):
-                # 该维度证据已足**且已确立为佳**: 追问的信息增益与翻盘价值
-                # 都 ≈ 0, 预算留给别的维度。均值条件是 s83 首轮复验加的:
-                # 只看方差会砍掉中档候选人的 second chance (见 policy 注)。
+                # 该维度证据已足**且已确立为佳**: 信息增益 ≈ 0, 预算留给
+                # 别的维度。均值条件是 s83 复验加的: 只看方差会把未达标
+                # 维度也判"问够了", 缺口证据不再被追问暴露 (见 policy 注)。
                 return False
             return True
         if (
