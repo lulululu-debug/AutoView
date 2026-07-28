@@ -29,6 +29,7 @@ import logging
 import re
 
 from src import llm
+from src.llm import sanitize
 from src.schemas import (
     AnswerAssessment,
     CandidateAnswer,
@@ -76,7 +77,7 @@ _SYSTEM_PROMPT = (
     "而讲不出为什么 → ≤ 0.5。\n"
     "- 有真实经历但缺量化数据或深度 → 0.4-0.6, followup_goal 聚焦缺口。\n"
     "**必须严格输出 JSON**, 不要任何解释、前后缀或代码块标记。"
-)
+) + sanitize.UNTRUSTED_NOTICE  # Sprint 8.1: 追加即改 prompt, 已重跑校准
 
 _USER_TEMPLATE_BASE = (
     "题目类别: {category}\n"
@@ -221,7 +222,7 @@ def _assess_via_llm(
     user = _USER_TEMPLATE_BASE.format(
         category=question.category.value,
         question_text=question.text,
-        answer_text=answer.text,
+        answer_text=sanitize.wrap_untrusted(answer.text, "候选人回答"),
     )
     if aspects:
         user += _USER_TEMPLATE_ASPECTS.format(aspects_block=_aspects_block(aspects))

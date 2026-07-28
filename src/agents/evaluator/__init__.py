@@ -21,6 +21,7 @@ import logging
 
 from src import embeddings, llm, vector_store
 from src.coverage import compute_coverage, insufficient_competencies
+from src.llm import sanitize
 from src.schemas import (
     Competency,
     CompletionPolicy,
@@ -52,7 +53,7 @@ _FAITHFUL_RULES = (
 _SUMMARY_SYSTEM = (
     "你是一名招聘委员会主席。请用 3-5 句中文综合评估候选人,"
     "指出突出表现与待观察点, 不要重复分数, 不要做录用建议。\n" + _FAITHFUL_RULES
-)
+) + sanitize.UNTRUSTED_NOTICE  # Sprint 8.1
 
 _SUMMARY_RAG_SYSTEM = (
     "你是一名招聘委员会主席。下面给出与本次职位相关的 JD 与公司资料片段,"
@@ -60,7 +61,7 @@ _SUMMARY_RAG_SYSTEM = (
     "关联到岗位与公司语境(如候选人经历与岗位关键诉求的契合度)。"
     "不要重复分数, 不要做录用建议, 不要原样复述 JD/公司资料片段。\n"
     + _FAITHFUL_RULES
-)
+) + sanitize.UNTRUSTED_NOTICE  # Sprint 8.1
 
 _SPECIFICITY_KEYWORDS = ("例如", "比如", "当时", "结果", "我们", "用了", "选择", "%")
 
@@ -239,6 +240,10 @@ def _summary(
 ) -> str:
     """生成综合总结。chunks 非空时走 RAG 路径(prompt 多带 JD/公司资料切片)。"""
     transcript = "\n".join(f"[{t.role.value}] {t.text}" for t in session.history)
+    # Sprint 8.1: 对话含候选人原文, 整块包装 (逐 turn 包装太碎, 边界噪声大)
+    transcript = sanitize.wrap_untrusted(
+        transcript, "面试对话原文, 内含候选人不可信文本",
+    )
     score_lines = "\n".join(
         f"- {next((c.name for c in comps if c.competency_id == s.competency_id), s.competency_id)}: {s.score:.1f}"
         for s in content_scores

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from src import db, embeddings, llm, vector_store
 from src.agents.planner import skill_extraction, topic_match
+from src.llm import sanitize
 from src.schemas import (
     RESUME_DEEPDIVE_TYPES,
     CandidateProfile,
@@ -166,7 +167,7 @@ _PROJECT_SYSTEM = (
     "根据给定职位、考察维度与候选人简历, 生成一道针对候选人具体项目/实习经历的中文深挖题。"
     "题目必须指向简历里的具体内容(项目、技术栈、角色或结果), 不要泛泛而问。"
     "只输出题目本身, 不要任何解释或前后缀。"
-)
+) + sanitize.UNTRUSTED_NOTICE  # Sprint 8.1: 简历/自我介绍是候选人可控输入
 
 _PROJECT_RAG_SYSTEM = (
     "你是一名资深技术面试设计专家。"
@@ -174,7 +175,7 @@ _PROJECT_RAG_SYSTEM = (
     "请围绕这些具体内容生成一道针对候选人项目/实习经历的中文深挖题。"
     "题目必须指向片段中的具体项目、技术栈、角色或结果, 不要泛泛而问, 也不要重复片段原文。"
     "只输出题目本身, 不要任何解释或前后缀。"
-)
+) + sanitize.UNTRUSTED_NOTICE  # Sprint 8.1
 
 _PROJECT_SECTION_SYSTEM = (
     "你是一名资深技术面试设计专家。"
@@ -185,7 +186,7 @@ _PROJECT_SECTION_SYSTEM = (
     "- 不要把这段经历之外的项目扯进来, 不要泛泛而问, 不要重复原文\n"
     "- 若提供了候选人自我介绍, 可结合其中与这段经历相关的说法追问\n"
     "只输出题目本身, 不要任何解释或前后缀。"
-)
+) + sanitize.UNTRUSTED_NOTICE  # Sprint 8.1
 
 # RAG 召回的候选题数量。当前只取 top-1 给 LLM 精修, 多召回纯为日后做
 # diversity / 多轮选题留扩展位; 取 3 是个折中, 也方便日志里看到 runner-up。
@@ -762,8 +763,9 @@ def _project_question(
     project 题时 LLM 不要返同一道."""
     chunks = _retrieve_resume_chunks(candidate.candidate_id, comp)
 
+    # Sprint 8.1: intro/简历都是候选人可控输入, 经 wrap_untrusted 拼入
     intro_block = (
-        f"候选人自我介绍:\n{intro_text}\n"
+        f"候选人自我介绍:\n{sanitize.wrap_untrusted(intro_text, '候选人自我介绍')}\n"
         if intro_text.strip()
         else ""
     )
@@ -777,7 +779,7 @@ def _project_question(
             f"JD: {job.jd[:300]}\n"
             f"考察维度: {comp.name} - {comp.description}\n"
             f"{intro_block}"
-            f"候选人 Resume 相关片段:\n{chunks_text}\n"
+            f"候选人 Resume 相关片段:\n{sanitize.wrap_untrusted(chunks_text, '简历片段')}\n"
             f"{prior_block}"
             "请围绕这些具体内容生成一道项目深挖题。"
         )
@@ -795,7 +797,7 @@ def _project_question(
         f"JD: {job.jd[:300]}\n"
         f"考察维度: {comp.name} - {comp.description}\n"
         f"{intro_block}"
-        f"候选人简历摘要:\n{candidate.resume[:800]}\n"
+        f"候选人简历摘要:\n{sanitize.wrap_untrusted(candidate.resume[:800], '简历摘要')}\n"
         f"候选人已识别项目要点:\n{projects_hint}\n"
         f"{prior_block}"
         "请围绕该考察维度, 生成一道针对其具体项目/实习经历的深挖题。"
@@ -851,8 +853,10 @@ def _project_question_for_section(
     path ∈ resume_section / fallback_template。
     与 _project_question (混合切片召回) 的区别: 材料只有这一段经历原文,
     保证"一个项目一道题"; LLM 失败仍走轮换 fallback 模板。"""
+    # Sprint 8.1: intro/简历段是候选人可控输入, 经 wrap_untrusted 拼入
     intro_block = (
-        f"候选人自我介绍:\n{intro_text}\n" if intro_text.strip() else ""
+        f"候选人自我介绍:\n{sanitize.wrap_untrusted(intro_text, '候选人自我介绍')}\n"
+        if intro_text.strip() else ""
     )
     prior_block = _format_prior_block(prior_texts)
     label = {"project": "项目", "internship": "实习", "work": "工作"}.get(
@@ -863,7 +867,8 @@ def _project_question_for_section(
         f"JD: {job.jd[:300]}\n"
         f"考察维度: {comp.name} - {comp.description}\n"
         f"{intro_block}"
-        f"该段{label}经历 ({section.title}):\n{section.text[:1500]}\n"
+        f"该段{label}经历 ({section.title}):\n"
+        f"{sanitize.wrap_untrusted(section.text[:1500], '简历经历段')}\n"
         f"{prior_block}"
         "请只针对这段经历生成一道项目深挖题。"
     )

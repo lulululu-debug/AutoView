@@ -20,6 +20,7 @@ Orchestrator 负责将返回值写入 session.history, 并补上候选人答复�
 from __future__ import annotations
 
 from src import llm
+from src.llm import sanitize
 from src.coverage import (
     compute_coverage,
     compute_richness,
@@ -46,7 +47,7 @@ from src.schemas import (
 _FOLLOWUP_SYSTEM = (
     "你是一名资深面试官。候选人对当前问题的回答不够具体或不够深入。"
     "请基于其回答, 写一句聚焦、可深挖的中文追问。只输出追问文本本身。"
-)
+) + sanitize.UNTRUSTED_NOTICE  # Sprint 8.1
 
 _MIN_ANSWER_CHARS = 60
 _SPECIFICITY_HINTS = ("例如", "比如", "当时", "结果", "我们", "用了", "选择", "% ", "%")
@@ -125,9 +126,10 @@ def _followup_text(
             "候选人当前回答缺失: " + "; ".join(assessment.missing_signals) + "\n"
         )
 
+    wrapped_answer = sanitize.wrap_untrusted(answer.text, "候选人回答")
     text = llm.complete(
         _FOLLOWUP_SYSTEM,
-        f"问题: {question.text}\n候选人回答: {answer.text}\n"
+        f"问题: {question.text}\n候选人回答: {wrapped_answer}\n"
         f"{missing_hint}{goal_hint}请输出追问:",
         max_tokens=160,
     )
