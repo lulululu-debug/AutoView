@@ -1155,6 +1155,55 @@ belief/校准数字对 HR 与候选人不可见。
 
 ---
 
+## Sprint 8.5 — Evaluator:rubric 化打分 + 小型裁判团 + 校准门禁
+
+> 2026-07-28 立项。出处 AGENT_UPGRADES.md 8.5 + 评审修正 2。两个前置的
+> 处理决定:
+> - **panel 异构问题**:单 provider 下先用同家族多模型(默认
+>   gpt-4o-mini / gpt-4.1-mini / gpt-4o,env EVAL_PANEL_MODELS 可换),
+>   明确标注为「伪异构」(Nine Judges:错误相关 → 有效票 < 3);接第二
+>   家族走 OPENAI_BASE_URL 网关即可,不改代码。**panel 默认关**
+>   (EVAL_PANEL_ENABLED),MAE 校准过门禁前不进主路径。
+> - **MAE 门禁前置**(评审修正 2):报告级人工数值标注不存在。本 sprint
+>   交付标注模板 + 拟合/门禁脚本(无标注优雅跳过);标注 20-30 份报告的
+>   工作量记账给 HR/用户,标完跑 sim/calibrate_evaluator 出映射。
+> - rubric 在 plan 阶段生成一次随 plan 固定 → 不违反「不动态补题」
+>   (改的是评分依据不是题);stub 走分类别模板 rubric(确定性)。
+> - Assessor 的 rubric 判定放**条件 user 块**(有 rubric 才拼),system
+>   prompt 不动 → 校准金标 prompt 逐字节不变,不触发重校准级联。
+
+- [ ] **task 1 per-question rubric + 命中率进分**:
+      Question.rubric: list[str](plan 生成,3-6 条二元项;stub 走分类别
+      模板;lazy project 题在 resolve 时生成);Assessor 条件 user 块逐项
+      判定 → AnswerAssessment.rubric_hits: list[bool](长度不匹配 → 弃用
+      该次 rubric 判定,记 log,不猜);评分主路径升级:题级质量 =
+      0.7×best_sufficiency + 0.3×best_rubric 命中率(初始权重,复验调),
+      无 rubric / 无 hits 退回纯 sufficiency(老 plan 兼容);
+      eval:rubric 随 plan 固定 / hits 与分单调 / 兼容路径;golden 重录;
+      **frozen 批次复验**(评估端变更,frozen Δ 就是本变更的效果)+
+      区分度不塌
+- [ ] **task 2 小型裁判团(默认关)**:
+      finalize 时对每维度 3 judge(EVAL_PANEL_MODELS)独立打分取中位数;
+      极差 > 阈值 → 该维度 judge_disagreement → needs_human_review;
+      任一 judge 失败剩余继续,全挂退回 assessment 公式路径(现主路径变
+      fallback 链的一环,启发式仍是最后兜底);裁判与生成分离:judge 模型
+      与追问生成模型强制不同名(config 校验);EVAL_PANEL_ENABLED 默认
+      false,过 MAE 门禁前不开;eval:中位数聚合 / 部分失败降级 / 全挂
+      回退 / 分离校验(stub 模拟)
+- [ ] **task 3 MAE 校准门禁脚手架 + 复验收尾**:
+      evals/data/report_score_labels.json 标注模板(report_id + 人工
+      overall + 维度分;附标注指引)+ sim/calibrate_evaluator.py(线性/
+      单调映射拟合 + MAE 门禁,无标注优雅跳过并打印指引);
+      panel 开启条件写死:MAE 门禁通过 + 用户确认;
+      EVALUATION.md 手段 #16 + 记账;frozen/生成式复验记录;CLAUDE.md
+      「不要做的事」补:MAE 未过门禁不许开 panel
+
+**完成标准**:rubric 全链路(plan 生成→assessor 判定→评分组合)stub/真
+LLM 双路径工作且老 plan 兼容;frozen 复验 Δ 可解释、区分度 6/6 不塌;
+panel 代码就绪但默认关,门禁脚手架可跑;标注工作量清晰记账。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
