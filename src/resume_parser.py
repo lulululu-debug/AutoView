@@ -27,6 +27,7 @@ from docx import Document  # python-docx
 from pypdf import PdfReader
 
 from src import llm
+from src.llm import sanitize
 
 MAX_BYTES = 5 * 1024 * 1024              # 5 MB
 MIN_TEXT_CHARS = 100                     # 解析后最少字数, 防扫描件图片 PDF / OCR 失败
@@ -92,6 +93,9 @@ def parse_resume(*, filename: str, mime: str, blob: bytes) -> str:
         raise ResumeParseError(f"解析失败: {type(e).__name__}") from e
 
     text = _normalize(text)
+    # Sprint 8.1: 不可见字符 (零宽/双向控制等) 先剥离再做最短长度判定 ——
+    # 隐藏注入的常见载体, 也不该被算作"有效简历文本"凑长度。
+    text, _removed = sanitize.strip_invisible(text)
     if len(text) < MIN_TEXT_CHARS:
         raise ResumeParseError(
             f"解析后文本仅 {len(text)} 字符 (< {MIN_TEXT_CHARS}); "

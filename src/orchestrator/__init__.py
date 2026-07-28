@@ -26,6 +26,7 @@ import logging
 import os
 
 from src import cache, db, media_store, tts
+from src.llm import sanitize
 
 log = logging.getLogger(__name__)
 from src.agents import analyzer, assessor, evaluator, interviewer, planner
@@ -113,6 +114,9 @@ def start_session(
         job_id=job.job_id,
         status=SessionStatus.IN_PROGRESS,
     )
+    # Sprint 8.1: 简历净化标记带入 session 审计 (只标记不拦截, 不影响任何决策)
+    if candidate.injection_suspected:
+        session.integrity_flags.append("resume_invisible_chars")
 
     first = interviewer.next_turn(session, plan, job=job)
     if first is None:
@@ -162,6 +166,12 @@ def submit_answer(session_id: str, answer_text: str) -> TurnResult:
         raise SessionInvalidState(
             f"session {session_id} 没有等待中的 interviewer 提示, 无法接收回答"
         )
+
+    # Sprint 8.1: 回答净化 —— 剥不可见字符 (注入载体 + 不该给长度启发式凑数);
+    # 超阈值只记 integrity_flags, 不拦截不改决策。
+    answer_text, _removed = sanitize.strip_invisible(answer_text)
+    if _removed >= sanitize.INVISIBLE_SUSPECT_THRESHOLD:
+        session.integrity_flags.append(f"answer_invisible_chars:{last.ref_id}")
 
     answer = CandidateAnswer(question_id=last.ref_id, text=answer_text)
     session.answers.append(answer)

@@ -187,5 +187,52 @@ class StubPathUnchangedTests(unittest.TestCase):
         self.assertEqual(out1.sufficiency, out2.sufficiency)
 
 
+class IntakeSanitizeTests(unittest.TestCase):
+    """task 2: 入库净化 —— 简历解析剥不可见字符; 标记只落 flag 不拦截。"""
+
+    def _docx_blob(self, *paragraphs: str) -> bytes:
+        import io
+        from docx import Document
+        doc = Document()
+        for p in paragraphs:
+            doc.add_paragraph(p)
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+
+    _DOCX_MIME = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+    def test_parse_resume_strips_invisible(self) -> None:
+        from src.resume_parser import parse_resume
+        visible = "张三, 后端工程师。订单系统 P99 优化 800ms 到 350ms。" * 3
+        blob = self._docx_blob(visible + "​‌" * 10)
+        text = parse_resume(filename="r.docx", mime=self._DOCX_MIME, blob=blob)
+        self.assertNotIn("​", text)
+        self.assertNotIn("‌", text)
+
+    def test_invisible_padding_cannot_pass_min_chars(self) -> None:
+        from src.resume_parser import MIN_TEXT_CHARS, ResumeParseError, parse_resume
+        short_visible = "太短"
+        blob = self._docx_blob(short_visible + "​" * (MIN_TEXT_CHARS * 2))
+        with self.assertRaises(ResumeParseError):
+            parse_resume(filename="r.docx", mime=self._DOCX_MIME, blob=blob)
+
+    def test_candidate_profile_flag_default_and_roundtrip(self) -> None:
+        from src.schemas import CandidateProfile
+        c = CandidateProfile(resume="x")
+        self.assertFalse(c.injection_suspected)
+        c2 = CandidateProfile.model_validate(
+            {"resume": "x", "injection_suspected": True},
+        )
+        self.assertTrue(c2.injection_suspected)
+
+    def test_session_old_json_compat(self) -> None:
+        """老 session JSON 缺 integrity_flags 字段 -> 默认 []。"""
+        s = InterviewSession.model_validate({"plan_id": "p", "job_id": "j"})
+        self.assertEqual(s.integrity_flags, [])
+
+
 if __name__ == "__main__":
     unittest.main()

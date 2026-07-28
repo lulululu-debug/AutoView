@@ -360,6 +360,7 @@ def save_candidate(candidate: CandidateProfile) -> None:
             resume=payload["resume"],
             projects=payload["projects"],
             sections=payload["sections"],
+            injection_suspected=payload.get("injection_suspected", False),
         ))
 
 
@@ -390,6 +391,7 @@ def load_candidate(candidate_id: str) -> Optional[CandidateProfile]:
             "resume": row.resume,
             "projects": row.projects,
             "sections": row.sections or [],
+            "injection_suspected": bool(row.injection_suspected),
         })
 
 
@@ -471,6 +473,7 @@ def save_session(session: InterviewSession) -> None:
             intro_text=payload["intro_text"],
             assessments=payload["assessments"],
             media_ref=payload["media_ref"],
+            integrity_flags=payload.get("integrity_flags", []),
         )
         s.merge(row)
 
@@ -493,6 +496,7 @@ def load_session(session_id: str) -> Optional[InterviewSession]:
                 "intro_text": row.intro_text,
                 "assessments": row.assessments,
                 "media_ref": row.media_ref,
+                "integrity_flags": row.integrity_flags or [],
             }
         )
 

@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from api.schemas import CandidateCreate, CandidateCreated, ParsedResume
 from src import cache, db, ingestion, resume_parser
+from src.llm import sanitize
 from src.agents import planner
 from src.schemas import (
     RESUME_DEEPDIVE_TYPES,
@@ -147,11 +148,15 @@ def create_candidate(
             s.title for s in confirmed if s.type in RESUME_DEEPDIVE_TYPES
         ]
 
+    # Sprint 8.1: 简历净化 —— 剥不可见字符; 超阈值只标记不拦截 (over-defense
+    # 防线), 标记随 start_session 进 session.integrity_flags 审计。
+    resume_clean, removed = sanitize.strip_invisible(body.resume)
     candidate = CandidateProfile(
         job_id=job_id,
-        resume=body.resume,
+        resume=resume_clean,
         projects=projects,
         sections=confirmed,
+        injection_suspected=removed >= sanitize.INVISIBLE_SUSPECT_THRESHOLD,
     )
     db.save_candidate(candidate)
 

@@ -30,6 +30,10 @@ UNTRUSTED_NOTICE = (
 # 保留的控制字符: 换行/回车/制表符是正常排版
 _KEEP_CONTROL = {"\n", "\r", "\t"}
 
+# strip_invisible 剥离数达到该值 -> 疑似隐藏注入 (integrity_flags)。
+# 单个 BOM / 偶发零宽字符是复制粘贴常见残留, 不该误伤; 成串出现才可疑。
+INVISIBLE_SUSPECT_THRESHOLD = 5
+
 
 def wrap_untrusted(text: str, label: str = "候选人文本") -> str:
     """包裹不可信文本。空串原样返回 (调用方模板对空串有自己的分支)。"""

@@ -207,6 +207,13 @@ class CandidateORM(Base):
     sections: Mapped[list] = mapped_column(
         JSONB, nullable=False, default=list, server_default="[]",
     )
+    # Sprint 8.1: 简历净化剥离不可见字符超阈值 -> 疑似隐藏注入 (只标记不拦截)。
+    # 已有库需手动补列:
+    #   ALTER TABLE candidates ADD COLUMN IF NOT EXISTS injection_suspected
+    #   BOOLEAN NOT NULL DEFAULT false;
+    injection_suspected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -273,6 +280,12 @@ class InterviewSessionORM(Base):
     # Sprint 6-5: 录像归档引用 (本地路径 / 未来对象存储 URI), finalize 时写入。
     # 只作 HR 复核素材溯源, 不被打分路径消费 (§7)。nullable, 旧行天然 NULL。
     media_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Sprint 8.1: 输入/输出异常标记 (内部审计, 不进 HR UI)。已有库需手动补列:
+    #   ALTER TABLE interview_sessions ADD COLUMN IF NOT EXISTS integrity_flags
+    #   JSONB NOT NULL DEFAULT '[]'::jsonb;
+    integrity_flags: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
