@@ -927,6 +927,37 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
 
 ---
 
+## Sprint 8.1 — 候选人输入注入防御
+
+> 2026-07-28 立项。出处与评审见 AGENT_UPGRADES.md(五方向提案,本 sprint 为
+> 顺序第一)。威胁模型:真实简历库约 1% 含隐藏注入(hireEZ/USENIX'26 实测);
+> 绝对打分比成对比较更易被操纵。原则:**标记不拦截**(InjecGuard 证明检测器
+> over-defense 严重),命中只导人工复核;决策逻辑零改动。
+> 防御限界(评审修正 4):指令注入可防;隐藏关键词堆砌型数据注入只有
+> "简历原文 HR 可见 + 人工复核"兜底,不宣称全防。
+
+- [ ] **task 1 wrap_untrusted 统一包装**:
+      新增 src/llm/sanitize.py(`wrap_untrusted`:sha256(text) 派生 nonce 的
+      边界标记,防伪造闭合且确定性可复现;`UNTRUSTED_NOTICE` 系统提示声明);
+      接入 4 处候选人文本拼接点:Assessor user 模板 / Interviewer 追问 prompt /
+      Evaluator summary transcript / Planner lazy 出题(intro_text + 简历段);
+      Assessor prompt 变 → 重跑 sim/calibrate_assessor;
+      evals/test_injection_guard.py(nonce 性质 / stub 路径行为不变)
+- [ ] **task 2 入库净化 + 标记**:
+      sanitize.py 增 `strip_invisible`(剥离零宽/双向控制/控制字符,幂等);
+      resume 解析与 answer 提交两个入口接入;命中超阈值只标记
+      session.integrity_flags,finalize 置 needs_human_review,**不拦截**
+- [ ] **task 3 输出侧异常校验**:
+      assessment 落地点检测异常模式(sufficiency ≥ 0.95 且 missing_signals/
+      concerns 全空)→ integrity_flags;finalize 汇总置 needs_human_review;
+      EVALUATION.md 记录防御限界 + 真实 LLM 对抗测试手动清单
+
+**完成标准**:注入样本不改变任何决策路径行为(stub/启发式 evals 全绿),
+只多出人工复核标记;assessor 校准两组金标重跑通过;flags 不进 HR UI 明细
+(HR 只见 needs_human_review)。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
