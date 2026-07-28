@@ -968,6 +968,46 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
 
 ---
 
+## Sprint 8.2 — 决策 Trace + 确定性回放
+
+> 2026-07-28 立项。出处 AGENT_UPGRADES.md 8.2。动机:决策依据只活在代码路径里,
+> LLM 请求响应不落盘;EU AI Act Annex III(招聘=高风险)Article 12 要求
+> 事件日志达到「决策可重构」,2026-08-02 起执行。原则:**纯旁路观测,
+> 不改任何决策**;回归判定用确定性 diff,不用 LLM 审 trace(TRAIL:最佳 11%)。
+> 架构注:src/trace 是与 src.coverage 同级的纯共享模块(contextvars 内存收集,
+> 无 I/O),agent 可 import 埋点,不违反「agent 不碰 DB/cache」。
+> 限界:embedding 只录不回放(检索结果依赖 Milvus 状态;但召回片段已进
+> chat prompt 原文,回放 chat 调用即足以重构决策)。
+
+- [ ] **task 1 trace 收集骨架**:
+      schemas 增 LLMCallRecord / DecisionSpan / DecisionTrace(OTel gen_ai.*
+      对齐命名);src/trace 收集器(contextvars,无 trace 时零开销 no-op);
+      llm.complete()/complete_vision()/embeddings.embed() 单点录制
+      (request_hash/prompt 全文/response/latency/path: cache|llm|stub);
+      orchestrator 三段式入口开/续/存 trace(Redis 同 session TTL)+
+      assess / lazy_gen 埋点;interviewer 埋 followup_decision /
+      completion_check span(记阈值比较实际数值);eval:span 树完整 +
+      每个决策有依据字段
+- [ ] **task 2 PG 归档 + 审计导出**:
+      finalize 归档 decision_traces 表(session_id 提列 + spans/llm_calls
+      JSONB)后删 Redis;GET /hr/sessions/{id}/trace 审计导出(权限同
+      review:owner/admin,越权 404);trace 不进 HR UI 页面;eval 落库
+      round-trip + 越权
+- [ ] **task 3 确定性回放 + golden traces**:
+      REPLAY_MODE=1 时 complete() 按 request_hash 命中录制返回,miss 抛
+      ReplayDivergence(replay 优先于 key 判断,无 key 可回放);
+      trace diff 工具(决策序列比较,剔除 id/时间戳类字段);
+      scripts/record_golden_traces.py 录 3 场典型 stub 面试入
+      evals/data/golden_traces/;eval:重放决策序列一致 + 篡改可定位;
+      约定升级:改 prompt / policy 阈值 = golden trace diff + calibration
+      双门禁(写进 CLAUDE.md 约定 + EVALUATION.md 手段清单)
+
+**完成标准**:stub 全链路面试的每个追问/结束/评估决策都能从 trace 重构出
+依据(决策类型 + 实际数值 + llm|heuristic 路径);golden trace 重放 diff 为空;
+篡改任一录制响应能被定位;evals 全绿且现有决策行为零变化。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
