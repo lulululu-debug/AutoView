@@ -26,7 +26,7 @@ import logging
 import os
 
 from src import beliefs as beliefs_mod
-from src import cache, db, media_store, trace, tts
+from src import cache, candidate_model as cm_mod, db, media_store, trace, tts
 from src.llm import sanitize
 
 log = logging.getLogger(__name__)
@@ -315,6 +315,24 @@ def _submit_answer_inner(session_id: str, answer_text: str) -> TurnResult:
                 anomaly=_assessment_anomaly(assessment),
             )
             _update_belief_for(session, answered_q, assessment)  # Sprint 8.3
+            # Sprint 8.4: strengths/concerns 沉淀进 CandidateModel (纯规则,
+            # 内部降级 append-only, 绝不抛)
+            before_claims = len(session.candidate_model.claims)
+            before_contra = len(session.candidate_model.contradictions)
+            session.candidate_model = cm_mod.integrate_assessment(
+                session.candidate_model, answered_q, answer, assessment,
+            )
+            trace.record_decision(
+                "candidate_model_update",
+                question_id=answered_q.question_id,
+                claims_added=(
+                    len(session.candidate_model.claims) - before_claims
+                ),
+                contradictions_added=(
+                    len(session.candidate_model.contradictions) - before_contra
+                ),
+                total_claims=len(session.candidate_model.claims),
+            )
             # Sprint 8.1 task 3: 输出侧异常模式 —— 满分且零缺失/零担忧是注入
             # 拉分的典型形状 (真实好回答极少三者同时)。只记 flag 供人工复核,
             # 不改追问/终止决策。

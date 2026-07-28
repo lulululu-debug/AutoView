@@ -433,6 +433,40 @@ class CompletionPolicy(BaseModel):
     belief_lcb_k: float = Field(default=1.0, ge=0.0)
 
 
+# ---------- CandidateModel: 跨 stage 候选人记忆 (Sprint 8.4) ----------
+
+class ClaimStatus(str, Enum):
+    CLAIMED = "claimed"              # 候选人声称, 未被评估佐证
+    VERIFIED = "verified"            # 有高分 assessment 佐证
+    DOUBTED = "doubted"              # assessment.concerns 提出的疑点
+    CONTRADICTED = "contradicted"    # 与另一条同 competency 条目冲突
+
+
+class SkillClaim(BaseModel):
+    """候选人技能/经历的结构化结论 + 原文证据双轨 (Sprint 8.4)。
+
+    evidence 是 answer_id 列表 —— 结论必须可溯源到候选人原话
+    (Verbatim beats Extracted: 抽取式结构化会丢信息, 原文引用兜底)。"""
+    claim_id: str = Field(default_factory=_new_id)
+    competency_id: str | None = None
+    claim: str                               # 如 "主导过订单系统分库分表"
+    status: ClaimStatus
+    confidence: float = 0.5                  # 来源 assessment.confidence
+    evidence: list[str] = []                 # answer_id 列表 (原文双轨)
+    source_stage: str = ""                   # QuestionCategory.value
+
+
+class CandidateModel(BaseModel):
+    """一场面试积累的候选人记忆 (Sprint 8.4)。
+
+    第四类数据 (继 AnswerAssessment 之后): 不进总分、不见 HR UI 明细、
+    不见候选人; orchestrator 独家写 (blackboard), agent 只读; 随 session
+    落库审计。contradictions 用 list[list[str]] 存 claim_id 对
+    (JSON round-trip 下 tuple 会变 list, 干脆不用 tuple)。"""
+    claims: list[SkillClaim] = []
+    contradictions: list[list[str]] = []
+
+
 class TurnRole(str, Enum):
     INTERVIEWER = "interviewer"
     CANDIDATE = "candidate"
@@ -487,6 +521,9 @@ class InterviewSession(BaseModel):
     # Sprint 8.3: competency_id -> 信念状态 (仅校准路径 assessment 更新;
     # stub/启发式环境恒空)。内部数据, 不进 HR UI。
     beliefs: dict[str, CompetencyBelief] = {}
+    # Sprint 8.4: 跨 stage 候选人记忆 (strengths/concerns 的结构化沉淀)。
+    # 第四类数据, 不进总分/不见 HR 明细/不见候选人。
+    candidate_model: CandidateModel = CandidateModel()
 
 
 # ---------- 多模态信号(扩展, 骨架恒空) ----------
