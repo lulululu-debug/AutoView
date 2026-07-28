@@ -26,6 +26,7 @@ import time
 
 from src import trace
 from src.cache import llm_cache
+from src.trace import replay
 
 DEFAULT_MODEL = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
 STUB_PREFIX = "[stub]"
@@ -60,6 +61,13 @@ def complete(
             system=system, user=user, response=response,
             path=path, latency_ms=latency_ms,
         )
+
+    # Sprint 8.2 task 3: 确定性回放 —— 优先于 key/缓存判断 (无 key 也能回放,
+    # 回归 eval 零 token); miss 抛 ReplayDivergence, 绝不静默降级
+    if replay.replay_active():
+        result = replay.lookup(cache_key)
+        _record(result, "replay")
+        return result
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -153,6 +161,11 @@ def complete_vision(
             system=system, user=user, response=response,
             path=path, latency_ms=latency_ms,
         )
+
+    if replay.replay_active():  # Sprint 8.2 task 3, 同 complete()
+        result = replay.lookup(cache_key)
+        _record(result, "replay")
+        return result
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:

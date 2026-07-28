@@ -979,7 +979,7 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
 > 限界:embedding 只录不回放(检索结果依赖 Milvus 状态;但召回片段已进
 > chat prompt 原文,回放 chat 调用即足以重构决策)。
 
-- [ ] **task 1 trace 收集骨架**:
+- [x] **task 1 trace 收集骨架**:
       schemas 增 LLMCallRecord / DecisionSpan / DecisionTrace(OTel gen_ai.*
       对齐命名);src/trace 收集器(contextvars,无 trace 时零开销 no-op);
       llm.complete()/complete_vision()/embeddings.embed() 单点录制
@@ -988,12 +988,18 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       assess / lazy_gen 埋点;interviewer 埋 followup_decision /
       completion_check span(记阈值比较实际数值);eval:span 树完整 +
       每个决策有依据字段
-- [ ] **task 2 PG 归档 + 审计导出**:
+      实际落地: request_hash 与 LLM 缓存 key 同源 (canonical sha256);
+      interviewer 短路表达式拆布尔量逐一等价, 决策行为零变化;
+      AnswerAssessment 增 via 审计标注 (llm|heuristic|rule_duplicate);
+      坑: test_api 模块级 ASSESSOR_ENABLED=false 不回收, e2e setUp 显式开。
+- [x] **task 2 PG 归档 + 审计导出**:
       finalize 归档 decision_traces 表(session_id 提列 + spans/llm_calls
       JSONB)后删 Redis;GET /hr/sessions/{id}/trace 审计导出(权限同
       review:owner/admin,越权 404);trace 不进 HR UI 页面;eval 落库
       round-trip + 越权
-- [ ] **task 3 确定性回放 + golden traces**:
+      实际落地: 表不设 FK (旁路观测不反向约束 session 落库); 归档失败保留
+      Redis 副本至 TTL 且不阻塞 finalize; dev/test 已建表。
+- [x] **task 3 确定性回放 + golden traces**:
       REPLAY_MODE=1 时 complete() 按 request_hash 命中录制返回,miss 抛
       ReplayDivergence(replay 优先于 key 判断,无 key 可回放);
       trace diff 工具(决策序列比较,剔除 id/时间戳类字段);
@@ -1001,6 +1007,14 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
       evals/data/golden_traces/;eval:重放决策序列一致 + 篡改可定位;
       约定升级:改 prompt / policy 阈值 = golden trace diff + calibration
       双门禁(写进 CLAUDE.md 约定 + EVALUATION.md 手段清单)
+      实际落地: 两处立项修正 —— (1) 内存路径的 plan 生成也纳入 trace
+      (否则回放在 plan 阶段就 miss; API 路径 plan 预生成不受影响);
+      (2) golden 场景强制关 Milvus (pop URI + reset 单例, 且必须在
+      pymilvus load_dotenv 之后 pop —— F9 同款坑), 否则 golden 耦合本机
+      corpus 换机器就废。录制脚本每场景连跑两遍做确定性自检; 3 场 golden
+      (campus 追问密集 41 span / lateral 长答 41 span / 提前 finalize 9
+      span); diff 规约: 剔 ts/span_id/path/latency + uuid 类, coverage
+      按值序列比较。全量 517 绿。
 
 **完成标准**:stub 全链路面试的每个追问/结束/评估决策都能从 trace 重构出
 依据(决策类型 + 实际数值 + llm|heuristic 路径);golden trace 重放 diff 为空;

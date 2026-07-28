@@ -22,7 +22,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 track/stage 化 → Assessor → CompletionPolicy → calibration）；字母 sprint 系列
 （知识管线 / 简历分段 + 图片 OCR / Planner 主题匹配）已落；Sprint 6 视频面试 5/6 已落
 （consent 门 / TTS 播报 / 三态 avatar / 语音作答 / 录制归档，Tier A 真口型待定）；
-Sprint 7（多模态分析）未开。详见 sprint.md。
+Sprint 6.5 效果评估 / 6.7 飞书接入 / 6.8 注册+owner 隔离已落；
+Sprint 8.1 注入防御、8.2 决策 trace + 确定性回放已落（提案与评审见
+AGENT_UPGRADES.md）；Sprint 7(多模态分析) 未开。详见 sprint.md。
 完整架构与合规约束见 ARCHITECTURE.md，特别是第 7 节多模态评价 + LLM-as-judge 的硬约束。
 
 ## 技术栈
@@ -173,6 +175,11 @@ Sprint 1 阶段不引 Alembic，用 `Base.metadata.create_all`；schema 真的�
 - 每个 agent 暴露一个清晰的入口函数，输入输出都是 schemas 里的类型
 - 一次只做 sprint.md 里的一个 task，做完立刻验证并 commit，不批量推进
 - 改 prompt 模板前确认对应 eval 存在（eval 尚未引入时先记账，Sprint 1 末补上）
+- **改任何 prompt / policy 阈值 = 双门禁**（Sprint 8.2 起）：跑
+  `python -m unittest evals.test_trace_replay`（golden trace 决策序列 diff，
+  变红属预期信号）+ 对应 calibration eval；确认变化合理后
+  `python -m scripts.record_golden_traces` 重录 golden 并随代码同 commit，
+  golden 更新必须显式出现在 diff 里
 - **改 Assessor / FollowUpPolicy / CompletionPolicy 前必须先跑 calibration eval**——
   这类改动直接影响候选人体验和公平性，不能凭感觉调阈值
 - 新增 LLM 调用必带 timeout + 启发式 fallback；不能引入"LLM 挂了整条链路就挂"的依赖
