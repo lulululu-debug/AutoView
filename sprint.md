@@ -1022,6 +1022,52 @@ httpOnly cookie + SameSite=Strict + 可控 Secure flag; HR 能在 UI 改"每题�
 
 ---
 
+## Sprint 8.3 — 追问决策:校准 + 信念驱动
+
+> 2026-07-28 立项。出处 AGENT_UPGRADES.md 8.3 + 评审修正。这是 8.x 系列唯一
+> **真正改决策行为**的 sprint,推进纪律:
+> - **新逻辑只挂在校准路径上**(assessment.calibrated_sufficiency 非 None,
+>   即真 LLM 路径):stub/启发式路径行为逐字节不变 → golden trace 保持绿,
+>   dev/eval 环境零扰动;真实行为变化由 sim 批次复验
+> - 评审修正:50 条金标用 **Platt**(logistic)不用 isotonic(小样本过拟合)
+> - 明确不做:在线 EIG 前向模拟 / IRT / 动态补题(红线)
+> - 留账:confidence 校准缺金标(需"判断是否正确"的人工标注),Step 1 只校准
+>   sufficiency;"missing_signals → competency 方差最大者定焦"依赖信号-维度
+>   映射,当前 schema 无此结构,不实现
+
+- [ ] **task 1 Step 1 校准层**:
+      sim/calibrate_platt.py 在核心金标 42 条二分类样本上收集真 LLM
+      sufficiency 并拟合 Platt(stdlib Newton,零依赖;LLM 调用大概率命中
+      今天校准跑的 Redis 缓存 ≈ 零成本);参数硬编码进
+      src/agents/assessor/calibration.py(版本注释 + 重拟合指引);
+      AnswerAssessment 增 calibrated_sufficiency: float | None(仅 LLM 路径
+      填,启发式恒 None);_decide_followup 有校准值时用
+      min_calibrated_to_stop=0.5(P(sufficient)≥0.5 语义,阈值可解释);
+      eval:映射单调 + 边界性质 + 启发式路径不受影响;双门禁跑过
+- [ ] **task 2 Step 2 信念状态 + 预算调度**:
+      schemas 增 CompetencyBelief(mean/variance/n_observations,高斯共轭:
+      固定先验 μ0=0.5,σ0²=0.25 + 固定观测噪声 σ_obs²=0.09 → 方差单调不增
+      且顺序不变,纯数值不加 LLM);InterviewSession.beliefs(JSONB 落库,
+      ALTER dev/test);orchestrator 在校准 assessment 落地时更新 + trace
+      belief_update span;FollowUpPolicy 增 total_followup_budget(全局
+      预算,默认=各 stage 配额之和)+ min_variance_to_probe(证据已足的
+      competency 不再消耗追问预算 → 预算流向高方差维度);
+      CompletionPolicy 增 use_belief_lcb 开关(默认关):coverage 判定用
+      mean − k·√variance 置信下界替代裸 max;belief 数字不进 HR UI/报告;
+      eval:test_belief_update(共轭数值性质)+ test_followup_scheduling
+      (不均衡场景预算流向 / 预算耗尽 / 无校准值时行为与现在一致)
+- [ ] **task 3 真 LLM 复验 + 收尾**:
+      sim/calibrate_assessor(prompt 未动,应原样过)+ golden trace diff
+      (应全绿,新逻辑不触 stub 路径)+ 小规模 sim 批次(core+adversarial
+      各 repeat 1)对比基线:区分度排序不塌、对抗 Δ 不缩水、followup 总量
+      变化记录;EVALUATION.md / CLAUDE.md 记录
+
+**完成标准**:真 LLM 路径追问决策由校准分 + 信念方差 + 全局预算共同驱动;
+stub/启发式路径与 8.2 golden 完全一致;sim 复验区分度与对抗指标不劣化;
+belief/校准数字对 HR 与候选人不可见。
+
+---
+
 ## Sprint 7 — 多模态评价（扩展，带合规护栏）
 
 > 实现前先落实 ARCHITECTURE.md 第 7 节的全部约束。
