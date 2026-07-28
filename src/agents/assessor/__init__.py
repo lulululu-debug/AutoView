@@ -93,6 +93,17 @@ _USER_TEMPLATE_ASPECTS = (
     "(精确, 不强行套), 没覆盖的不要列。\n"
 )
 
+# Sprint 8.5: 条件块 (题带 rubric 才拼), 让 LLM 在 JSON 里额外返 rubric_hits。
+# 判定纪律与 sufficiency 锚点同源 (F1): 泛泛正确不算满足 —— 首版复验坐实
+# 教科书答案被判 6/6 全中 (含"量化指标"), 收紧为"须有明确具体内容支撑"。
+_USER_TEMPLATE_RUBRIC = (
+    "\n本题评审 checklist, 逐项判定 (结果放 JSON 的 rubric_hits 字段):\n"
+    "{rubric_block}\n"
+    "判定标准: 回答中有明确内容实质覆盖该条目才算满足; 只沾到主题词而无"
+    "实质内容的不算; 涉及本人角色/量化数据/决策理由的条目, 需要第一人称的"
+    "具体信息。\n"
+)
+
 _USER_TEMPLATE_JSON = (
     "\n请按下方 JSON schema 输出评估结果 (字段全填, 不要省略):\n"
     "{{\n"
@@ -239,7 +250,26 @@ def _assess_via_llm(
     )
     if aspects:
         user += _USER_TEMPLATE_ASPECTS.format(aspects_block=_aspects_block(aspects))
-    user += _USER_TEMPLATE_JSON
+    if question.rubric:
+        # Sprint 8.5: 条件块 —— 只在题带 rubric 时拼, 无 rubric 题 (含全部
+        # 校准金标) 的 prompt 逐字节不变, 不触发重校准级联。
+        # rubric_hits 必须写进末尾 JSON schema 块本身: mini 严格照 schema
+        # 输出, "额外加字段" 的旁述会被丢 (f2/f3 复验坐实, 有效率仅 26%)。
+        user += _USER_TEMPLATE_RUBRIC.format(
+            rubric_block="\n".join(
+                f"{i + 1}. {item}" for i, item in enumerate(question.rubric)
+            ),
+        )
+        n = len(question.rubric)
+        rubric_line = (
+            f'  "rubric_hits": {{"1": <条目1 是否满足, true/false>, ..., '
+            f'"{n}": <条目{n}>}} (共 {n} 项, 每项必填),\n'
+        )
+        user += _USER_TEMPLATE_JSON.replace(
+            '  "covered_aspects"', rubric_line + '  "covered_aspects"', 1,
+        )
+    else:
+        user += _USER_TEMPLATE_JSON
     raw = llm.complete(
         _SYSTEM_PROMPT,
         user,
@@ -265,7 +295,38 @@ def _assess_via_llm(
         covered_aspects=_map_aspect_tags_back(
             payload.get("covered_aspects") or [], aspects,
         ),
+        rubric_hits=_validated_rubric_hits(
+            payload.get("rubric_hits"), question,
+        ),
     )
+
+
+def _validated_rubric_hits(raw_hits, question: Question) -> list[bool]:
+    """Sprint 8.5: rubric_hits 必须与题的 rubric 逐条对齐, 否则弃用
+    (返 [], 记 log, 不猜) —— 评分层拿到 [] 自动退回纯 sufficiency。
+    接受两种形态: 编号对象 {"1": bool, ...} (首选, mini 对齐更稳) 或
+    同长布尔数组 (兼容)。"""
+    n = len(question.rubric)
+    if not n:
+        return []
+    if isinstance(raw_hits, dict):
+        try:
+            return [bool(raw_hits[str(i + 1)]) for i in range(n)]
+        except KeyError:
+            log.warning(
+                "rubric_hits 对象缺编号键, 弃用 (question_id=%s)",
+                question.question_id,
+            )
+            return []
+    if isinstance(raw_hits, list):
+        if len(raw_hits) != n:
+            log.warning(
+                "rubric_hits 长度 %d != rubric %d, 弃用 (question_id=%s)",
+                len(raw_hits), n, question.question_id,
+            )
+            return []
+        return [bool(h) for h in raw_hits]
+    return []
 
 
 def _map_aspect_tags_back(

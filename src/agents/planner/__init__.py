@@ -1086,12 +1086,94 @@ def plan(job: JobContext, candidate: CandidateProfile) -> InterviewPlan:
             questions=questions,
         ))
 
-    return InterviewPlan(
-        job_id=job.job_id,
-        rounds=rounds,
-        competencies=[tech, comm],
-        trace=trace,
+    return _attach_rubrics(
+        InterviewPlan(
+            job_id=job.job_id,
+            rounds=rounds,
+            competencies=[tech, comm],
+            trace=trace,
+        ),
+        job,
     )
+
+
+# ---------- Sprint 8.5: per-question rubric (plan 阶段生成一次, 随 plan 固定) ----------
+
+_RUBRIC_SYSTEM = (
+    "你是面试评审设计专家。为给定面试题生成 3-6 条**二元** (满足/不满足)"
+    "评审 checklist, 用于判断候选人回答质量。\n"
+    "- 每条是一个可独立判定的中文短句 (如 \"给出量化结果或规模数据\")\n"
+    "- 条目只关回答质量, 不得涉及年龄/性别/院校等与内容无关的属性\n"
+    '严格输出 JSON 数组: ["条目1", "条目2", ...], 不要任何解释或代码块标记。'
+)
+
+# stub / LLM 失败时的分类别模板 (确定性, golden/frozen 依赖)
+_RUBRIC_FALLBACK: dict[str, list[str]] = {
+    "knowledge": [
+        "讲清核心概念与原理",
+        "能对比方案取舍或说明适用场景",
+        "解释了为什么而非仅罗列名词",
+        "有实践或案例佐证",
+    ],
+    "project_experience": [
+        "说明本人角色与具体贡献",
+        "给出量化结果或规模数据",
+        "讲清关键决策与理由",
+        "提到踩坑、权衡或局限",
+    ],
+    "scenario": [
+        "给出可执行的处理步骤",
+        "考虑约束与边界条件",
+        "说明判断依据或优先级",
+        "预估风险与兜底方案",
+    ],
+}
+
+
+def _rubric_for_question(job: JobContext, q: Question) -> list[str]:
+    """单题 rubric: LLM 生成, stub/失败/解析异常退分类别模板。"""
+    fallback = list(_RUBRIC_FALLBACK.get(q.category.value, []))
+    if not fallback:
+        return []
+    raw = llm.complete(
+        _RUBRIC_SYSTEM,
+        f"职位: {job.title}\n题目类别: {q.category.value}\n题目: {q.text}\n"
+        "请输出 checklist JSON 数组:",
+        max_tokens=300,
+    )
+    if not raw or llm.is_stub(raw):
+        return fallback
+    try:
+        import json as _json
+        items = _json.loads(raw)
+        cleaned = [str(x).strip() for x in items if str(x).strip()]
+        if 3 <= len(cleaned) <= 6:
+            return cleaned
+    except Exception:
+        pass
+    return fallback
+
+
+def _attach_rubrics(p: InterviewPlan, job: JobContext) -> InterviewPlan:
+    """后置 pass: 给已有题面且还没 rubric 的题补 rubric。
+    self_intro / lazy 占位 (text=="") 跳过; 已有 rubric 的题**绝不改**
+    (随 plan 固定); lazy 题在 resolve_lazy_questions 收尾时走同一函数。"""
+    new_rounds: list[InterviewRound] = []
+    for r in p.rounds:
+        new_qs: list[Question] = []
+        for q in r.questions:
+            if (
+                q.rubric
+                or not q.text
+                or q.category is QuestionCategory.SELF_INTRO
+            ):
+                new_qs.append(q)
+                continue
+            new_qs.append(q.model_copy(update={
+                "rubric": _rubric_for_question(job, q),
+            }))
+        new_rounds.append(r.model_copy(update={"questions": new_qs}))
+    return p.model_copy(update={"rounds": new_rounds})
 
 
 def _compute_knowledge_topic_matching(
@@ -1425,4 +1507,6 @@ def resolve_lazy_questions(
         })
 
     log.info("resolve_lazy_questions: 回灌 %d 道 project 题", touched)
-    return plan.model_copy(update={"rounds": new_rounds, "trace": new_trace})
+    resolved = plan.model_copy(update={"rounds": new_rounds, "trace": new_trace})
+    # Sprint 8.5: 新回灌的 project 题此刻才有题面, 补 rubric (已有的不动)
+    return _attach_rubrics(resolved, job)
