@@ -91,6 +91,7 @@
 | 14 | **golden trace 决策回归**(Sprint 8.2) | 3 场典型 stub 面试确定性回放后决策序列逐项 diff(追问/结束/评估的依据数值 + 全部 LLM 请求哈希与响应);改 prompt / policy 阈值在这里变红属**预期信号** | `python -m unittest evals.test_trace_replay`;确认变化合理后 `python -m scripts.record_golden_traces` 重录并随代码同 commit | 3 golden(签名项 71/71/31);零 token;回放 miss 抛 ReplayDivergence 不静默 |
 | 15 | **冻结 persona 回归批次**(Sprint 8.3.1,"真 LLM 版 golden") | 候选人端复放录制答案(零候选人 LLM),输入全固定 → 批次间分差只可能来自评估端;S83-R1 的 ±10 分 persona 生成噪声被彻底剔除 | `python -m sim.run_interviews --personas all --frozen --run-dir <dir>`;答案变更后 `python -m scripts.freeze_persona_answers` 重冻结并随代码同 commit | 9 persona fixture;连跑两次 9/9 逐字节一致;LLM 缓存命中期内近零成本 |
 | 16 | **Evaluator MAE 校准门禁**(Sprint 8.5,脚手架) | 报告级「模型 overall vs 人工数值分」线性映射 + MAE ≤ 10 门禁;**未过门禁 EVAL_PANEL_ENABLED 不许开** | 标注 `evals/data/report_score_labels.json`(20-30 份,指引在文件内)后 `python -m sim.calibrate_evaluator` | 待标注(记账);空标注优雅跳过 |
+| 17 | **并发压测**(Sprint 9) | N 路并发完整面试:完成率 / turn 延迟 p50/p95 / 吞吐 / **跨会话串扰**(每场唯一 marker,归档后校验只含自己的);stub 模式零 token | `python -m scripts.load_test --interviews 30 --workers 10`(PG 走 TEST 库;配 MILVUS_SERVER_URI 测 server 模式) | 基线见 2026-07-28 条目;失败自动打 traceback |
 
 **Sprint 8.1 注入防御的真实 LLM 对抗测试(手动清单,烧 token)**:
 1. 指令注入拉分:取 calibration 核心集 insufficient 样本,答案尾部叠加
@@ -314,6 +315,30 @@ judge 金标校准 **19/20 首跑通过**(四 judge 全过线)。f5b 审计结�
 - **记账**:报告级人工标注 20-30 份(指引在 report_score_labels.json),
   标完跑 `sim/calibrate_evaluator`;panel 开启需另行确认
 - 全量 evals **577 绿**
+
+---
+
+### 2026-07-28 Sprint 9 并发压测(异步改造前后对比)
+
+同条件对比:30 场完整 stub 面试 × 10 路并发,**uvicorn 共存**(最坏条件,
+lite 单进程锁竞争的真实场景);每场答案带唯一 marker 做跨会话串扰校验。
+
+| | Milvus Lite(改造前架构) | Milvus standalone(Sprint 9) |
+|---|---|---|
+| 完成率 | 29/30(1 例 lite 竞争下 AttributeError 孤例) | **30/30 零失败** |
+| 总耗时 | 246.7s | **61.4s(4.0×)** |
+| turn 延迟 p50 | 3133ms | **5ms** |
+| turn 延迟 p95 | 10771ms | 3278ms(lazy gen turn) |
+| 吞吐 | 1.8 turns/s | **7.3 turns/s** |
+| 跨会话串扰 | 0 | 0 |
+| reloadable 降级噪声 | 持续出现 | 消失 |
+
+- 结论:并发瓶颈确系 Milvus Lite 单进程锁;server 模式下「跑批停 uvicorn」
+  纪律解除。吞吐 7.3 turns/s ≈ 百人级同时面试(单 turn 秒级交互节奏)
+- 配套上线:per-session 锁(并发同会话 409)/ RQ 队列(真异步后台,
+  默认关)/ PG 池与 threadpool env 化;全量 evals **586 绿**
+- 全链路 async 重写明确不做(取舍见 sprint.md Sprint 9),>500 并发会话
+  时再评估 llm 调用层异步化
 
 ---
 
