@@ -50,6 +50,27 @@ def get_aspects_template(role_family: str) -> list[ProfileAspect]:
     return planner.default_aspects_for_role(role_family)
 
 
+def _derive_calibrated_stop(followup_policy: dict | None) -> dict | None:
+    """Sprint 9 修复: 让 HR 配的「充分度停止阈值」在校准主路径也生效。
+
+    背景: 8.3 起真 LLM 路径按 calibrated_sufficiency >= min_calibrated_to_stop
+    决策, HR 的 min_sufficiency_to_stop 只剩启发式 fallback 消费 —— 旋钮在
+    生产主路径被绕过。这里把 raw 阈值经 Platt 单调映射折算成校准阈值
+    (语义等价: raw 0.6 -> 0.9269 恰是 schema 默认), 两条路径同一意图。
+    HR 显式给了 min_calibrated_to_stop 则尊重不覆盖。纯函数供 eval。"""
+    if not followup_policy or "min_sufficiency_to_stop" not in followup_policy:
+        return followup_policy
+    if "min_calibrated_to_stop" in followup_policy:
+        return followup_policy
+    from src.agents.assessor.calibration import calibrate_sufficiency
+
+    out = dict(followup_policy)
+    out["min_calibrated_to_stop"] = round(
+        calibrate_sufficiency(float(out["min_sufficiency_to_stop"])), 4,
+    )
+    return out
+
+
 @router.post("", response_model=JobContext, status_code=201)
 def create_job(
     body: JobCreate,
@@ -70,7 +91,7 @@ def create_job(
         track=body.track,
         role_family=body.role_family,
         question_source=body.question_source,
-        followup_policy=body.followup_policy,
+        followup_policy=_derive_calibrated_stop(body.followup_policy),
         completion_policy=body.completion_policy,
         aspects=[ProfileAspect.model_validate(a) for a in aspects_in],
         # Sprint 6.8: 归属创建者 (数据隔离单点)。本端点此前无鉴权 (dev 遗留洞),

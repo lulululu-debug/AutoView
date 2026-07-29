@@ -129,6 +129,35 @@ class SchedulingDecisionTests(unittest.TestCase):
         ))
 
 
+class DeriveCalibratedStopTests(unittest.TestCase):
+    """Sprint 9: HR 的 raw 充分度阈值经 Platt 折算进校准主路径。"""
+
+    def _derive(self, policy):
+        from api.routes.jobs import _derive_calibrated_stop
+        return _derive_calibrated_stop(policy)
+
+    def test_none_and_untouched_passthrough(self) -> None:
+        self.assertIsNone(self._derive(None))
+        p = {"max_followups_per_question": 2}
+        self.assertEqual(self._derive(p), p)  # 没配 raw 阈值 -> 不动
+
+    def test_default_raw_maps_to_schema_default(self) -> None:
+        out = self._derive({"min_sufficiency_to_stop": 0.6})
+        self.assertAlmostEqual(out["min_calibrated_to_stop"], 0.9269, places=3)
+
+    def test_custom_raw_maps_monotonically(self) -> None:
+        lo = self._derive({"min_sufficiency_to_stop": 0.5})
+        hi = self._derive({"min_sufficiency_to_stop": 0.7})
+        self.assertLess(lo["min_calibrated_to_stop"], 0.9269)
+        self.assertGreater(hi["min_calibrated_to_stop"], 0.9269)
+
+    def test_explicit_calibrated_respected(self) -> None:
+        out = self._derive({
+            "min_sufficiency_to_stop": 0.7, "min_calibrated_to_stop": 0.5,
+        })
+        self.assertEqual(out["min_calibrated_to_stop"], 0.5)
+
+
 class OrchestratorBeliefWiringTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ.pop("OPENAI_API_KEY", None)  # orchestrator import 回填 (F9)
