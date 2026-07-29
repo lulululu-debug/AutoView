@@ -24,12 +24,22 @@ logging.basicConfig(
 
 
 def main() -> None:
-    from rq import Queue, Worker
+    import sys
+
+    from rq import Queue, SimpleWorker, Worker
 
     from src.jobs import QUEUE_NAME, raw_connection
 
     conn = raw_connection()
-    worker = Worker([Queue(QUEUE_NAME, connection=conn)], connection=conn)
+    # macOS: fork 型 work horse 在 gRPC (Milvus server client)/ObjC 运行时下
+    # 会 SIGABRT (实测 ret_val=6), 用 SimpleWorker (同进程不 fork);
+    # Linux 部署保持 fork 型 Worker (任务超时靠 horse 强杀)。
+    # JOBS_WORKER_SIMPLE=1 可在任意平台强制 SimpleWorker。
+    simple = sys.platform == "darwin" or (
+        os.environ.get("JOBS_WORKER_SIMPLE", "").lower() in ("1", "true")
+    )
+    cls = SimpleWorker if simple else Worker
+    worker = cls([Queue(QUEUE_NAME, connection=conn)], connection=conn)
     burst = os.environ.get("JOBS_WORKER_BURST", "").lower() in ("1", "true")
     worker.work(burst=burst)
 

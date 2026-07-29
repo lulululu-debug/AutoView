@@ -23,6 +23,7 @@ class VectorStoreLazinessTests(unittest.TestCase):
 
     def test_import_without_env_var_ok(self):
         os.environ.pop("MILVUS_LITE_URI", None)
+        os.environ.pop("MILVUS_SERVER_URI", None)  # Sprint 9: 两个都缺才算未配置
         os.environ.pop("MILVUS_URI", None)
         from src.vector_store.base import reset_client_for_testing
         reset_client_for_testing()
@@ -31,6 +32,7 @@ class VectorStoreLazinessTests(unittest.TestCase):
 
     def test_call_raises_when_missing(self):
         os.environ.pop("MILVUS_LITE_URI", None)
+        os.environ.pop("MILVUS_SERVER_URI", None)  # Sprint 9: 两个都缺才算未配置
         os.environ.pop("MILVUS_URI", None)
         from src.vector_store import MilvusNotConfigured, init_collections
         from src.vector_store.base import reset_client_for_testing
@@ -46,6 +48,7 @@ class _MilvusTestCaseBase(unittest.TestCase):
     def setUpClass(cls):
         cls._db = tempfile.mktemp(suffix=".db")
         os.environ.pop("MILVUS_LITE_URI", None)
+        os.environ.pop("MILVUS_SERVER_URI", None)  # Sprint 9: 两个都缺才算未配置
         os.environ.pop("MILVUS_URI", None)  # 防止撞 pymilvus ORM 的 import-time 解析
         os.environ["MILVUS_LITE_URI"] = cls._db
         from src.vector_store import init_collections
