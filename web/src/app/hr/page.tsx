@@ -202,8 +202,10 @@ function CreateJobForm({
   // 大多数 HR 不动这块, 后端用默认。
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [maxTotalQ, setMaxTotalQ] = useState("15");
-  const [minCoverage, setMinCoverage] = useState("0.7");
-  const [minSufficiency, setMinSufficiency] = useState("0.7");
+  // Sprint 9 修正: 0.7 是 F1/F5 调校前的旧默认, 后端 tuned 值为 0.6/0.6
+  // (展开过面板就会作为覆盖提交, 旧值会让面试比调校后的更严)
+  const [minCoverage, setMinCoverage] = useState("0.6");
+  const [minSufficiency, setMinSufficiency] = useState("0.6");
   const [minConfidence, setMinConfidence] = useState("0.5");
   // Sprint 5.8: 一刀切 max_followups_per_question; HR 不动 = 后端 null =
   // stage 默认仍生效 (self_intro=0/knowledge=1/project=2/scenario=2);
