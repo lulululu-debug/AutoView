@@ -23,8 +23,11 @@ track/stage 化 → Assessor → CompletionPolicy → calibration）；字母 sp
 （知识管线 / 简历分段 + 图片 OCR / Planner 主题匹配）已落；Sprint 6 视频面试 5/6 已落
 （consent 门 / TTS 播报 / 三态 avatar / 语音作答 / 录制归档，Tier A 真口型待定）；
 Sprint 6.5 效果评估 / 6.7 飞书接入 / 6.8 注册+owner 隔离已落；
-Sprint 8.1 注入防御、8.2 决策 trace + 确定性回放已落（提案与评审见
-AGENT_UPGRADES.md）；Sprint 7(多模态分析) 未开。详见 sprint.md。
+Sprint 8.1–8.5 Agent 能力升级全部已落（注入防御 / 决策 trace+回放 /
+校准+信念驱动追问 / CandidateModel 记忆 / rubric 化打分+裁判团(默认关)，
+提案与评审见 AGENT_UPGRADES.md）；8.3.1 sim 冻结回归基线已落；
+Sprint 9 异步队列 + 高并发承载(RQ / Milvus standalone / 会话锁)已落；
+Sprint 7(多模态分析) 未开。详见 sprint.md。
 完整架构与合规约束见 ARCHITECTURE.md，特别是第 7 节多模态评价 + LLM-as-judge 的硬约束。
 
 ## 技术栈
@@ -56,7 +59,9 @@ brew services stop redis         # 停 Redis
 ```
 环境变量见 `.env.example`：`OPENAI_API_KEY` / `OPENAI_CHAT_MODEL` /
 `OPENAI_EMBEDDING_MODEL` / `OPENAI_BASE_URL` / `POSTGRES_URL` / `REDIS_URL` /
-`MILVUS_LITE_URI` / `SESSION_TTL_SECONDS` / `LLM_CACHE_TTL_SECONDS` /
+`MILVUS_LITE_URI` / `MILVUS_SERVER_URI`(Sprint 9,配了优先) /
+`JOBS_QUEUE_ENABLED`(Sprint 9,开队列须另起 worker) /
+`SESSION_TTL_SECONDS` / `LLM_CACHE_TTL_SECONDS` /
 `EMBEDDING_CACHE_TTL_SECONDS`；Sprint 6 媒体（全可选，不配 = 纯文字面试）：
 `TTS_PROVIDER` / `STT_PROVIDER` / `VOLC_*` / `AZURE_SPEECH_*` / `MEDIA_STORAGE_DIR`。
 运行时按需读取，缺哪个就退到对应的回退分支。
@@ -83,9 +88,27 @@ python -m unittest discover -s evals                              # discover
   Assessor 是 Sprint 5.6 新增的独立模块（单题在线打 sufficiency/confidence/followup_goal），
   不要把它揉进 Interviewer 或 Evaluator —— 它的并发模型和延迟预算都不一样。
 - `src/orchestrator/` — 串联 agent 的唯一入口。Agent 之间**绝不**互相调用。
-- `src/db/` — Postgres 归档：`base.py` engine、`models.py` ORM、`repository.py` save/load。
-- `src/cache/` — Redis：会话热存储 + LLM/embedding 响应缓存。
-- `src/vector_store/` — Milvus Lite：questions 题库 + documents RAG 资料切片。
+  也是内部状态的**独家写入方**(blackboard)：信念更新 / CandidateModel 沉淀 /
+  integrity_flags / per-session 锁。
+- `src/trace/` — 决策 trace 收集(contextvars 旁路) + 确定性回放 + diff
+  (Sprint 8.2)。与 coverage 同级的纯共享模块，agent 可 import 埋点。
+- `src/beliefs.py` — competency 信念高斯共轭更新(8.3)；`src/candidate_model.py`
+  — 跨 stage 候选人记忆(8.4)；`src/coverage.py` — coverage/richness 计算。
+  三者都是纯数值/纯规则共享模块，不调 LLM 不碰 DB(candidate_model 的
+  reflection 是唯一例外，timeout+失败跳过)。
+- `src/jobs/` — RQ 任务队列(Sprint 9)：enqueue 封装 + worker 入口。默认关，
+  开启后候选人上传的 ingest+plan 走独立 worker；任何不可用退回 BackgroundTasks。
+- `src/db/` — Postgres 归档：`base.py` engine(池容量 env 化)、`models.py` ORM、
+  `repository.py` save/load。
+- `src/cache/` — Redis：会话/trace 热存储 + LLM/embedding/TTS 缓存 +
+  per-session 锁(locks.py)。
+- `src/vector_store/` — Milvus：questions 题库 + documents RAG 切片。
+  双模式(Sprint 9)：MILVUS_SERVER_URI(standalone,多进程) 优先，
+  MILVUS_LITE_URI(单文件,dev/eval) 兜底；检索恒 Strong 一致性。
+- `src/auth/` — JWT + bcrypt + httpOnly cookie(**cookie 优先，Bearer 兜底**——
+  写共享 TestClient 的 eval 必须 cookies.clear() 才能用 Bearer 切身份)。
+- `src/connectors/` — 飞书 OpenAPI(6.7)：wiki/docx 拉取，凭证 env 优先 /
+  DB(Fernet 加密) 兜底。
 - `src/tts/` / `src/stt/` — 面试官语音合成 / 候选人流式转写的唯一调用点（Sprint 6），
   `TTS_PROVIDER`/`STT_PROVIDER` 按 region 路由（volc/azure）；未配置一律返 None/False，
   前端自动退纯文字。新增媒体调用点保持同款「绝不 raise、降级保底」模式。
@@ -95,8 +118,12 @@ python -m unittest discover -s evals                              # discover
   不进面试运行时链路，不要与 agent 体系混用。
 - `src/main.py` — 写死 JD + Resume + 候选人回答跑通全链路的 demo 入口。
 - `api/` — FastAPI 层（Sprint 2 起）：只做 HTTP 入口 + 校验 + 异常映射，业务下沉到 orchestrator。
-- `scripts/` — 一次性运维脚本（如 `seed_questions.py` 填题库）。
-- `evals/` — stdlib unittest，结构性 + 合规护栏 + API smoke。
+- `scripts/` — 运维脚本（seed_* / ingest / golden 录制 / frozen 冻结 /
+  压测 / 归属迁移 / 复核统计等，各脚本头注释即用法）。
+- `evals/` — stdlib unittest，结构性 + 合规护栏 + API smoke（强制 stub）。
+- `sim/` — **真 LLM 效果评估**（烧 token，只能显式跑）：persona 仿真 / 对抗 /
+  公平性 / LLM-as-judge / 各类校准 / RAG 指标 / 冻结基线。与 evals 物理分离，
+  纪律见 EVALUATION.md。
 
 后续 `web/`（Next.js）见 sprint.md。
 
@@ -125,17 +152,23 @@ Orchestrator 三段式 API：`start_session` → `submit_answer*N` → `finalize
 封装，保留 Sprint 0 风格的一把跑完。
 
 ### Agent 间通信只走 orchestrator
-Agent 模块只 import `src.llm` 和 `src.schemas`，**不**互相 import，**不**接触 DB/Cache。
+Agent 模块 import 范围：`src.llm` / `src.schemas` + **纯共享模块**
+（`src.coverage` / `src.trace` / `src.beliefs` / `src.candidate_model`——
+无 I/O、不碰 DB/Cache 的计算与埋点），**不**互相 import，**不**接触 DB/Cache。
 所有路由（planner → interviewer 循环 ↔ assessor → analyzer → evaluator）以及与 Redis/PG 的
 交互都在 orchestrator 内完成。新增 agent 时遵循同款：动词函数 + 输入输出都是 schemas 类型。
 
 ### Stage 化的面试推进（Sprint 5.5）
-`InterviewSession` 多一个 `stage` 状态（`self_intro` / `knowledge` / `project` / `scenario` / `done`），
-orchestrator 按 track 配置的 stage 序列推进，每个 stage 结束才进下一个。**self_intro 永远 0 追问**，
+stage 挂在 `InterviewRound.stage` 上（`self_intro` / `knowledge` / `project` /
+`scenario`），session 不单存 stage——当前 stage 由「当前题所在 round」派生。
+Interviewer 按 plan 的 round 顺序推进。**self_intro 永远 0 追问**，
 拿到的回答存进 `session.intro_text` 给后续 stage 用（也回灌 evaluator 作软信号）。
 Knowledge / scenario 题在 plan 阶段就生成；**project 题用 lazy generation**：等候选人 self_intro
-答完，进 project stage 时再用 `intro_text + Resume RAG` 现场生成项目深挖题，避开"读简历瞎猜项目"
-的失真。新增 stage 时同步更新 `FollowUpPolicy` 的 `max_followups_per_stage` 配额。
+答完，进 project stage 时再用 `intro_text + Resume RAG + CandidateModel 存疑条目`
+现场生成项目深挖题，避开"读简历瞎猜项目"的失真。追问配额是**每题**上限
+（`FollowUpPolicy.max_followups_per_question`），stage 默认表在
+`FollowUpPolicy.for_stage`（self_intro=0 / knowledge=1 / project=2 / scenario=2），
+新增 stage 时同步更新该表。
 
 ### Assessor 在循环中：结构化 AnswerAssessment（Sprint 5.6）
 Interviewer 每收到一个回答，**先**调用 Assessor 拿一份 `AnswerAssessment`
@@ -149,14 +182,33 @@ Interviewer 每收到一个回答，**先**调用 Assessor 拿一份 `AnswerAsse
 - 上线前必须跑 calibration eval（20–30 条人工标注样本对齐 sufficiency 阈值），
   evals 跑过才能把 Assessor 接进 production codepath。改 Assessor prompt = 重跑校准。
 
-### FollowUpPolicy / CompletionPolicy（Sprint 5.6 / 5.7）
+### FollowUpPolicy / CompletionPolicy（5.6 / 5.7,8.3 扩展）
 追问与结束都用配置驱动，避免 if-else 散落各处：
-- **FollowUpPolicy**：`max_followups_per_stage`，self_intro=0 / knowledge=1 / project=2 / scenario=2。
-  Assessor 给的 `followup_goal` 会拼进追问 prompt，让追问聚焦缺失信号，而不是泛泛 "能展开吗"。
-- **CompletionPolicy**：基于 `competency_coverage` 终止——所有 competency 都拿到 ≥1 个达标回答 +
-  达到 stage 序列尾部，就 done。设硬 `max_total_questions` cap 防失控。
+- **FollowUpPolicy**：每题上限 `max_followups_per_question`（stage 默认表
+  self_intro=0 / knowledge=1 / project=2 / scenario=2）+ raw/校准双阈值 +
+  Sprint 8.3 的全局预算(`total_followup_budget`)与信念门
+  (`min_variance_to_probe` + `min_established_mean`,只作用于校准路径)。
+  Assessor 给的 `followup_goal`(+ CandidateModel 澄清目标)拼进追问 prompt。
+  HR 在 UI 配的 raw 阈值会在建 job 时经 Platt 映射折算进校准阈值(两路径同一意图)。
+- **CompletionPolicy**：基于 `competency_coverage` 终止,mandatory 每维度还须
+  ≥`min_assessed_per_mandatory`(默认 2)道不同题被评过(F5 防单发幸运分逃逸);
+  硬 `max_total_questions` cap 防失控;`use_belief_lcb` 灰度开关(默认关)可用
+  信念置信下界替代裸 max。
   **绝对不做动态补题**——题库由 plan + lazy project gen 一次确定，coverage 不够就让 HR 复核
   环节人工兜底，不能让 LLM 在线生成新题再考一遍候选人（结果不可复现 + 公平性塌方）。
+
+### 第 N 类内部数据(只决策/审计,不外泄)
+除 AnswerAssessment 外,以下同待遇——**不进总分、不进 HR UI 明细、不见候选人**:
+`CompetencyBelief`(8.3) / `CandidateModel`+`SkillClaim`(8.4) /
+`DecisionTrace`(8.2,仅审计导出端点) / `integrity_flags`(8.1)。
+新增任何数字信号默认归入此类,想展示须显式评审。
+
+### 回归双门禁(Sprint 8.2/8.3.1 起)
+- **golden trace**(stub,零 token):3 场典型面试的决策序列 diff,改 prompt/
+  policy 变红属预期信号,确认合理后 `scripts/record_golden_traces` 重录同 commit。
+- **frozen 批次**(真 LLM):9 persona 录制答案复放,输入全固定,批次间分差
+  只可能来自评估端。题集变更型改动的 frozen Δ 是"变更检测"不是质量裁决,
+  质量用生成式批次复核;出题变更后 `scripts/freeze_persona_answers` 重冻结。
 
 ### 合规约束写进 schema
 `EvaluationReport` 把 `content_scores`（内容维度，进总分）与 `performance_observations`

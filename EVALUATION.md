@@ -14,7 +14,7 @@
 
 ## 〇、总结(一页速览)
 
-> **百余场真 LLM 仿真面试 + 11 种可复跑评估手段 + 430 条结构护栏,定位并修复
+> **百余场真 LLM 仿真面试 + 17 种可复跑评估手段 + 590 条结构护栏,定位并修复
 > 8 类质量缺陷:强弱候选人的维度分差从 0 拉开到 39、作弊式作答从与认真作答
 > 同分(Δ-0.4)压低到 Δ-14.8、题库检索污染 600 道清零、5 组画像公平性扰动
 > Δ 全 0、项目题编造 0/45——单场评估成本不足 ¥0.5。**
@@ -76,8 +76,8 @@
 
 | # | 手段 | 测什么 | 怎么跑 | 规模/状态 |
 |---|---|---|---|---|
-| 1 | **结构性护栏** | 合规不变量(overall 只由 content_scores 得出、AnswerAssessment 不进报告、候选人不接触报告)、降级路径(LLM/TTS/STT/Redis/PG 任一缺失不挂链路)、协议帧纯函数(火山 ASR 二进制)、API smoke、RAG provenance、e2e walk | `python -m unittest discover -s evals` | **415 条**,全绿 |
-| 2 | **Assessor 校准**(人工金标) | sufficiency 排序与人类判断一致(足够 vs 不足能分开) | `python -m unittest evals.test_assessor_calibration` | 24 条标注;启发式路径 gap **+0.83~0.84**;covered_aspects recall 1.0;distractor precision 1.0 |
+| 1 | **结构性护栏** | 合规不变量(overall 只由 content_scores 得出、AnswerAssessment 不进报告、候选人不接触报告)、降级路径(LLM/TTS/STT/Redis/PG 任一缺失不挂链路)、协议帧纯函数(火山 ASR 二进制)、API smoke、RAG provenance、e2e walk | `python -m unittest discover -s evals` | **590 条**,全绿 |
+| 2 | **Assessor 校准**(人工金标) | sufficiency 排序与人类判断一致(足够 vs 不足能分开) | `python -m unittest evals.test_assessor_calibration` | 50 条标注(29 suf/13 insuf/8 amb)+ 8 条对抗扩展;启发式路径 gap **+0.83~0.84**;真 LLM 路径 gap +0.489;covered_aspects recall 1.0 |
 | 3 | **Evaluator 打分单元护栏** | assessment 驱动映射规则 / 双路径回退 / 启发式饱和行为文档化钉死 | `python -m unittest evals.test_evaluator_scoring` | 11 条 |
 | 4 | **合成候选人仿真**(区分度/稳定性/过程) | 强中弱 persona 的 overall 排序、跨 repeat 方差、追问/coverage/证据不足行为合理性 | `python -m sim.run_interviews --personas core --repeat 3` | 6 核心 persona × 2 track |
 | 5 | **对抗仿真**(鲁棒性) | 复制粘贴刷题 / 跑题 / 超短敷衍(同简历只换答风,隔离变量)相对 medium 基线是否被压低 | `python -m sim.run_interviews --personas adversarial --repeat 3` | 3 对抗 persona |
