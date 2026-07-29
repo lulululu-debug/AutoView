@@ -17,11 +17,13 @@ import { clearRole, readRole, writeRole } from "@/lib/auth";
  * - 401 -> 跳 /hr/login
  * - 退出按钮调 POST /auth/logout (server 帮清 cookie) 然后跳登录
  *
- * /hr/login 是唯一不需要 session 的 HR 子路由; 其他 /hr/* 缺 session 一律
- * router.push 到 login。
+ * /hr/login 与 /hr/register 是仅有的不需要 session 的 HR 子路由 (Sprint 9
+ * 修复: 6.8 加注册页时漏进白名单, 未登录点"注册一个"会被守卫弹回 login);
+ * 其他 /hr/* 缺 session 一律 router.push 到 login。
  */
 
 const LOGIN_PATH = "/hr/login";
+const PUBLIC_PATHS = [LOGIN_PATH, "/hr/register"];
 
 export default function HrLayout({
   children,
@@ -38,8 +40,8 @@ export default function HrLayout({
 
   useEffect(() => {
     let cancelled = false;
-    // login 页不查 /auth/me, 让"未登录直接访问 /hr/login" 不抖闪
-    if (pathname === LOGIN_PATH) {
+    // login/register 页不查 /auth/me, 让未登录直接访问不抖闪/不被弹回
+    if (PUBLIC_PATHS.includes(pathname)) {
       // react-hooks/set-state-in-effect: 经微任务再置态
       void Promise.resolve().then(() => {
         if (!cancelled) {
@@ -99,7 +101,7 @@ export default function HrLayout({
           >
             AI Interview · HR
           </Link>
-          {pathname !== LOGIN_PATH && authed && (
+          {!PUBLIC_PATHS.includes(pathname) && authed && (
             <div className="flex items-center gap-3 text-xs text-zinc-500">
               <Link
                 href="/hr"
