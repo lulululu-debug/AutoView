@@ -87,6 +87,8 @@ class _RagE2EBase(unittest.TestCase):
         cls._db = tempfile.mktemp(suffix=".db")
         os.environ.pop("MILVUS_URI", None)
         os.environ["MILVUS_LITE_URI"] = cls._db
+        # Sprint 9: server 优先于 lite, 防 .env 的 MILVUS_SERVER_URI 劫走临时库
+        os.environ.pop("MILVUS_SERVER_URI", None)
         # Sprint 6.5 F8: 本类 setUp 会 flushdb —— 必须切到独立 Redis db,
         # 否则每跑一次 discover 就把 dev 的 llm/emb/tts 缓存全部清零
         # (实战教训: 30 天 embedding 缓存被反复清空, 一天烧穿 API 配额)。

@@ -48,6 +48,10 @@ def swap_to_test_url() -> None:
     if _SWAPPED:
         return
     _SWAPPED = True
+    # Sprint 9: eval 体系强制走 BackgroundTasks 内联路径 (测的就是同步语义;
+    # RQ 路径由 test_jobs_queue 单独显式开)。先于 pymilvus 的 load_dotenv
+    # 设值 —— load_dotenv 默认不覆盖已存在的 env, .env 里的 1 进不来。
+    os.environ["JOBS_QUEUE_ENABLED"] = "false"
     # dotenv 可能还没被加载, 先尝试加载一次让 .env 里的 TEST_POSTGRES_URL 进环境
     try:
         from dotenv import load_dotenv

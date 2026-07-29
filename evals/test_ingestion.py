@@ -96,6 +96,8 @@ class _PipelineTestBase(unittest.TestCase):
         cls._db = tempfile.mktemp(suffix=".db")
         os.environ.pop("MILVUS_URI", None)
         os.environ["MILVUS_LITE_URI"] = cls._db
+        # Sprint 9: server 优先于 lite, 防 .env 的 MILVUS_SERVER_URI 劫走临时库
+        os.environ.pop("MILVUS_SERVER_URI", None)
         from src.vector_store import init_collections
         from src.vector_store.base import reset_client_for_testing
         reset_client_for_testing()
