@@ -14,7 +14,7 @@
 
 ## 〇、总结(一页速览)
 
-> **百余场真 LLM 仿真面试 + 17 种可复跑评估手段 + 590 条结构护栏,定位并修复
+> **百余场真 LLM 仿真面试 + 18 种可复跑评估手段 + 590 条结构护栏,定位并修复
 > 8 类质量缺陷:强弱候选人的维度分差从 0 拉开到 39、作弊式作答从与认真作答
 > 同分(Δ-0.4)压低到 Δ-14.8、题库检索污染 600 道清零、5 组画像公平性扰动
 > Δ 全 0、项目题编造 0/45——单场评估成本不足 ¥0.5。**
@@ -92,6 +92,7 @@
 | 15 | **冻结 persona 回归批次**(Sprint 8.3.1,"真 LLM 版 golden") | 候选人端复放录制答案(零候选人 LLM),输入全固定 → 批次间分差只可能来自评估端;S83-R1 的 ±10 分 persona 生成噪声被彻底剔除 | `python -m sim.run_interviews --personas all --frozen --run-dir <dir>`;答案变更后 `python -m scripts.freeze_persona_answers` 重冻结并随代码同 commit | 9 persona fixture;连跑两次 9/9 逐字节一致;LLM 缓存命中期内近零成本 |
 | 16 | **Evaluator MAE 校准门禁**(Sprint 8.5,脚手架) | 报告级「模型 overall vs 人工数值分」线性映射 + MAE ≤ 10 门禁;**未过门禁 EVAL_PANEL_ENABLED 不许开** | 标注 `evals/data/report_score_labels.json`(20-30 份,指引在文件内)后 `python -m sim.calibrate_evaluator` | 待标注(记账);空标注优雅跳过 |
 | 17 | **并发压测**(Sprint 9) | N 路并发完整面试:完成率 / turn 延迟 p50/p95 / 吞吐 / **跨会话串扰**(每场唯一 marker,归档后校验只含自己的);stub 模式零 token | `python -m scripts.load_test --interviews 30 --workers 10`(PG 走 TEST 库;配 MILVUS_SERVER_URI 测 server 模式) | 基线见 2026-07-30 勘误条目(07-28 批次 stub 泄漏作废);失败自动打 traceback |
+| 18 | **Milvus 检索层专项压测**(勘误清偿) | 自建 bench collection(不碰生产数据),真 embedding 查询(embed 计时与 search 分离),单线程 / 10 并发 search p50/p95 + 吞吐 + 跨进程共持探针 + read-own-write(Strong vs Bounded);LLM chat 零涉及 | `python -m scripts.bench_milvus --mode {lite,server} [--coholder]`(server 需 docker milvus) | 基线见 2026-07-30 检索层压测条目;跑完自动 drop 零残留 |
 
 **Sprint 8.1 注入防御的真实 LLM 对抗测试(手动清单,烧 token)**:
 1. 指令注入拉分:取 calibration 核心集 insufficient 样本,答案尾部叠加
@@ -364,7 +365,40 @@ lite 单进程锁竞争的真实场景);每场答案带唯一 marker 做跨会�
   短路),压测度量的是纯应用层(Redis 会话/PG/启发式评估/锁)——并发容量远未
   见顶;真实负载的瓶颈是 LLM 调用的秒级时延(方向:llm 调用层异步化 + lazy
   出题预生成,与 Sprint 9 留账一致)。lite/server 的检索层对比若要重建,
-  需要真 embedding 的专项压测(记账,非本次范围)。
+  需要真 embedding 的专项压测(已清偿,见下条检索层专项压测)。
+
+---
+
+### 2026-07-30 Milvus 检索层专项压测(lite vs server, 勘误记账清偿)
+
+- **方法**(手段 #18, `scripts/bench_milvus.py`):自建 bench_vectors
+  collection(1536 维 / COSINE 与生产对齐),语料 3626 条合成向量(对齐题库
+  规模);查询走真 embedding(10 条,命中 embedding 缓存后近零成本),embed
+  时延与 search 计时分离;LLM chat 全程不涉及;lite 走独立 scratch 文件
+  不碰 dev 数据,跑完 drop 零残留。
+- **结果**(本机 macOS + docker;绝对值仅环境内相对比较有效):
+
+| 指标 | lite | server(standalone) |
+|---|---|---|
+| 单线程 search p50 | 926~953ms | 400ms |
+| 10 线程并发 p50 | **9212~9354ms(串行化,≈单线程×10)** | **399ms(不随并发退化)** |
+| 并发吞吐 | 1.1 qps | **28.4 qps(26×)** |
+| 第二进程共持同一存储 | **直接拒开**(Failed to start MilvusLite server, exit 2) | 多进程安全 |
+| read-own-write | Strong/Bounded 均 10/10 即时可见 | **Strong 10/10 @395ms;Bounded 0/10 @3.8ms** |
+
+- **结论**:
+  1. lite 进程内串行化(并发延迟 ≈ 单线程 × 线程数,吞吐钉死 1.1 qps)+
+     跨进程直接拒开——「跑批停 uvicorn」纪律与 server 化的价值获得独立
+     证据;勘误中被降级的「lite 单进程锁是并发瓶颈」**重新确立**,且本次
+     与 LLM 时延零纠缠。
+  2. server 的 Bounded read-own-write **0/10** 直接复现 Sprint 9「ingest 后
+     立刻检索读不到自己刚写的切片」的修复依据;但 Strong 的代价本环境实测
+     **~400ms/次**(Bounded 3.8ms)——task 1 原注「题库检索也统一 Strong,
+     差异无感」需修正为**差异可感**。**记账**:题库检索(离线种子,无
+     read-own-write 需求)可评估降级 Bounded,resume/documents 保持 Strong;
+     属检索行为变更,须过 rag_metrics + golden trace 双门禁。
+- **限界**:quick-setup collection(AUTOINDEX 默认参数);未测 >10 并发与
+  更大语料;绝对数值不可跨环境外推,lite vs server 相对结论稳健。
 
 ---
 
