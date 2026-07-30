@@ -67,7 +67,9 @@ AI 虚拟面试官有脸、开口说中文提问,候选人可语音作答(转写
 - **RQ 任务队列**:候选人上传后的切片 + 出题走独立 worker 进程,失败退避重试;
   队列不可用自动退回 BackgroundTasks
 - **并发承载**:per-session Redis 锁(并发同会话 409)、PG 连接池 / threadpool
-  env 可调;实测 30 路并发面试零串扰,server Milvus 下 p50 5ms、吞吐 4×
+  env 可调;实测 30 路并发面试 30/30 零失败零串扰,应用层 turn 延迟
+  p50 18ms、吞吐 ~367 turns/s(stub 压测口径,不含 LLM 时延;
+  见 EVALUATION.md 2026-07-30 勘误)
 
 ### 质量体系
 - **两套评估物理分离**:`evals/` 590 条结构护栏(强制 stub,零 token)+

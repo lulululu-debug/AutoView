@@ -1256,10 +1256,12 @@ panel 代码就绪但默认关,门禁脚手架可跑;标注工作量清晰记账
 - task 2: RQ 踩坑 —— 业务 Redis client decode_responses=True 会把 pickle
   任务体解码炸掉, 队列走专用 raw 连接; Planner 失败抛出交 RQ 重试,
   分段/ingest 吞异常 (下游有 fallback)
-- task 3: 压测对比把本 sprint 的价值量化 —— 同为 30 场×10 并发且 uvicorn
-  共存: lite 模式 29/30 完成、p50 3133ms (锁竞争 + 一次孤例 AttributeError);
-  **server 模式 30/30 零失败、总耗时 246.7s→61.4s、p50 5ms、7.3 turns/s**,
-  串扰校验全过。锁冲突 409 语义上线; evals +9, 全量 586 绿。
+- task 3: 锁冲突 409 语义上线; evals +9, 全量 586 绿。压测首版对比数字
+  (lite 29/30 / p50 3133ms vs server 30/30 / p50 5ms / 4×)后经复查**作废**
+  —— stub 泄漏(pymilvus load_dotenv 回填 key, F9 同款)混入真 LLM 时延与
+  缓存效应, 见 EVALUATION.md 2026-07-30 勘误; 修复 harness 后干净基线:
+  30 场×10 并发 **30/30 零失败、p50 18ms / p95 41ms、~367 turns/s、
+  串扰 0**(纯应用层口径, stub 下 Milvus 不被触达)。
 
 **完成标准**:docker milvus + 多 worker uvicorn + RQ worker 架构本机跑通;
 压测 N≥30 路并发面试零串扰零 5xx;所有降级路径(无 server milvus 退 lite /
