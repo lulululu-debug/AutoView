@@ -394,11 +394,31 @@ lite 单进程锁竞争的真实场景);每场答案带唯一 marker 做跨会�
   2. server 的 Bounded read-own-write **0/10** 直接复现 Sprint 9「ingest 后
      立刻检索读不到自己刚写的切片」的修复依据;但 Strong 的代价本环境实测
      **~400ms/次**(Bounded 3.8ms)——task 1 原注「题库检索也统一 Strong,
-     差异无感」需修正为**差异可感**。**记账**:题库检索(离线种子,无
-     read-own-write 需求)可评估降级 Bounded,resume/documents 保持 Strong;
-     属检索行为变更,须过 rag_metrics + golden trace 双门禁。
+     差异无感」需修正为**差异可感**。**记账已清偿**:题库检索
+     降级 Bounded 已落地(见下条一致性分级条目)。
 - **限界**:quick-setup collection(AUTOINDEX 默认参数);未测 >10 并发与
   更大语料;绝对数值不可跨环境外推,lite vs server 相对结论稳健。
+
+---
+
+### 2026-07-30 题库检索一致性分级落地(Strong → Bounded)
+
+- **改动**(`src/vector_store/operations.py`):`search_questions` 一致性
+  降级 Bounded(`QUESTIONS_CONSISTENCY_LEVEL` env 可一键回滚 Strong);
+  `search_documents` 保持 Strong(简历 ingest 后立刻检索是 read-own-write)。
+  依据:检索层专项压测实测 Strong ~400ms/次 vs Bounded ~4ms;题库为离线
+  种子/审核入库,面试链路无"刚写立刻读"需求。代价:server 模式下刚审核
+  通过的新题有秒级不可见窗口,仅影响新题何时开始被召回(含
+  /diag/milvus-search-sample 调试端点),不影响正确性。
+- **双门禁结果**:
+  - rag_metrics:hit@5 8/10(80% 踩线,与改前基线一致,miss 仍为 qb-09/10
+    两条 scenario query,F10 已知)、污染@5 0/10、标签完整 10/10、
+    documents 3/3 —— 全部红线通过,**零漂移**
+  - golden trace + 全量 evals:discover 全绿(590 条,含 test_trace_replay);
+    stub 口径下检索点全部被 is_stub_vector 短路,决策序列零 diff,
+    无需重录 golden
+- lite 模式下 Bounded/Strong 行为无差异(均即时可见,压测坐实),分级仅在
+  server 部署态产生收益(每次题库召回省 ~400ms)。
 
 ---
 

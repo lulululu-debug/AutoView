@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 from src.embeddings import is_stub_vector
@@ -37,6 +38,20 @@ _RELOADABLE_ERROR_MARKERS = (
 )
 
 
+def _questions_consistency() -> str:
+    """题库检索一致性等级 —— 2026-07-30 检索层专项压测后的分级决策。
+
+    documents 保持 Strong: 简历 ingest 后立刻 RAG 检索是典型 read-own-write,
+    server 默认 Bounded 下读不到自己刚写的切片 (压测实测 0/10 可见), 用
+    Strong 换正确性。questions 降级 Bounded: 题库是离线种子/审核入库, 面试
+    链路没有"刚写立刻读"的需求; server standalone 实测 Strong ~400ms/次 vs
+    Bounded ~4ms (lite 两者皆即时可见, 无行为差异)。代价: 刚审核通过的新题
+    在 server 模式下有秒级不可见窗口, 只影响新题何时开始被召回 (含
+    /diag/milvus-search-sample 调试端点), 不影响正确性。
+    回滚: QUESTIONS_CONSISTENCY_LEVEL=Strong。"""
+    return os.environ.get("QUESTIONS_CONSISTENCY_LEVEL", "Bounded")
+
+
 def _search_with_load_retry(
     *,
     collection_name: str,
@@ -44,13 +59,12 @@ def _search_with_load_retry(
     top_k: int,
     expr: str,
     output_fields: list[str],
+    consistency_level: str = "Strong",
 ) -> Any:
     """单次 client.search, 失败时若是 reloadable 类错误则 load_collection 重试一次。
 
-    Sprint 9: consistency_level=Strong —— server 模式默认 Bounded 一致性下,
-    "ingest 简历切片后立刻 RAG 检索"会读不到自己刚写的数据 (lite 是即时的,
-    server 冒烟坐实约 1s 窗口)。面试链路是典型 read-own-write, 用 Strong
-    换正确性; 题库检索也统一走 Strong (离线种子, 差异无感, 少一个分叉)。"""
+    Sprint 9 起 consistency_level 默认 Strong (read-own-write 正确性);
+    题库检索按 _questions_consistency() 分级降 Bounded, 依据与代价见其注释。"""
     client = get_client()
     try:
         return client.search(
@@ -59,7 +73,7 @@ def _search_with_load_retry(
             limit=top_k,
             filter=expr,
             output_fields=output_fields,
-            consistency_level="Strong",
+            consistency_level=consistency_level,
         )
     except Exception as e:
         msg = str(e).lower()
@@ -81,7 +95,7 @@ def _search_with_load_retry(
             limit=top_k,
             filter=expr,
             output_fields=output_fields,
-            consistency_level="Strong",
+            consistency_level=consistency_level,
         )
 
 
@@ -172,6 +186,7 @@ def search_questions(
         top_k=top_k,
         expr=expr,
         output_fields=list(_QUESTIONS_OUTPUT),
+        consistency_level=_questions_consistency(),
     )
     return _flatten_hits(results)
 
