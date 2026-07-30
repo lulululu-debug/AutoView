@@ -91,7 +91,7 @@
 | 14 | **golden trace 决策回归**(Sprint 8.2) | 3 场典型 stub 面试确定性回放后决策序列逐项 diff(追问/结束/评估的依据数值 + 全部 LLM 请求哈希与响应);改 prompt / policy 阈值在这里变红属**预期信号** | `python -m unittest evals.test_trace_replay`;确认变化合理后 `python -m scripts.record_golden_traces` 重录并随代码同 commit | 3 golden(签名项 71/71/31);零 token;回放 miss 抛 ReplayDivergence 不静默 |
 | 15 | **冻结 persona 回归批次**(Sprint 8.3.1,"真 LLM 版 golden") | 候选人端复放录制答案(零候选人 LLM),输入全固定 → 批次间分差只可能来自评估端;S83-R1 的 ±10 分 persona 生成噪声被彻底剔除 | `python -m sim.run_interviews --personas all --frozen --run-dir <dir>`;答案变更后 `python -m scripts.freeze_persona_answers` 重冻结并随代码同 commit | 9 persona fixture;连跑两次 9/9 逐字节一致;LLM 缓存命中期内近零成本 |
 | 16 | **Evaluator MAE 校准门禁**(Sprint 8.5,脚手架) | 报告级「模型 overall vs 人工数值分」线性映射 + MAE ≤ 10 门禁;**未过门禁 EVAL_PANEL_ENABLED 不许开** | 标注 `evals/data/report_score_labels.json`(20-30 份,指引在文件内)后 `python -m sim.calibrate_evaluator` | 待标注(记账);空标注优雅跳过 |
-| 17 | **并发压测**(Sprint 9) | N 路并发完整面试:完成率 / turn 延迟 p50/p95 / 吞吐 / **跨会话串扰**(每场唯一 marker,归档后校验只含自己的);stub 模式零 token | `python -m scripts.load_test --interviews 30 --workers 10`(PG 走 TEST 库;配 MILVUS_SERVER_URI 测 server 模式) | 基线见 2026-07-28 条目;失败自动打 traceback |
+| 17 | **并发压测**(Sprint 9) | N 路并发完整面试:完成率 / turn 延迟 p50/p95 / 吞吐 / **跨会话串扰**(每场唯一 marker,归档后校验只含自己的);stub 模式零 token | `python -m scripts.load_test --interviews 30 --workers 10`(PG 走 TEST 库;配 MILVUS_SERVER_URI 测 server 模式) | 基线见 2026-07-30 勘误条目(07-28 批次 stub 泄漏作废);失败自动打 traceback |
 
 **Sprint 8.1 注入防御的真实 LLM 对抗测试(手动清单,烧 token)**:
 1. 指令注入拉分:取 calibration 核心集 insufficient 样本,答案尾部叠加
@@ -339,6 +339,32 @@ lite 单进程锁竞争的真实场景);每场答案带唯一 marker 做跨会�
   默认关)/ PG 池与 threadpool env 化;全量 evals **586 绿**
 - 全链路 async 重写明确不做(取舍见 sprint.md Sprint 9),>500 并发会话
   时再评估 llm 调用层异步化
+
+---
+
+### 2026-07-30 勘误:Sprint 9 压测基线失效(stub 泄漏)+ 干净重测
+
+- **发现**:复查上条压测数据时坐实 stub 失效——load_test.py 在 main() 里
+  pop OPENAI_API_KEY,但 pymilvus 首次 import 发生在工作线程内(import
+  orchestrator → vector_store → pymilvus),其 load_dotenv() 把 .env 的 key
+  回填(F9 同款:pop 早于 import 无效)。turn 实际带真 key 跑:Assessor/
+  出题走真 LLM,检索真打 Milvus。
+- **影响**:上条 lite vs server 延迟对比**作废**——lite 批次 p50 3133ms 主要
+  是真 LLM 时延(与 lite 锁竞争纠缠,无法拆分);server 批次 p50 5ms 是第二轮
+  跑时 dev Redis LLM 缓存全热的读数(两轮 prompt 相同,TTL 7 天内);"零 token"
+  声明不实,246.7s→61.4s(4×)/ 7.3 turns/s 均为污染口径。**仍然成立**:
+  server 批 30/30 完成率、跨会话串扰 0、锁 409 语义、server 模式解除
+  「跑批停 uvicorn」纪律。「并发瓶颈确系 lite 单进程锁」降级为
+  「与 LLM 时延纠缠,未单独证实」。
+- **修复**:main() 先触发完整 import 链(import src.orchestrator)再 pop key;
+  run_one 入口加断言——turn 执行期 key 存在直接 fail(防回归)。
+- **干净基线**(30 场 × 10 路并发,连跑两轮数字稳定):**30/30 零失败、
+  总耗时 1.2s、turn p50 18ms / p95 39-41ms、吞吐 ~367 turns/s、串扰 0**。
+- **解读**:stub 口径下 Milvus 完全不被触达(三个检索点全部被 is_stub_vector
+  短路),压测度量的是纯应用层(Redis 会话/PG/启发式评估/锁)——并发容量远未
+  见顶;真实负载的瓶颈是 LLM 调用的秒级时延(方向:llm 调用层异步化 + lazy
+  出题预生成,与 Sprint 9 留账一致)。lite/server 的检索层对比若要重建,
+  需要真 embedding 的专项压测(记账,非本次范围)。
 
 ---
 

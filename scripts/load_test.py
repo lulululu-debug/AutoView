@@ -27,6 +27,10 @@ def run_one(idx: int, results: list, errors: list) -> None:
     from src import db, orchestrator
     from src.schemas import CandidateProfile, JobContext
 
+    assert not os.environ.get("OPENAI_API_KEY"), (
+        "stub 失效: OPENAI_API_KEY 在 turn 执行期存在, 压测会烧真 token "
+        "(F9: pymilvus load_dotenv 回填, 见 main 里的 pop 顺序)"
+    )
     marker = f"MARKER-{idx:03d}"
     try:
         job = JobContext(title=f"压测岗-{idx}", jd="高并发服务", track="campus")
@@ -65,7 +69,12 @@ def main() -> None:
     args = ap.parse_args()
 
     import os
-    os.environ.pop("OPENAI_API_KEY", None)  # 强制 stub (import 后 pop, F9)
+    # F9 完整版: pymilvus 首次 import 时 load_dotenv() 会把 .env 的 key 回填。
+    # 旧版在这里 pop 后, 线程内才首次 import orchestrator -> pymilvus, 回填发生在
+    # pop 之后 —— 2026-07-30 实测坐实: 压测 turn 实际带着真 key 跑 (烧 token +
+    # 污染 lite/server 对比)。先在主线程触发完整 import 链, 再 pop 才真正生效。
+    import src.orchestrator  # noqa: F401  # 触发 pymilvus load_dotenv
+    os.environ.pop("OPENAI_API_KEY", None)  # 强制 stub (pymilvus import 后 pop)
     os.environ["ASSESSOR_ENABLED"] = "true"
     from src.db import init_db
     init_db()

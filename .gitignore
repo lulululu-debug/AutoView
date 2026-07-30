@@ -22,3 +22,6 @@ milvus_lite*
 
 # sim 仿真 artifacts (效果评估跑批产物)
 sim/runs/
+
+# 简历/面试准备材料 (个人素材, 永不入库)
+resume.md
