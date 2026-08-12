@@ -35,6 +35,12 @@ call each other. The interview advances through stages (`self_intro → knowledg
 scenario`), and project questions are generated live from resume RAG once the candidate has
 introduced themselves, rather than guessed up front.
 
+<p align="center">
+  <img src="./docs/screenshots/interview-plan.png" alt="Generated interview plan — fixed knowledge and scenario questions with project questions reserved for lazy generation" width="720">
+  <br>
+  <em>The generated plan: knowledge & scenario questions are fixed up front; project questions stay as placeholders, generated live once the candidate has introduced themselves.</em>
+</p>
+
 ## Features
 
 - **Adaptive follow-ups.** Each answer gets a structured assessment with a Platt-calibrated
@@ -57,6 +63,12 @@ introduced themselves, rather than guessed up front.
   returns 404), and prompt-injection defenses on all candidate-supplied text.
 - **Async & concurrent.** Post-upload work runs on an RQ worker; per-session Redis locks
   prevent cross-talk. Measured 30 concurrent interviews at 30/30, p50 turn latency 18ms.
+
+<p align="center">
+  <img src="./docs/screenshots/hr-review.png" alt="HR question-bank review dashboard — datasets with chunk counts and approval stats, sourced from markdown corpus and Feishu docs" width="720">
+  <br>
+  <em>HR review dashboard: corpus & Feishu docs are chunked, reverse-generated into questions, and human-reviewed into the bank before the Planner can draw from them.</em>
+</p>
 
 ## Quality system
 

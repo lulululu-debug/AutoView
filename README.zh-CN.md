@@ -31,6 +31,12 @@ JD + 简历 ──▶ Planner ──▶ Interviewer ⇄ Assessor ──▶ Evalu
 stage 推进(`self_intro → knowledge → project → scenario`);项目题在候选人自我介绍后,
 结合简历 RAG **现场生成**,而非上来就凭简历瞎猜。
 
+<p align="center">
+  <img src="./docs/screenshots/interview-plan.png" alt="生成的面试计划 —— 知识题与场景题一次固定,项目题留待懒生成" width="720">
+  <br>
+  <em>生成的面试计划:知识题、场景题一次固定;项目题保持占位,待候选人自我介绍后现场生成。</em>
+</p>
+
 ## 特性
 
 - **自适应追问。** 每个回答产出结构化评估,带 Platt 校准的充分度分数。追问决策在校准
@@ -48,6 +54,12 @@ stage 推进(`self_intro → knowledge → project → scenario`);项目题在�
   文本全量做注入防御。
 - **异步 + 高并发。** 上传后的重活跑在 RQ worker;per-session Redis 锁防串扰。实测 30 路
   并发面试 30/30 零失败,turn 延迟 p50 18ms。
+
+<p align="center">
+  <img src="./docs/screenshots/hr-review.png" alt="HR 题库审核 dashboard —— 数据集含 chunk 数与审核统计,来源为 md 语料与飞书文档" width="720">
+  <br>
+  <em>HR 题库审核:语料与飞书文档切片后反向出题,经人工审核入库,Planner 方可召回。</em>
+</p>
 
 ## 质量体系
 
