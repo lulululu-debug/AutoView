@@ -1,5 +1,7 @@
 # AutoView — AI Interview Platform
 
+> 中文版本：[`README.zh-CN.md`](./README.zh-CN.md)
+
 Multi-agent infrastructure for AI-driven video interviews. HR registers an account and
 uploads a JD / role requirements / company materials (Feishu docs supported); candidates
 upload a resume. The system automatically generates an interview plan, runs multi-round
