@@ -151,4 +151,8 @@ scripts/          种子与运维脚本
 - ⏳ 多模态评价(含合规护栏)· 部署
 
 完整任务清单见 [`sprint.md`](./sprint.md)。
+
+## 许可证
+
+[MIT](./LICENSE) © Joy
 </content>
