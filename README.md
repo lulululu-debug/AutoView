@@ -162,4 +162,8 @@ scripts/          seed & ops scripts
 - ⏳ Multimodal evaluation (with compliance guardrails) · deployment
 
 Full task list in [`sprint.md`](./sprint.md).
+
+## License
+
+[MIT](./LICENSE) © Joy
 </content>
