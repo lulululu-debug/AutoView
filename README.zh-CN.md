@@ -9,6 +9,12 @@
 摄像头画面录制归档。**文字问答是永远的保底路径**——任一媒体环节失败,面试自动降级
 而非中断。
 
+<p align="center">
+  <img src="./docs/screenshots/interview.png" alt="视频面试 —— AI 虚拟面试官开口提问、候选人摄像头画面、实时语音转写" width="720">
+  <br>
+  <em>视频面试:AI 虚拟面试官开口提问,候选人语音作答并实时转写。</em>
+</p>
+
 **深入阅读:** [架构](./ARCHITECTURE.md) · [评估体系](./EVALUATION.md) ·
 [路线图](./sprint.md) · [Agent 升级](./AGENT_UPGRADES.md)
 

@@ -12,6 +12,12 @@ candidates answer by voice (transcript editable before submit), and the camera f
 recorded. **Text Q&A is the permanent fallback** — if any media stage fails, the interview
 degrades gracefully instead of breaking.
 
+<p align="center">
+  <img src="./docs/screenshots/interview.png" alt="Live video interview — AI avatar interviewer asking a question, candidate camera feed, and live voice transcription" width="720">
+  <br>
+  <em>Live interview: AI avatar interviewer asks aloud while the candidate answers by voice with live transcription.</em>
+</p>
+
 **Deep dives:** [Architecture](./ARCHITECTURE.md) · [Evaluation](./EVALUATION.md) ·
 [Roadmap](./sprint.md) · [Agent upgrades](./AGENT_UPGRADES.md)
 
