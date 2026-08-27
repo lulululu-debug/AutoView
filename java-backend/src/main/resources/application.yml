@@ -1,0 +1,69 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: interview-backend
+
+  main:
+    # web + webflux 两个 starter 共存时，显式声明用 servlet(Tomcat)；WebClient 仍可独立使用
+    web-application-type: servlet
+
+  # 默认排除 RocketMQ 自动装配（它 matchIfMissing=true，缺 name-server 会报错）。
+  # 启用 MQ：设 ROCKETMQ_EXCLUDE=（空）且 ROCKETMQ_NAMESERVER=localhost:9876 + JOBS_QUEUE_ENABLED=true
+  autoconfigure:
+    exclude: ${ROCKETMQ_EXCLUDE:org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration}
+
+  datasource:
+    # ★ stringtype=unspecified 让 MyBatis-Plus 的 JacksonTypeHandler（写 String）能被 Postgres 隐式转成 jsonb
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:interview_java}?stringtype=unspecified
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  # 启动自动建表（幂等）
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+  # Redis（Redisson + StringRedisTemplate 都读这里）—— S2+ 需要 Redis 运行
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: assign_uuid
+
+# —— 自定义开关：全部默认“关/降级”，只有配置了才启用真实外部服务 ——
+#
+# 注意：milvus.* 与 rocketmq.name-server 故意“默认不定义”，
+# 因为 @ConditionalOnProperty / rocketmq 自动装配把“空字符串”也当成“已配置”，
+# 会去连不存在的地址导致启动失败。所以这两项只能通过环境变量启用：
+#   - 启用 RocketMQ：设 ROCKETMQ_NAMESERVER=localhost:9876 且 JOBS_QUEUE_ENABLED=true
+#   - 启用 Milvus：  设 MILVUS_URI=http://localhost:19530 （可选 MILVUS_TOKEN）
+# 不设 → 队列走同步兜底、检索降级为空，应用照常启动。
+
+jobs:
+  queue-enabled: ${JOBS_QUEUE_ENABLED:false}
+
+# Python AI 服务：enabled=false → 全部走 Java 本地 stub，可脱离 Python 端到端跑完面试
+ai:
+  enabled: ${AI_ENABLED:false}
+  base-url: ${AI_BASE_URL:http://localhost:8000}
+  assess-timeout-ms: 10000
+
+# JWT
+jwt:
+  secret: ${JWT_SECRET:dev-only-secret-change-me-please-32bytes-min-0123456789}
+  expire-minutes: ${JWT_EXPIRE_MINUTES:60}
+
+logging:
+  level:
+    com.interview: debug

@@ -1,0 +1,41 @@
+name: java-backend CI
+
+# 在 java-backend 相关改动上跑单元 + 集成测试（Testcontainers 需要 Docker，ubuntu runner 自带）
+on:
+  push:
+    paths: ["java-backend/**", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["java-backend/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: java-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # ubuntu-latest 自带 Docker，socket 在默认 /var/run/docker.sock，
+      # docker-java 能直接协商 API 版本（无需本地 Docker Desktop 的 raw.sock / api.version hack）。
+      - name: Verify Docker
+        run: docker version
+
+      - name: Build + unit + integration tests
+        run: mvn -B verify
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            java-backend/target/surefire-reports/
+            java-backend/target/failsafe-reports/
