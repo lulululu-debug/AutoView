@@ -1,0 +1,21 @@
+# 测试 profile：外部服务全部走 stub/降级，结果确定可复现。
+# datasource / redis 连接由 AbstractIntegrationTest 的 @DynamicPropertySource 注入（指向容器）。
+spring:
+  sql:
+    init:
+      mode: always            # 对着容器库跑 schema.sql 建表
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl   # 测试时别用 stdout 刷屏
+
+ai:
+  enabled: false              # 走 Java 本地 stub，不调 Python/LLM
+
+jobs:
+  queue-enabled: false        # ingest 同步兜底，不需 RocketMQ
+
+logging:
+  level:
+    com.interview: info
+    org.testcontainers: info
