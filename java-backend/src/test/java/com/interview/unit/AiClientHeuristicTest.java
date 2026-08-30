@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interview.domain.InterviewSession;
 import com.interview.domain.json.AnswerAssessmentDto;
 import com.interview.service.ai.AiClient;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.retry.RetryRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -22,8 +24,9 @@ class AiClientHeuristicTest {
 
     @BeforeEach
     void setup() {
-        ai = new AiClient(mock(WebClient.class), new ObjectMapper());
-        ReflectionTestUtils.setField(ai, "enabled", false);
+        ai = new AiClient(mock(WebClient.class), new ObjectMapper(),
+                CircuitBreakerRegistry.ofDefaults(), RetryRegistry.ofDefaults());
+        ReflectionTestUtils.setField(ai, "enabled", false);   // 只测本地兜底路径,不触发 guarded
         ReflectionTestUtils.setField(ai, "assessTimeoutMs", 10000L);
     }
 

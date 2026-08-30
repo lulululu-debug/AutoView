@@ -53,17 +53,55 @@ mybatis-plus:
 jobs:
   queue-enabled: ${JOBS_QUEUE_ENABLED:false}
 
+# 限流（令牌桶,按客户端身份/IP）。默认开:60 突发 + 30/s 持续。
+rate-limit:
+  enabled: ${RATE_LIMIT_ENABLED:true}
+  capacity: ${RATE_LIMIT_CAPACITY:60}
+  refill-per-second: ${RATE_LIMIT_REFILL:30}
+
 # Python AI 服务：enabled=false → 全部走 Java 本地 stub，可脱离 Python 端到端跑完面试
 ai:
   enabled: ${AI_ENABLED:false}
   base-url: ${AI_BASE_URL:http://localhost:8000}
   assess-timeout-ms: 10000
 
+# Resilience4j：对 Python AI 服务调用做熔断 + 有限重试
+resilience4j:
+  circuitbreaker:
+    instances:
+      ai:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 6
+        minimum-number-of-calls: 4
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 5s
+        permitted-number-of-calls-in-half-open-state: 2
+  retry:
+    instances:
+      ai:
+        max-attempts: 2
+        wait-duration: 100ms
+
 # JWT
 jwt:
   secret: ${JWT_SECRET:dev-only-secret-change-me-please-32bytes-min-0123456789}
   expire-minutes: ${JWT_EXPIRE_MINUTES:60}
 
+# 可观测性:Actuator 健康检查 + Prometheus 指标
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: interview-backend
+
 logging:
   level:
     com.interview: debug
+  pattern:
+    level: "%5p [%X{traceId:-}]"      # 每条日志带上 traceId(全链路排查)

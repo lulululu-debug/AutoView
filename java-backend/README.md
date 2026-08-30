@@ -15,9 +15,15 @@ AI 面试平台的 Java 后端主干,与仓库根目录的 Python 服务对照�
 | S5 | **Milvus** 检索封装(未配 uri 时降级为空) | 连接/健康检查 wired |
 | S6 | **JWT + RBAC + 所有权链路(越权 404)+ 候选人一次性 token** | owner 200 / 非 owner 404 / 无 token 403 |
 | S7 | **双路径容错**(LLM 失败退启发式)+ 统一异常映射(409/404/400) | assess 走本地启发式 |
+| S8 | **Redis 令牌桶限流**(Lua 原子)按客户端/IP | 突发超容量 → 429 |
+| S8 | **Resilience4j 熔断 + 重试** 包裹 Python AI 调用 | 远程不可达 → 熔断打开 + 启发式兜底 |
+| S8 | **可观测性**:Actuator 健康检查 + Prometheus 指标 + traceId 全链路日志 | /actuator/health、/prometheus、响应带 X-Trace-Id |
 
 > 外部依赖全部「可选 + 优雅降级」:RocketMQ/Milvus/Python AI 未配置时走本地 stub/同步兜底,
 > 只需 **Postgres + Redis** 即可端到端跑完整场面试(对应 Python 侧 `[stub]` 哲学)。
+
+**压测**(同步写路径 `/candidate/upload`,不含 LLM,本机 50 并发):**p50≈24ms、p99≈64ms、~1960 req/s、零失败**。
+复现与口径见 `scripts/loadtest.sh` + `scripts/loadtest-results.md`。
 
 ## 依赖
 - JDK 21、Maven 3.9+
@@ -56,8 +62,9 @@ curl -s localhost:8080/hr/reports/{sessionId} -H "Authorization: Bearer $HR"
 ```
 
 ## 测试(JUnit 5 + Testcontainers)
-- **23 单元测**(纯规则/JWT/启发式,毫秒级,无容器)+ **12 集成测**(真 PG/Redis 容器):
-  分布式锁并发、JSONB 泛型往返、报告唯一约束、内容 hash 消费幂等、所有权链路、端到端面试全流程 + 安全(403/404)+ 并发 409。
+- **23 单元测**(纯规则/JWT/启发式,毫秒级,无容器)+ **17 集成测**(真 PG/Redis 容器):
+  分布式锁并发、JSONB 泛型往返、报告唯一约束、内容 hash 消费幂等、所有权链路、端到端面试全流程 + 安全(403/404)+ 并发 409、
+  **令牌桶限流 429、Resilience4j 熔断、Actuator/Prometheus/traceId**。
 - 方案见根目录 `Spring-Boot-测试方案.md`。
 
 ```bash

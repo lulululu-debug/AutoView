@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS interview_plans (
     competencies  JSONB,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 兼容旧库:CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，显式补
+ALTER TABLE interview_plans ADD COLUMN IF NOT EXISTS content_hash TEXT;
 CREATE INDEX IF NOT EXISTS idx_plans_candidate ON interview_plans (candidate_id);
 CREATE INDEX IF NOT EXISTS idx_plans_cand_hash ON interview_plans (candidate_id, content_hash);
 

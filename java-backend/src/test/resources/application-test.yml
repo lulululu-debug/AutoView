@@ -15,6 +15,9 @@ ai:
 jobs:
   queue-enabled: false        # ingest 同步兜底，不需 RocketMQ
 
+rate-limit:
+  enabled: false              # 默认关，避免影响既有 IT；RateLimitIT 用 @TestPropertySource 单独开
+
 logging:
   level:
     com.interview: info
