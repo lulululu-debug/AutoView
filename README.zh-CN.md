@@ -15,6 +15,11 @@
   <em>视频面试:AI 虚拟面试官开口提问,候选人语音作答并实时转写。</em>
 </p>
 
+> **双后端实现。** Python(FastAPI,[`src/`](./src) + [`api/`](./api))是完整平台,也是当前
+> Next.js 前端对接的后端;Java(Spring Boot + RocketMQ + Redisson,[`java-backend/`](./java-backend))
+> 重新实现了核心面试链路——会话状态机、鉴权/RBAC、异步 ingest、报告——并补上分布式锁、限流、熔断,
+> LLM Agent 通过 HTTP 调 Python 侧。详见 [`java-backend/README.md`](./java-backend/README.md)。
+
 **深入阅读:** [架构](./ARCHITECTURE.md) · [评估体系](./EVALUATION.md) ·
 [路线图](./sprint.md) · [Agent 升级](./AGENT_UPGRADES.md)
 
@@ -75,6 +80,7 @@ RAG 指标、冻结回归基线)。改任何 prompt 或 policy 阈值都需 gold
 | 层 | 选型 |
 | --- | --- |
 | 后端 | Python 3.11+ · FastAPI · pydantic v2 |
+| 后端(Java) | Java 21 · Spring Boot 3.3 · MyBatis-Plus · Redisson · RocketMQ · Resilience4j · Micrometer/Prometheus |
 | 前端 | Next.js 16 · React 19 · Tailwind 4 |
 | LLM / Embedding | OpenAI(`gpt-4o-mini` + `text-embedding-3-small`) |
 | 存储 | PostgreSQL(真理之源)· Redis(状态/缓存/锁)· Milvus(向量) |
@@ -127,6 +133,7 @@ src/
   db/ cache/ auth/ tts/ stt/ media_store/ connectors/   基础设施与适配器
 api/              FastAPI:HTTP 入口、校验、异常映射
 web/              Next.js 候选人端 + HR Dashboard
+java-backend/     Spring Boot 实现的核心面试链路(见其 README)
 evals/            结构护栏(stub,零 token)
 sim/              真 LLM 效果评估
 scripts/          种子与运维脚本

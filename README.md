@@ -18,6 +18,13 @@ degrades gracefully instead of breaking.
   <em>Live interview: AI avatar interviewer asks aloud while the candidate answers by voice with live transcription.</em>
 </p>
 
+> **Two backend implementations.** Python (FastAPI) in [`src/`](./src) + [`api/`](./api) is the
+> full platform and what the Next.js frontend talks to today. Java (Spring Boot + RocketMQ +
+> Redisson) in [`java-backend/`](./java-backend) re-implements the core interview flow — session
+> state machine, auth/RBAC, async ingest, reports — with distributed locks, rate limiting and
+> circuit breakers, and calls the Python side for the LLM agents. See
+> [`java-backend/README.md`](./java-backend/README.md).
+
 **Deep dives:** [Architecture](./ARCHITECTURE.md) · [Evaluation](./EVALUATION.md) ·
 [Roadmap](./sprint.md) · [Agent upgrades](./AGENT_UPGRADES.md)
 
@@ -85,6 +92,7 @@ calibration run. Details in [`EVALUATION.md`](./EVALUATION.md).
 | Layer | Choice |
 | --- | --- |
 | Backend | Python 3.11+ · FastAPI · pydantic v2 |
+| Backend (Java) | Java 21 · Spring Boot 3.3 · MyBatis-Plus · Redisson · RocketMQ · Resilience4j · Micrometer/Prometheus |
 | Frontend | Next.js 16 · React 19 · Tailwind 4 |
 | LLM / Embedding | OpenAI (`gpt-4o-mini` + `text-embedding-3-small`) |
 | Storage | PostgreSQL (source of truth) · Redis (state, cache, locks) · Milvus (vectors) |
@@ -137,6 +145,7 @@ src/
   db/ cache/ auth/ tts/ stt/ media_store/ connectors/   infra & adapters
 api/              FastAPI: HTTP entry, validation, exception mapping
 web/              Next.js candidate portal + HR dashboard
+java-backend/     Spring Boot implementation of the core interview flow (see its README)
 evals/            structural guardrails (stub, zero token)
 sim/              real-LLM effectiveness eval
 scripts/          seed & ops scripts
